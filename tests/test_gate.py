@@ -300,24 +300,18 @@ async def test_what_was_confirmed_and_what_was_declined_is_logged(seeded, vault)
     assert "approved" in log.read()
 
 
-def test_a_broken_log_never_stops_a_turn(config):
+async def test_a_broken_log_never_stops_a_turn(config):
     """A lost log line is bad. A lost turn because the disk was full is worse."""
     class Broken:
         def write(self, *a, **k):
             raise OSError("disk full")
 
     agent = Ranger(config=config, provider=ScriptedProvider([{"text": "ok"}]), audit=Broken())
-    events = asyncio.get_event_loop_policy().new_event_loop().run_until_complete(
-        _drain(agent.turn("hello"))
-    )
+    events = [e async for e in agent.turn("hello")]
     assert any(getattr(e, "text", "") == "ok" for e in events)
 
 
-async def _drain(stream):
-    return [e async for e in stream]
-
-
-def test_the_heartbeat_writes_to_the_log(config, vault):
+async def test_the_heartbeat_writes_to_the_log(config, vault):
     log = AuditLog(vault, config.vault.log)
 
     class Check:
@@ -336,7 +330,7 @@ def test_the_heartbeat_writes_to_the_log(config, vault):
 
     beat = Heartbeat(config, Inbox(vault, config.vault.inbox), [Check()],
                      now=lambda: datetime(2026, 9, 7, 9, 0), audit=log)
-    asyncio.get_event_loop_policy().new_event_loop().run_until_complete(beat.tick())
+    await beat.tick()
 
     text = log.read(date(2026, 9, 7))
     assert "heartbeat" in text and "surfaced" in text
