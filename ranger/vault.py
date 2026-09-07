@@ -117,7 +117,10 @@ class Vault:
             files.append(
                 VaultFile(
                     path=path,
-                    relative=str(path.relative_to(self.config.root)),
+                    # Forward slashes on every platform. This string ends up
+                    # in the prompt and in messages the operator reads, and
+                    # Obsidian writes links this way too.
+                    relative=path.relative_to(self.config.root).as_posix(),
                     modified=datetime.fromtimestamp(stat.st_mtime),
                     size=stat.st_size,
                 )

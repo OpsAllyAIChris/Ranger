@@ -71,7 +71,11 @@ def test_log_folder_is_append_only(vault, config):
 
 def test_symlink_out_of_ranger_folder_is_denied(vault, config, vault_root):
     escape = config.vault.drafts / "escape"
-    escape.symlink_to(vault_root / "Accounts")
+    try:
+        escape.symlink_to(vault_root / "Accounts")
+    except (OSError, NotImplementedError) as exc:
+        # Windows needs developer mode or admin rights to make a symlink.
+        pytest.skip(f"symlinks not permitted here: {exc}")
     with pytest.raises(VaultWriteDenied):
         vault.write_new(escape / "sneaky.md", "should never land")
 
@@ -79,3 +83,14 @@ def test_symlink_out_of_ranger_folder_is_denied(vault, config, vault_root):
 def test_vault_has_no_delete_or_rename(vault):
     surface = {name for name in dir(vault) if not name.startswith("_")}
     assert not surface & {"delete", "remove", "unlink", "rename", "move"}
+
+
+def test_relative_paths_use_forward_slashes(vault, vault_root):
+    """These strings reach the prompt and the operator. Keep them portable."""
+    nested = vault_root / "Accounts" / "Food" / "Illes Foods.md"
+    nested.parent.mkdir(parents=True)
+    nested.write_text("notes", encoding="utf-8")
+
+    listed = vault.list_markdown(vault_root / "Accounts")
+    assert [f.relative for f in listed] == ["Accounts/Food/Illes Foods.md"]
+    assert "\\" not in listed[0].relative

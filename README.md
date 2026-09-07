@@ -8,6 +8,10 @@ Read `AGENT.md` before changing anything.
 
 ## Setup
 
+Python 3.11 or newer is required; the config loader uses `tomllib`.
+
+macOS and Linux:
+
 ```bash
 python3 -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
@@ -15,6 +19,26 @@ pip install -e ".[dev]"
 cp .env.example .env          # add your ANTHROPIC_API_KEY
 $EDITOR ranger.toml           # set vault.root, check the hours
 ```
+
+Windows PowerShell:
+
+```powershell
+python --version              # must be 3.11 or newer
+python -m venv .venv
+.venv\Scripts\Activate.ps1
+
+# If activation is blocked by the execution policy:
+#   Set-ExecutionPolicy -Scope Process -ExecutionPolicy RemoteSigned
+# Or skip activation entirely and use .venv\Scripts\python.exe directly.
+
+pip install -e ".[dev]"
+
+Copy-Item .env.example .env   # add your ANTHROPIC_API_KEY
+notepad ranger.toml           # set vault.root, check the hours
+```
+
+`vault.root` is written as `~/Obsidian/Ranger-Vault` and expands correctly on
+Windows too, to `C:\Users\<you>\Obsidian\Ranger-Vault`.
 
 ## Run
 
