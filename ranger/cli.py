@@ -63,7 +63,7 @@ def _describe_config(config: Config) -> str:
         [
             f"  config file      {config.source_path}",
             f"  model            {config.model.name} via {config.model.provider}",
-            f"  max tokens       {config.model.max_tokens}, temperature {config.model.temperature}",
+            f"  max tokens       {config.model.max_tokens}, effort {config.model.effort or 'unset'}",
             f"  vault root       {config.vault.root}",
             f"  morning surface  {schedule.morning_hour:02d}:00",
             f"  quiet hours      {schedule.quiet_start_hour:02d}:00 to {schedule.quiet_end_hour:02d}:00",

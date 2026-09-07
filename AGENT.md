@@ -3,6 +3,10 @@
 Standing brief for anyone, human or model, working on this repo. Read this
 before writing code. It is short on purpose.
 
+The build spec is `start-here.md` at the repo root. This file is the answers
+and the decisions; that file is the method. Where the two disagree,
+`start-here.md` wins and this file is what gets corrected.
+
 ## What Ranger is
 
 A voice-first assistant for one person. It knows the operator's accounts,
@@ -90,13 +94,17 @@ assumes `$HOME`.
 
 | Tier | What | State |
 | ---- | ---- | ----- |
-| 1 | Config, provider seam, agent core as a library, event stream, vault guard, terminal REPL | done |
-| 2 | Three tools: account recall, draft and hold, what went quiet | next |
-| 3 | Push-to-talk. Deepgram in, ElevenLabs out. No wake word | later |
-| 4 | Durable memory in `Ranger/memory` | later |
-| 5 | Heartbeat, morning surface, quiet hours | later |
-| 6 | Confirmation gate and the audit log | later |
-| 7 | Browser front end: orb, glass shell, mic bar | after 6 |
+| 1 | The brain. Config, provider seam, agent core as a library, event stream, vault guard, terminal REPL | done |
+| 2 | The hands. Three tools: account recall, draft and hold, what went quiet | next |
+| 3 | The ears and mouth. Push-to-talk, Deepgram in, ElevenLabs out. No wake word. Show the transcript. Let interruption work | later |
+| 4 | The memory. Durable facts in `Ranger/memory`, one fact per entry, hand-editable | later |
+| 5 | The heartbeat. Morning surface, quiet hours, held notices, a schedule that survives restarts | later |
+| 6 | The rails. Confirmation gate, audit trail, cost tally, kill switch, everything tunable in config | later |
+| 7 | The face. Browser front end: orb, glass shell, mic bar | after 6 |
+
+Each tier ends with something runnable and a verification step in
+`start-here.md`. Do not start a tier until the one before it verifies, and do
+not fuse two tiers together.
 
 Each tier is verified before the next one starts. Tier 7 waits for Tier 6.
 
@@ -110,8 +118,37 @@ Everything tunable lives in `ranger.toml`. No model name, vault path, hour or
 threshold is hardcoded anywhere in the source. Secrets live in `.env`, which
 is git-ignored, and never in `ranger.toml`.
 
+### The model call
+
+Two things about the current Anthropic API that are easy to get wrong, both
+already handled in `provider.py`:
+
+- **`temperature` is gone.** Current models reject it outright. The lever is
+  `output_config: {effort: ...}`, one of low, medium, high, xhigh, max. It is
+  `model.effort` in the config and defaults to `low`, because spoken replies
+  should be quick. Raise it when Ranger starts writing proposals.
+- **Adaptive thinking is on by default,** and thinking blocks must be echoed
+  back unchanged on the next round of a tool-using turn. `provider.py` passes
+  through every block it does not itself interpret. Dropping one breaks the
+  turn. Thinking tokens also count against `max_tokens`, so leave headroom.
+
+Not done yet, deliberately: prompt caching. Ranger sends the whole Knowledge
+folder in the system prompt on every turn, which is exactly what caching is
+for. The clock is already last in the system prompt so the prefix above it
+stays byte-identical, which is the prerequisite. Adding the breakpoint belongs
+with the cost tally in Tier 6.
+
+### Hours and resilience
+
 `schedule.morning_hour` must sit outside the quiet window. That is validated
 at startup and the process refuses to run if it does not.
+
+The network will drop. `model.max_retries`, `model.retry_backoff_seconds` and
+`model.timeout_seconds` govern how hard Ranger tries. Retries only happen
+before any of the reply has streamed, so a half-spoken answer is never
+repeated. When Ranger gives up it says so in one plain sentence and hands back
+a clean prompt. A failed turn is rolled out of the transcript entirely, so the
+next turn starts from a conversation that actually happened.
 
 ## Layout
 

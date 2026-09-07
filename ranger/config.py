@@ -27,9 +27,15 @@ class ModelConfig:
     provider: str
     name: str
     max_tokens: int
-    temperature: float
+    #: How hard the model thinks. Replaces temperature, which current models
+    #: reject outright. Empty string means do not send it at all, for older
+    #: models that do not accept it.
+    effort: str
     max_tool_rounds: int
     history_turns: int
+    timeout_seconds: float = 60.0
+    max_retries: int = 3
+    retry_backoff_seconds: float = 1.0
 
 
 @dataclass(frozen=True)
@@ -215,12 +221,25 @@ def load_config(path: str | Path | None = None, *, load_env: bool = True) -> Con
         provider=str(_require(table, "model", "provider")),
         name=str(_require(table, "model", "name")),
         max_tokens=int(_require(table, "model", "max_tokens")),
-        temperature=float(_require(table, "model", "temperature")),
+        effort=str(table["model"].get("effort", "low")),
         max_tool_rounds=int(_require(table, "model", "max_tool_rounds")),
         history_turns=int(_require(table, "model", "history_turns")),
+        timeout_seconds=float(table["model"].get("timeout_seconds", 60.0)),
+        max_retries=int(table["model"].get("max_retries", 3)),
+        retry_backoff_seconds=float(table["model"].get("retry_backoff_seconds", 1.0)),
     )
     if model.max_tool_rounds < 1:
         raise ConfigError("model.max_tool_rounds must be at least 1")
+    allowed_effort = {"", "low", "medium", "high", "xhigh", "max"}
+    if model.effort not in allowed_effort:
+        raise ConfigError(
+            f"model.effort must be one of {sorted(allowed_effort - {''})}, or empty "
+            f"to leave it unset. Got {model.effort!r}."
+        )
+    if model.max_retries < 0:
+        raise ConfigError("model.max_retries cannot be negative")
+    if model.timeout_seconds <= 0:
+        raise ConfigError("model.timeout_seconds must be greater than zero")
 
     vault = _build_vault(table)
 

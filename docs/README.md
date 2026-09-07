@@ -1,6 +1,10 @@
 # docs
 
-`start-here.md` and `ranger-master-prompt.md` belong here. `start-here.md` was
-not in the repo when Tier 1 was built, so Tier 1 was built from the master
-prompt alone. If the tier structure in `start-here.md` differs from the table
-in `AGENT.md`, `start-here.md` wins and `AGENT.md` should be corrected.
+The build spec is `start-here.md` at the repo root, and `ranger-master-prompt.md`
+belongs beside it. `start-here.md` arrived after Tier 1 was first written, so
+Tier 1 was reconciled against it afterwards: the tier structure matched, and the
+resilience requirement it names (handle a slow or unreachable model with a clear
+message and a clean prompt, never a stack trace) was added in a follow-up commit.
+
+If anything in `AGENT.md` ever disagrees with `start-here.md`, `start-here.md`
+wins and `AGENT.md` is the thing to correct.

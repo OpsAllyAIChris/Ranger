@@ -9,7 +9,7 @@ CONFIG_TEMPLATE = """
 provider = "anthropic"
 name = "test-model"
 max_tokens = 512
-temperature = 0.3
+effort = "low"
 max_tool_rounds = {max_tool_rounds}
 history_turns = {history_turns}
 

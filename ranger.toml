@@ -8,11 +8,24 @@
 provider = "anthropic"
 # Never hardcoded anywhere in the source. Change it here.
 name = "claude-opus-5"
-max_tokens = 2048
-temperature = 0.3
+# Adaptive thinking is on by default on current models and its tokens count
+# against this, so leave headroom. Ranger's spoken replies are short; drafts
+# are not.
+max_tokens = 8192
+# How hard the model thinks: low, medium, high, xhigh, max. This replaced
+# temperature, which current models reject. Low keeps spoken replies snappy.
+# Raise it when Ranger starts writing proposals. Empty string leaves it unset
+# for older models that do not accept it.
+effort = "low"
 # Hard ceiling on tool-call rounds inside a single turn, so a confused
 # model cannot loop forever.
 max_tool_rounds = 6
+# The network will drop. Ranger retries transient failures quietly and tells
+# you in plain language when it gives up. Retries only happen before any of
+# the reply has been spoken, so you never hear the first half twice.
+timeout_seconds = 60.0
+max_retries = 3
+retry_backoff_seconds = 1.0
 # How many past turns stay in the working transcript. Tier 4 replaces the
 # spillover with durable memory.
 history_turns = 24

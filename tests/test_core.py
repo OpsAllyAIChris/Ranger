@@ -194,3 +194,87 @@ async def test_empty_model_response_does_not_corrupt_the_transcript(config):
     events = await collect(agent, "hello")
     assert any(isinstance(e, Notice) and "empty response" in e.message for e in events)
     assert [m["role"] for m in agent.messages] == ["user"]
+
+
+class FailingProvider:
+    """A provider that is simply unreachable."""
+
+    def __init__(self, error):
+        self.error = error
+
+    async def stream(self, *, system, messages, tools=None):
+        raise self.error
+        yield  # pragma: no cover - makes this an async generator
+
+
+async def test_unreachable_model_ends_the_turn_cleanly(config):
+    from ranger.provider import ProviderError
+
+    agent = Ranger(
+        config=config,
+        provider=FailingProvider(
+            ProviderError("Could not reach the model. Check the network and try again.")
+        ),
+    )
+    events = await collect(agent, "where are we on Illes Foods")
+
+    alerts = [e for e in events if isinstance(e, Notice) and e.level == "alert"]
+    assert alerts and "Could not reach the model" in alerts[0].message
+    assert isinstance(events[-1], TurnComplete)
+    assert events[-1].stop_reason == "provider_error"
+    assert agent.state is State.IDLE
+
+
+async def test_a_failed_turn_leaves_no_residue_in_the_transcript(config):
+    from ranger.provider import ProviderError
+
+    good = ScriptedProvider([{"text": "Rod is waiting."}])
+    agent = Ranger(config=config, provider=good)
+    await collect(agent, "first")
+    clean = list(agent.messages)
+
+    agent.provider = FailingProvider(ProviderError("unreachable"))
+    await collect(agent, "second")
+    assert agent.messages == clean
+
+    # And the next turn works normally against the same transcript.
+    agent.provider = ScriptedProvider([{"text": "Still waiting."}])
+    events = await collect(agent, "third")
+    assert isinstance(events[-1], TurnComplete)
+    assert [m["role"] for m in agent.messages] == ["user", "assistant", "user", "assistant"]
+
+
+async def test_a_failed_tool_round_rolls_back_to_before_the_turn(config):
+    from ranger.provider import ProviderError
+
+    async def handler(payload):
+        return ToolResult(ok=True, content="detail")
+
+    registry = ToolRegistry(
+        [
+            Tool(
+                name="lookup",
+                description="d",
+                input_schema={"type": "object", "properties": {}},
+                handler=handler,
+            )
+        ]
+    )
+
+    class DiesAfterTool:
+        def __init__(self):
+            self.calls = 0
+
+        async def stream(self, *, system, messages, tools=None):
+            self.calls += 1
+            if self.calls == 1:
+                async for event in ScriptedProvider(
+                    [{"tools": [{"name": "lookup", "input": {}}]}]
+                ).stream(system=system, messages=messages, tools=tools):
+                    yield event
+                return
+            raise ProviderError("dropped mid conversation")
+
+    agent = Ranger(config=config, provider=DiesAfterTool(), registry=registry)
+    await collect(agent, "look it up")
+    assert agent.messages == []

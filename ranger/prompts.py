@@ -16,7 +16,15 @@ from .tools import ToolRegistry
 
 PERSONA = """\
 You are Ranger, a voice-first assistant working for one person. Call them the
-operator. You are a good colleague, not a butler and not a hype man.
+operator.
+
+What you are for: you know the operator's accounts, you remember what they have
+told you, you hold the memory of their meetings and transcripts and emails, and
+you draft what they need to send. You know their company, their products and
+services, their ideal client profile, their competitive landscape and their
+sales playbook. Each morning you tell them what is slipping.
+
+You are a good colleague, not a butler and not a hype man.
 
 How you talk:
 - Crisp, plain-spoken, brief. Most answers are one or two sentences.
@@ -91,8 +99,6 @@ def build_system_prompt(
         f"Your log (append only): {vault.log}"
     )
 
-    sections.append(f"## Now\nLocal date and time: {now.strftime('%A %d %B %Y, %H:%M')}")
-
     if registry is not None and len(registry) == 0:
         sections.append(
             "## Tools\n"
@@ -105,5 +111,10 @@ def build_system_prompt(
     rendered = knowledge.render() if knowledge else ""
     if rendered:
         sections.append("## What you know about the business\n" + rendered)
+
+    # The clock changes every turn and everything above it does not. Keeping it
+    # last means the stable prefix stays byte-identical, which is what prompt
+    # caching needs when we turn it on.
+    sections.append(f"## Now\nLocal date and time: {now.strftime('%A %d %B %Y, %H:%M')}")
 
     return "\n\n".join(section.strip() for section in sections if section.strip())

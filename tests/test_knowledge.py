@@ -72,3 +72,20 @@ def test_fence_marks_the_source():
     wrapped = fence("Accounts/Illes.md", "plain note")
     assert wrapped.startswith('<untrusted_content source="Accounts/Illes.md">')
     assert wrapped.endswith("</untrusted_content>")
+
+
+def test_the_clock_is_last_so_the_stable_prefix_stays_stable(config):
+    """Prompt caching is a prefix match. Volatile content has to go last."""
+    from datetime import datetime
+
+    from ranger.prompts import build_system_prompt
+
+    early = build_system_prompt(config, now=datetime(2026, 9, 7, 8, 0))
+    late = build_system_prompt(config, now=datetime(2026, 9, 7, 17, 30))
+
+    marker = "## Now"
+    assert early.count(marker) == 1
+    assert early.split("\n\n")[-1].startswith(marker)
+    # Everything before the clock is byte-identical across the two times.
+    assert early.split(marker)[0] == late.split(marker)[0]
+    assert early != late

@@ -27,7 +27,7 @@ from .events import (
 )
 from .knowledge import KnowledgeContext, KnowledgeLoader
 from .prompts import build_system_prompt
-from .provider import Completion, Provider, TextChunk
+from .provider import Completion, Provider, ProviderError, TextChunk
 from .tools import ToolRegistry
 from .vault import Vault
 
@@ -112,6 +112,10 @@ class Ranger:
         for warning in knowledge.warnings:
             yield Notice("warn", warning)
 
+        # If the model is unreachable this turn never happened, so keep a
+        # copy to roll back to. A half-written turn left in the transcript
+        # would poison every turn after it.
+        checkpoint = list(self.messages)
         self.messages.append({"role": "user", "content": text})
         self._trim_history()
 
@@ -130,19 +134,33 @@ class Ranger:
             completion: Completion | None = None
             spoke = False
 
-            async for event in self.provider.stream(
-                system=system, messages=self.messages, tools=tools or None
-            ):
-                if isinstance(event, TextChunk):
-                    if not spoke:
-                        spoke = True
-                        changed = self._set_state(State.SPEAKING)
-                        if changed:
-                            yield changed
-                    reply_parts.append(event.text)
-                    yield TextDelta(event.text)
-                elif isinstance(event, Completion):
-                    completion = event
+            try:
+                async for event in self.provider.stream(
+                    system=system, messages=self.messages, tools=tools or None
+                ):
+                    if isinstance(event, TextChunk):
+                        if not spoke:
+                            spoke = True
+                            changed = self._set_state(State.SPEAKING)
+                            if changed:
+                                yield changed
+                        reply_parts.append(event.text)
+                        yield TextDelta(event.text)
+                    elif isinstance(event, Completion):
+                        completion = event
+            except ProviderError as error:
+                self.messages = checkpoint
+                changed = self._set_state(State.IDLE)
+                if changed:
+                    yield changed
+                yield Notice("alert", str(error))
+                yield TurnComplete(
+                    reply="".join(reply_parts),
+                    tools_used=tuple(tools_used),
+                    stop_reason="provider_error",
+                    usage=usage,
+                )
+                return
 
             if completion is None:
                 yield Notice("alert", "the model stream ended without completing")
