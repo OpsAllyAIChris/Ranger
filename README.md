@@ -61,6 +61,10 @@ Inside the REPL: `/help`, `/config`, `/vault`, `/tools`, `/state`, `/reset`,
 pytest
 ```
 
+Run it as bare `pytest`, not `python -m pytest`. The latter puts the working
+directory on `sys.path`, which hides import mistakes the real invocation
+catches.
+
 The suite runs offline against a scripted provider. It costs nothing and needs
 no API key.
 

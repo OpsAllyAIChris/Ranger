@@ -182,6 +182,11 @@ ranger/
 - Python 3.11 or newer. No heavy framework. Small enough to read whole.
 - `pip install -e ".[dev]"` then `pytest`. The suite runs offline and costs
   nothing; keep it that way.
+- Run it as bare `pytest`. `python -m pytest` prepends the working directory to
+  `sys.path`, which masks import mistakes: it once hid a `from tests.conftest
+  import ...` that broke collection for anyone running it normally.
+  `tests/test_suite_hygiene.py` now fails on that pattern. Shared test helpers
+  are fixtures, never imports.
 - `ranger doctor` checks config, vault and environment.
 - `ranger init` creates Ranger's own folders and nothing else, after asking.
 - `ranger` starts the terminal REPL.

@@ -1,8 +1,19 @@
+"""Shared fixtures.
+
+Everything here reaches test modules through pytest's fixture mechanism, which
+means no test module ever imports from this file. An import like
+`from tests.conftest import ...` only resolves when the repo root happens to be
+on sys.path, which is true under `python -m pytest` and false under a bare
+`pytest`. The fixtures below work either way.
+"""
+
 from __future__ import annotations
 
 from pathlib import Path
 
 import pytest
+
+from ranger.config import Config, load_config
 
 CONFIG_TEMPLATE = """
 [model]
@@ -50,25 +61,19 @@ host = "127.0.0.1"
 port = 8765
 """
 
-
-def write_config(tmp_path: Path, root: Path, **overrides) -> Path:
-    values = {
-        "root": str(root),
-        "budget": 60000,
-        "morning_hour": 7,
-        "quiet_start": 18,
-        "quiet_end": 6,
-        "max_tool_rounds": 6,
-        "history_turns": 24,
-    }
-    values.update(overrides)
-    path = tmp_path / "ranger.toml"
-    path.write_text(CONFIG_TEMPLATE.format(**values), encoding="utf-8")
-    return path
+DEFAULTS: dict[str, object] = {
+    "budget": 60000,
+    "morning_hour": 7,
+    "quiet_start": 18,
+    "quiet_end": 6,
+    "max_tool_rounds": 6,
+    "history_turns": 24,
+}
 
 
 @pytest.fixture
 def vault_root(tmp_path: Path) -> Path:
+    """A vault with the full layout and nothing in it."""
     root = tmp_path / "Vault"
     for folder in (
         "Accounts",
@@ -83,9 +88,33 @@ def vault_root(tmp_path: Path) -> Path:
 
 
 @pytest.fixture
-def config(tmp_path: Path, vault_root: Path, monkeypatch):
-    from ranger.config import load_config
+def config_file(tmp_path: Path, vault_root: Path):
+    """Write a ranger.toml and hand back its path.
 
-    monkeypatch.delenv("RANGER_VAULT_ROOT", raising=False)
-    path = write_config(tmp_path, vault_root)
-    return load_config(path, load_env=False)
+    Use this when the test needs the file itself: to corrupt it, or to assert
+    that loading it raises.
+    """
+
+    def _write(**overrides: object) -> Path:
+        values = {**DEFAULTS, "root": str(vault_root), **overrides}
+        path = tmp_path / "ranger.toml"
+        path.write_text(CONFIG_TEMPLATE.format(**values), encoding="utf-8")
+        return path
+
+    return _write
+
+
+@pytest.fixture
+def make_config(config_file, monkeypatch):
+    """Build a loaded Config, overriding any template value."""
+
+    def _make(**overrides: object) -> Config:
+        monkeypatch.delenv("RANGER_VAULT_ROOT", raising=False)
+        return load_config(config_file(**overrides), load_env=False)
+
+    return _make
+
+
+@pytest.fixture
+def config(make_config) -> Config:
+    return make_config()

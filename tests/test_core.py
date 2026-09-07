@@ -167,11 +167,8 @@ async def test_reset_clears_the_conversation(config):
     assert agent.messages == []
 
 
-async def test_history_is_trimmed_to_configured_turns(tmp_path, vault_root):
-    from ranger.config import load_config
-    from tests.conftest import write_config
-
-    config = load_config(write_config(tmp_path, vault_root, history_turns=2), load_env=False)
+async def test_history_is_trimmed_to_configured_turns(make_config):
+    config = make_config(history_turns=2)
     agent = make_agent(config, [{"text": "reply"} for _ in range(6)])
     for index in range(6):
         await collect(agent, f"turn {index}")
