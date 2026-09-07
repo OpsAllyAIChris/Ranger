@@ -16,6 +16,7 @@ from typing import Any
 from .audio import AudioError, resolve_device
 from .audiocheck import format_devices, run_check
 from .compare import compare
+from .dates import human_datetime
 from .config import Config, ConfigError, load_config, require_api_key
 from .core import Ranger
 from .events import Notice, State, StateChanged, TextDelta, ToolCalled, ToolFinished, TurnComplete
@@ -509,7 +510,8 @@ def cmd_inbox(config: Config, args) -> int:
     for index, notice in enumerate(notices, start=1):
         mark = paint(" (dismissed)", DIM) if notice.dismissed else ""
         print(f"  {index}. {paint(notice.title, BOLD)}{mark}")
-        print(paint(f"     {notice.created:%A %-d %B, %H:%M}  {notice.path.name}", DIM))
+        stamp = human_datetime(notice.created)
+        print(paint(f"     {stamp}  {notice.path.name}", DIM))
         for line in notice.body.splitlines()[: 3 if not args.full else 10_000]:
             print(f"     {line}")
         if not args.full and len(notice.body.splitlines()) > 3:

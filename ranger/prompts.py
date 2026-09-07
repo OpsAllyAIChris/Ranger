@@ -11,6 +11,7 @@ from __future__ import annotations
 from datetime import datetime
 
 from .config import Config
+from .dates import prompt_datetime
 from .knowledge import KnowledgeContext
 from .memory import MemoryContext
 from .tools import ToolRegistry
@@ -161,6 +162,6 @@ def build_system_prompt(
     # The clock changes every turn and everything above it does not. Keeping it
     # last means the stable prefix stays byte-identical, which is what prompt
     # caching needs when we turn it on.
-    sections.append(f"## Now\nLocal date and time: {now.strftime('%A %d %B %Y, %H:%M')}")
+    sections.append(f"## Now\nLocal date and time: {prompt_datetime(now)}")
 
     return "\n\n".join(section.strip() for section in sections if section.strip())

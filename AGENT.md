@@ -481,6 +481,13 @@ What actually helps, in order:
 - **Prefer things that cannot differ.** POSIX separators in strings that reach
   the prompt, `encoding="utf-8"` pinned on every read and write, ASCII-only
   console output, TOML literal strings for any path.
+- **Never write `%-` or `%#` in a date format.** `%-d` is a glibc extension:
+  Linux prints "7", Windows raises `ValueError: Invalid format string`. The one
+  that shipped would have crashed the morning check every day and every
+  `ranger inbox` listing. Use zero-padded directives, or take the integer off
+  the datetime; `ranger/dates.py` has the helpers.
+  `tests/test_suite_hygiene.py` fails the suite on either directive anywhere in
+  the tree, so it cannot come back.
 - **Hand the operator a command, not a claim,** when a break is theirs to
   observe. Ask for the full traceback instead of guessing from a truncated one.
 - **Never let a simulation write into the repo.** A Windows-shaped path is

@@ -30,6 +30,7 @@ from pathlib import Path
 from typing import Any, Awaitable, Callable, Protocol, runtime_checkable
 
 from .config import Config
+from .dates import day_and_month
 from .vault import Vault, VaultError
 
 STATUS_NEW = "new"
@@ -199,13 +200,12 @@ class MorningSurface:
                 body=result.content,
                 created=datetime.now(),
             )
+        now = datetime.now()
         return Notice(
             kind=self.name,
-            title=f"What went quiet, {datetime.now():%-d %B}"
-            if hasattr(datetime.now(), "strftime")
-            else "What went quiet",
+            title=f"What went quiet, {day_and_month(now)}",
             body=result.content,
-            created=datetime.now(),
+            created=now,
         )
 
 
