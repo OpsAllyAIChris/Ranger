@@ -180,6 +180,36 @@ them.
 inbox is the schedule: today's notice is either there or it is not. Being away
 for a week does not replay six mornings.
 
+## The morning brief, without a terminal open
+
+```powershell
+ranger schedule install     # register it with Task Scheduler
+ranger schedule             # what it is, and what Windows thinks of it
+ranger schedule remove      # unregister
+```
+
+It runs `ranger heartbeat --once` hourly, only while you are logged on, and
+appends everything it prints to `<vault>/Ranger/log/heartbeat.log`. Ranger's
+own scheduler still decides what is actually due, so the morning hour and quiet
+hours stay in `ranger.toml` and there is one source of truth.
+
+```powershell
+Get-Content -Wait "$HOME\Obsidian\Ranger-Vault\Ranger\log\heartbeat.log"
+```
+
+Three settings in the task matter more than the rest, and two of them default
+the wrong way on a laptop:
+
+- **Start when available.** A run whose time passed while the machine was
+  asleep happens shortly after it wakes instead of being skipped.
+- **Start on batteries**, and **do not stop on batteries.** Windows defaults to
+  refusing both, so an unplugged laptop would simply never surface a brief and
+  nothing would say why.
+
+`ranger.exe` is a console program, so a console window appears briefly on each
+run. `ranger schedule install --windowless` runs it through `pythonw.exe`
+instead, which has no console at all; the log is the same either way.
+
 ## The rails (Tier 6)
 
 ```powershell

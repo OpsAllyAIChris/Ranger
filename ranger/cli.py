@@ -11,6 +11,8 @@ import argparse
 import asyncio
 import re
 import sys
+from contextlib import contextmanager
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -608,8 +610,72 @@ def cmd_log(config: Config, args) -> int:
     return 0
 
 
+class _Tee:
+    """Write to a stream and to a file at once, a line at a time.
+
+    A scheduled task has no terminal, and every Windows bug in this build
+    surfaced because there was terminal output to read. This is what replaces
+    it: the same words, in a file, with the date on the front so a week of runs
+    is still readable.
+    """
+
+    def __init__(self, stream, handle) -> None:
+        self.stream = stream
+        self.handle = handle
+        self._fresh = True
+
+    def write(self, text: str) -> int:
+        self.stream.write(text)
+        for part in text.splitlines(keepends=True):
+            if self._fresh and part.strip():
+                self.handle.write(f"{datetime.now():%Y-%m-%d %H:%M:%S}  ")
+            self.handle.write(part)
+            self._fresh = part.endswith("\n")
+        return len(text)
+
+    def flush(self) -> None:
+        self.stream.flush()
+        self.handle.flush()
+
+    def isatty(self) -> bool:
+        # False, so nothing downstream decides to emit colour escapes into a
+        # file the operator is going to read in Notepad.
+        return False
+
+
+@contextmanager
+def _logging_to(path: str | None):
+    """Send stdout and stderr to a file as well, if one was asked for."""
+    if not path:
+        yield
+        return
+
+    target = Path(path).expanduser()
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        handle = target.open("a", encoding="utf-8")
+    except OSError as exc:
+        print(f"  cannot write the log at {target}: {exc}", file=sys.stderr)
+        yield
+        return
+
+    out, err = sys.stdout, sys.stderr
+    sys.stdout = _Tee(out, handle)
+    sys.stderr = _Tee(err, handle)
+    try:
+        yield
+    finally:
+        sys.stdout, sys.stderr = out, err
+        handle.close()
+
+
 def cmd_heartbeat(config: Config, args) -> int:
     """Tier 5. The loop, or one pass of it."""
+    with _logging_to(getattr(args, "log", None)):
+        return _run_heartbeat(config, args)
+
+
+def _run_heartbeat(config: Config, args) -> int:
     import asyncio
 
     from .heartbeat import Heartbeat, build_checks
@@ -964,6 +1030,101 @@ def pcm_wav_bytes(path: Path) -> bytes:
     return path.read_bytes()
 
 
+def cmd_schedule(config: Config, args: Any) -> int:
+    """Register the heartbeat with Task Scheduler, or say what it would do."""
+    from .schedule import (
+        DEFAULT_INTERVAL_MINUTES,
+        INTERESTING,
+        Plan,
+        ScheduleError,
+        TASK_NAME,
+        build_plan,
+        install,
+        on_windows,
+        remove,
+        status,
+        to_xml,
+    )
+
+    paint = _colour(sys.stdout.isatty())
+    action = getattr(args, "schedule_command", None) or "show"
+
+    if action == "remove":
+        try:
+            gone = remove()
+        except ScheduleError as exc:
+            print(paint(f"  {exc}", RED), file=sys.stderr)
+            return 1
+        print(
+            paint(f"  {TASK_NAME} removed. The heartbeat no longer runs on its own.", TEAL)
+            if gone
+            else paint(f"  there was no task called {TASK_NAME}.", DIM)
+        )
+        return 0
+
+    try:
+        plan = build_plan(
+            config,
+            interval_minutes=getattr(args, "every", None) or DEFAULT_INTERVAL_MINUTES,
+            log_path=Path(args.log).expanduser() if getattr(args, "log", None) else None,
+            windowless=getattr(args, "windowless", False),
+        )
+    except ScheduleError as exc:
+        print(paint(f"  {exc}", RED), file=sys.stderr)
+        return 1
+
+    if action == "xml":
+        print(to_xml(plan))
+        return 0
+
+    if action == "install":
+        try:
+            install(plan)
+        except ScheduleError as exc:
+            print(paint(f"  {exc}", RED), file=sys.stderr)
+            return 1
+        print(paint(f"Registered {plan.name}", BOLD))
+        for line in plan.describe():
+            print(f"  {line}")
+        print()
+        print(paint("  It runs whether or not a terminal is open, only while you are", DIM))
+        print(paint("  logged on, and a run missed while the machine was asleep happens", DIM))
+        print(paint("  shortly after it wakes rather than being skipped.", DIM))
+        print()
+        print(paint(f"  Watch it:  Get-Content -Wait '{plan.log_path}'", DIM))
+        print(paint("  Check it:  ranger schedule", DIM))
+        print(paint("  Remove it: ranger schedule remove", DIM))
+        return 0
+
+    # show
+    print(paint(f"{plan.name}", BOLD))
+    for line in plan.describe():
+        print(f"  {line}")
+    print()
+
+    if not on_windows():
+        print(paint("  Task Scheduler is Windows only, so nothing is registered here.", DIM))
+        print(paint("  'ranger schedule xml' prints the definition anywhere.", DIM))
+        return 0
+
+    current = status()
+    if current is None:
+        print(paint("  not registered. 'ranger schedule install' to register it.", YELLOW))
+        return 0
+
+    print(paint("As Task Scheduler has it", BOLD))
+    for field in INTERESTING:
+        if field in current:
+            print(f"  {field:<20} {current[field]}")
+    result = current.get("Last Result", "").strip()
+    if result and result not in {"0", "267011"}:
+        # 267011 is "has not run yet", which is not a failure.
+        print()
+        print(paint(f"  Last Result is {result}, so the last run did not end cleanly.", YELLOW))
+        print(paint(f"  The log says why: {plan.log_path}", YELLOW))
+    return 0
+
+
 def cmd_dormant(config: Config, args: Any) -> int:
     """Answer the morning brief's one decision, and see the answers so far."""
     from .brief import BriefStore
@@ -1232,6 +1393,11 @@ def main(argv: list[str] | None = None) -> int:
         metavar="CHECK",
         help="run these now whatever the schedule and quiet hours say, or 'all'",
     )
+    beat.add_argument(
+        "--log",
+        metavar="PATH",
+        help="append everything printed to this file as well. A scheduled task has no terminal",
+    )
     keyterms = sub.add_parser("keyterms", help="show the vocabulary hints that would be sent")
     keyterms.add_argument("--all", action="store_true", help="show every hint, not the top 25")
 
@@ -1239,6 +1405,28 @@ def main(argv: list[str] | None = None) -> int:
     ui.add_argument("--open", action="store_true", help="open the browser as well")
     ui.add_argument("--verbose", action="store_true", help="log every request")
     ui.add_argument("--port", type=int, help="override [server] port for this run")
+
+    schedule = sub.add_parser(
+        "schedule", help="run the heartbeat on a schedule, with no terminal open"
+    )
+    schedule_sub = schedule.add_subparsers(dest="schedule_command")
+    for name, help_text in (
+        ("show", "what is registered, and what Task Scheduler thinks of it"),
+        ("install", "register it, replacing any existing one"),
+        ("remove", "unregister it"),
+        ("xml", "print the task definition without registering anything"),
+    ):
+        step = schedule_sub.add_parser(name, help=help_text)
+        if name in {"install", "xml", "show"}:
+            step.add_argument(
+                "--every", type=int, metavar="MINUTES",
+                help="how often to check. Ranger decides what is due (default 60)",
+            )
+            step.add_argument("--log", metavar="PATH", help="where the output goes")
+            step.add_argument(
+                "--windowless", action="store_true",
+                help="run through pythonw so no console window appears",
+            )
 
     dormant = sub.add_parser(
         "dormant", help="stop surfacing an account in the morning brief, or list those set aside"
@@ -1294,6 +1482,8 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_log(config, args)
     if args.command == "keyterms":
         return cmd_keyterms(config, args)
+    if args.command == "schedule":
+        return cmd_schedule(config, args)
     if args.command == "dormant":
         return cmd_dormant(config, args)
     if args.command == "accounts":

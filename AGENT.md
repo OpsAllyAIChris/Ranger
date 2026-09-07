@@ -372,6 +372,36 @@ Ranger root. It is now the whole `Ranger/` tree, exactly as Amendment D states,
 with a test that Accounts, Knowledge, the vault root and everything above it
 are still refused.
 
+## Outcomes exist in the export, and they are not interchangeable
+
+The opportunity stages in the real vault, from `ranger accounts survey`:
+
+    22  Proposal        9  Discovery        3  Negotiation
+     3  Closed Won      3  Closed Lost      3  Qualified Lead      2  Prospect
+
+Two things follow, and neither is built.
+
+**There are outcome labels.** Won and lost are both recorded, so a future
+cross-account tool has something to correlate against: which stages deals die
+at, which pain points appear in the ones that close, what the notes look like
+before a win. Without an outcome column that question has no answer at all, and
+backfilling one across 69 accounts by hand is not work anyone does.
+
+**Six outcomes is not a base to reason from.** Three won and three lost across
+45 opportunities is enough to prove the field exists and nowhere near enough to
+draw a conclusion from. Any tool built on this must say how many examples it is
+speaking from, and must not dress six up as a pattern. That is a harder
+constraint than it sounds: a model asked "what works" over this data will
+produce a confident answer whether or not one is available.
+
+**Won and lost are opposites and stay opposites.** They are excluded together
+from "deals going cold" because both mean the deal is over, and that is the
+only thing they have in common. Nothing else may treat them as one bucket.
+
+Tier is a weak filter on its own: 16 at Tier 1 and 20 at Tier 2 out of 58
+counted, so more than half the book is in the top two tiers. That is why the
+morning brief weights activity count heavily rather than leaning on tier.
+
 ## Planned: a read-only web text tool
 
 Not built. A tool that fetches a URL and returns the readable article text,
@@ -718,6 +748,7 @@ ranger/
   server.py      Tier 7: the local server. static files, and one websocket
   panel.py       Tier 7c: what the activity panel shows, read from the vault
   brief.py       Tier 5: the morning brief. a size, not a threshold
+  schedule.py    running the heartbeat with no terminal open
   wsframe.py     Tier 7b: RFC 6455 framing, and nothing above it
   bridge.py      Tier 7b: the browser as the fourth caller of the core
   assembly.py    putting a Ranger together, with no default gate
@@ -735,6 +766,41 @@ ranger/
   import ...` that broke collection for anyone running it normally.
   `tests/test_suite_hygiene.py` now fails on that pattern. Shared test helpers
   are fixtures, never imports.
+
+## The heartbeat without a terminal
+
+`ranger schedule install` registers a Task Scheduler entry rather than a
+Windows service. A service needs a wrapper or pywin32 to speak the service
+control protocol, and it runs as SYSTEM, which has none of the operator's
+environment: not their `.env`, not their `HKCU`, not their mapped drives.
+
+The task runs `ranger heartbeat --once --log <path>` hourly. Hourly rather than
+once at the morning hour, because Ranger's own scheduler already decides what is
+due and the inbox already survives a restart: the trigger only has to be
+frequent enough that a missed slot is caught soon. One source of truth for when
+the morning brief happens, and it stays in `ranger.toml`.
+
+Three settings carry the value, and two of them default the wrong way for a
+laptop and fail silently:
+
+- `StartWhenAvailable` runs a task whose time passed while the machine was
+  asleep, shortly after it wakes. This is the answer to the sleep and wake
+  question open since Tier 5.
+- `DisallowStartIfOnBatteries` defaults to true, so an unplugged laptop would
+  never surface a brief.
+- `StopIfGoingOnBatteries` defaults to true, so unplugging mid-run kills it.
+
+None of the three can be set through `schtasks` flags, which is why the task is
+registered from an XML definition rather than a command line.
+
+**No shell.** Redirecting output through `cmd /c` would put nested quoting
+inside an XML element inside a command line, which is three chances to get a
+path with a space in it wrong. `ranger heartbeat --log` does the same job, and
+behaves identically when run by hand.
+
+**An absolute `-c` is always passed.** A scheduled task can start from
+anywhere, and a Ranger that cannot find `ranger.toml` fails with a config error
+that says nothing about the working directory being `C:\Windows\System32`.
 
 ## Closing out a session
 

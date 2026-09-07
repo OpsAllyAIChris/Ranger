@@ -140,7 +140,10 @@ tier_order = ["1", "2", "3", "4", "Historical"]
 # wrongly instead, which is visible and correctable.
 #
 # 'ranger accounts survey' prints the stages actually in the vault.
-closed_stages = []
+# From the real vault: Proposal 22, Discovery 9, Closed Lost 3, Closed Won 3,
+# Negotiation 3, Qualified Lead 2, Prospect 2. Only the two Closed stages mean
+# the deal is over.
+closed_stages = ["Closed Won", "Closed Lost"]
 
 [brief]
 # Tier 5. A morning brief has a size, not a threshold.
