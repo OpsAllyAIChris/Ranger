@@ -86,6 +86,19 @@ class ScheduleConfig:
 @dataclass(frozen=True)
 class AccountsConfig:
     quiet_after_days: int
+    exclude_files: tuple[str, ...] = ()
+    skip_statuses: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class RecallConfig:
+    """Account notes are large. These keep a digest bounded."""
+
+    activities: int = 5
+    detail_activities: int = 20
+    section_chars: int = 400
+    body_chars: int = 300
+    max_chars: int = 4000
 
 
 @dataclass(frozen=True)
@@ -115,6 +128,7 @@ class Config:
     knowledge: KnowledgeConfig
     schedule: ScheduleConfig
     accounts: AccountsConfig
+    recall: RecallConfig
     drafts: DraftsConfig
     voice: VoiceConfig
     server: ServerConfig
@@ -355,8 +369,22 @@ def load_config(path: str | Path | None = None, *, load_env: bool = True) -> Con
     )
     _validate_schedule(schedule)
 
+    accounts_section = table.get("accounts", {})
     accounts = AccountsConfig(
-        quiet_after_days=int(table.get("accounts", {}).get("quiet_after_days", 21))
+        quiet_after_days=int(accounts_section.get("quiet_after_days", 21)),
+        exclude_files=tuple(str(n) for n in accounts_section.get("exclude_files", ())),
+        skip_statuses=tuple(str(s) for s in accounts_section.get("skip_statuses", ("UNCONFIRMED",))),
+    )
+    if accounts.quiet_after_days < 1:
+        raise ConfigError("accounts.quiet_after_days must be at least 1")
+
+    recall_section = table.get("recall", {})
+    recall = RecallConfig(
+        activities=int(recall_section.get("activities", 5)),
+        detail_activities=int(recall_section.get("detail_activities", 20)),
+        section_chars=int(recall_section.get("section_chars", 400)),
+        body_chars=int(recall_section.get("body_chars", 300)),
+        max_chars=int(recall_section.get("max_chars", 4000)),
     )
     drafts = DraftsConfig(
         filename_format=str(
@@ -397,6 +425,7 @@ def load_config(path: str | Path | None = None, *, load_env: bool = True) -> Con
         knowledge=knowledge,
         schedule=schedule,
         accounts=accounts,
+        recall=recall,
         drafts=drafts,
         voice=voice,
         server=server,

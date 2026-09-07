@@ -75,6 +75,21 @@ quiet_end_hour = 6      # exclusive
 # Tier 2 "what went quiet": accounts with no logged activity in more than
 # this many days get surfaced.
 quiet_after_days = 21
+# Not account notes. Excluded from every scan.
+exclude_files = ["_vault-build-report.md"]
+# Notes carrying one of these statuses are set aside rather than reported.
+# UNCONFIRMED notes came from the activity log and not the accounts export,
+# and several are near-duplicates of real accounts.
+skip_statuses = ["UNCONFIRMED"]
+
+[recall]
+# Account notes run to about 25,000 characters. Recall returns a digest, never
+# the note, so a single question cannot swallow the whole turn.
+activities = 5
+detail_activities = 20
+section_chars = 400
+body_chars = 300
+max_chars = 4000
 
 [drafts]
 # Tier 2 "draft and hold". Ranger writes here and never sends.

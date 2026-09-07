@@ -17,7 +17,7 @@ from .core import Ranger
 from .events import Notice, State, StateChanged, TextDelta, ToolCalled, ToolFinished, TurnComplete
 from .knowledge import KnowledgeLoader
 from .provider import build_provider
-from .tools import build_registry
+from .toolset import build_registry
 from .vault import Vault
 
 DIM = "\033[2m"

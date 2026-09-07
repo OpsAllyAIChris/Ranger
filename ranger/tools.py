@@ -88,8 +88,3 @@ class ToolRegistry:
             return await tool.handler(payload)
         except Exception as exc:  # a tool failing is a turn outcome, not a crash
             return ToolResult(ok=False, content=f"{type(exc).__name__}: {exc}", summary="failed")
-
-
-def build_registry(config: Any, vault: Any) -> ToolRegistry:
-    """Tier 2 fills this in. Tier 1 ships the seam, not the tools."""
-    return ToolRegistry()

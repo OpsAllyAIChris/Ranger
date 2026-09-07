@@ -105,7 +105,7 @@ quiet" tool.
 | Tier | What | State |
 | ---- | ---- | ----- |
 | 1 | The brain. Config, provider seam, agent core as a library, event stream, vault guard, terminal REPL | done |
-| 2 | The hands. Three tools: account recall, draft and hold, what went quiet | next |
+| 2 | The hands. Three tools: account recall, draft and hold, what went quiet | done |
 | 3 | The ears and mouth. Push-to-talk, Deepgram in, ElevenLabs out. No wake word. Show the transcript. Let interruption work | later |
 | 4 | The memory. Durable facts in `Ranger/memory`, one fact per entry, hand-editable | later |
 | 5 | The heartbeat. Morning surface, quiet hours, held notices, a schedule that survives restarts | later |
@@ -160,6 +160,34 @@ repeated. When Ranger gives up it says so in one plain sentence and hands back
 a clean prompt. A failed turn is rolled out of the transcript entirely, so the
 next turn starts from a conversation that actually happened.
 
+## Tier 2, as built
+
+Three tools in `ranger/toolset.py`, and the registry holds nothing else.
+`account_recall`, `draft_and_hold`, `what_went_quiet`.
+
+Reading account notes lives in `ranger/accounts.py`. The format contract is in
+`docs/vault-conventions.md` and the parser follows it rather than the other way
+round. Points worth knowing before changing any of it:
+
+- **`scan_note` and `parse_note` must agree.** The quiet check uses the cheap
+  scan across every note; recall uses the full parse on one. A test asserts
+  they return the same last-activity date and status for every fixture.
+- **Resolution never guesses.** Exact, then substring, then fuzzy, and fuzzy
+  compares the fragment against each word of a name as well as the whole
+  thing, because "Northwynd" scores 0.55 against "northwind provisions" and
+  0.89 against "northwind". More than one hit is always a question for the
+  operator.
+- **Recall returns a digest.** Notes reach 25,000 characters and the whole note
+  must never enter the conversation.
+- **The dash rule is enforced in code,** in `ranger/drafts.py`. Em and en
+  dashes only; hyphens are left alone because "follow-up" is an ordinary word.
+  A refused draft comes back to the model for a rewrite.
+
+The operator's real notes hold customer email, pricing and confidential
+material. They are never committed here. `tests/fixtures/vault/` holds
+fictional notes that match the contract exactly; the tests prove the logic and
+the operator's own run proves the format.
+
 ## Layout
 
 ```
@@ -171,7 +199,10 @@ ranger/
   provider.py    the model seam. AnthropicProvider is one implementation
   knowledge.py   Amendment C. loads Knowledge/ whole, with a retrieval seam
   prompts.py     system prompt, assembled from parts
-  tools.py       the registry. empty in Tier 1 on purpose
+  tools.py       the registry machinery
+  toolset.py     the three Tier 2 tools, and nothing else
+  accounts.py    reading account notes: parse, resolve a name, what went quiet
+  drafts.py      draft and hold, including the writing rules
   core.py        the agent. one entry point. all the logic
   cli.py         the terminal. first caller of the core, permanent debug path
   testing.py     ScriptedProvider, so the core is verifiable with no API key

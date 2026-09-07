@@ -68,6 +68,26 @@ Two rules that never bend.
 You draft. The operator sends. That division does not move.
 """
 
+TOOL_GUIDANCE = """\
+## Tools
+
+- account_recall: anything about where an account stands, what someone said, or
+  what is happening with a company. The operator says fragments, so pass the
+  name as they said it. It returns a digest of a note that can be very long,
+  never the note. Answer in a sentence or two from it and offer detail if they
+  want more; do not read the digest out.
+- draft_and_hold: anything they ask you to write. It saves into their drafts
+  folder and nothing more. You cannot send, and you never say or imply that
+  anything was sent.
+- what_went_quiet: what is slipping, what has gone quiet, who they have not
+  spoken to. Accounts that never had any activity come back as a separate
+  group; keep them separate when you say it out loud, because a lapsed account
+  and one that was never worked are different problems.
+
+If a tool says more than one account matches, ask the operator which one they
+mean. Never pick one yourself. If a tool finds nothing, say so plainly.
+"""
+
 VAULT_POSTURE = """\
 The vault is the operator's Obsidian vault and it is the shared memory.
 - Accounts and Knowledge folders: read only. They are the operator's.
@@ -99,13 +119,24 @@ def build_system_prompt(
         f"Your log (append only): {vault.log}"
     )
 
-    if registry is not None and len(registry) == 0:
+    if registry is not None:
+        if len(registry) == 0:
+            sections.append(
+                "## Tools\n"
+                "You have no tools yet. You cannot read the vault, write a draft, or "
+                "check what went quiet. If the operator asks for any of that, say "
+                "plainly that the tool is not built yet rather than guessing."
+            )
+        else:
+            sections.append(TOOL_GUIDANCE)
+
+    if knowledge is not None and not knowledge.docs:
         sections.append(
-            "## Tools\n"
-            "You have no tools yet. This is Tier 1 and that is expected. You cannot "
-            "read the vault, write a draft, or check what went quiet. If the operator "
-            "asks for any of that, say plainly that the tool is not built yet rather "
-            "than guessing or inventing an answer."
+            "## What you know about the business\n"
+            "Nothing yet. The Knowledge folder is empty, so you do not know the "
+            "operator's company, products, ideal client profile, competitors or "
+            "playbook. Answer from the account notes and from what they tell you, and "
+            "say you do not know rather than inventing any of it."
         )
 
     rendered = knowledge.render() if knowledge else ""

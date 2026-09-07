@@ -1,141 +1,99 @@
 # Vault conventions
 
-What to put in the vault by hand, and the shapes Tier 2 will read.
-
-This is a proposal, not a law. It is cheap to change now and expensive to
-change after forty notes exist, so push back before you seed rather than after.
-Nothing here is enforced in code yet; Tier 2 is what will read it.
+The account note format is the operator's, set by their CRM export. This
+records it so the tools and the exporter stay in agreement. Where this file and
+the real notes disagree, the notes win and this file is what gets corrected.
 
 ```
 ~/Obsidian/Ranger-Vault/
-  Accounts/          one note per account      yours, read only
-  Knowledge/         the business context      yours, read only
-  Ranger/            Ranger's own folders      it writes only here
+  _vault-build-report.md   not an account note, excluded from every scan
+  Accounts/                one note per account      yours, read only
+  Knowledge/               the business context      yours, read only
+  Ranger/                  Ranger's own folders      it writes only here
 ```
 
----
+## Account notes
 
-## Accounts
+One file per account. **The filename is the account name**, which is how a
+spoken fragment finds it.
 
-**One note per account. The filename is the account name.**
+Sections in order:
 
-That is how "where are we on Illes Foods" finds the right note, so name the
-file the way you say the name out loud. `Illes Foods.md`, not `illes-foods-
-2026.md` or `ACC-00417.md`. Subfolders are fine; Ranger searches the whole
-Accounts tree.
+1. A metadata block of `- **Label:** value` lines: Status, Tier, Industry, HQ,
+   Locations, Revenue tier, Annual packaging spend, Strategic fit, Incumbent,
+   Decision structure, Source.
+2. Optional `## Pain points`, `## Target solution`, `## Notes`.
+3. Optional `## Contacts`, bulleted, one per contact.
+4. Optional `## Opportunities`: `### <name>`, a pipe-delimited meta line, then
+   `- **Label:** value` lines.
+5. `## Activity`.
 
-Everything below the front matter is free-form. Ranger reads it and answers in
-a sentence or two, so write it for yourself, not for a parser. The one part
-that is parsed is the activity dates.
+Only the metadata block counts as metadata. `- **Label:** value` lines below a
+`##` heading belong to that section, so an opportunity's `- **Owner:**` is not
+mistaken for an account field.
 
-### The activity log
+### The activity section
 
-**"What went quiet" reads an `## Activity` section and takes the newest date in
-it.** Entries start with an ISO date. Anything after the date is yours.
+The one thing parsed strictly. Every entry is a heading:
 
 ```markdown
 ## Activity
-- 2026-08-12 Call with Rod. Film program is on for Q4, waiting on volumes.
-- 2026-07-30 Sent revised SupplyBox pricing.
-- 2026-07-02 Intro call.
+### 2026-09-04 | Call | Rod Illes
+Film program is on for Q4. Rod owes me confirmed volumes.
+
+### 2026-08-28 | Email
+Sent the revised pricing sheet.
 ```
 
-Newest first or oldest first, either works. Ranger takes the maximum date, not
-the first line.
+`### YYYY-MM-DD | activity_type | contact_name`, newest first, contact omitted
+when unknown. Free-form markdown follows each heading. Dates are ISO and fully
+populated.
 
-Three deliberate choices, so you know what you are agreeing to:
+Three things that follow from the real data:
 
-- **Only dates inside `## Activity` count.** A date anywhere else in the note is
-  a note, not a contact. This is what stops "renewal due 2027-01-01" from making
-  an account look freshly touched.
-- **Future dates are ignored.** A booked meeting is a plan, not activity. It
-  starts counting the day it happens.
-- **File modification time is never used.** Fixing a typo is not contact, and
-  Obsidian sync rewrites timestamps anyway.
+- **Only headings inside `## Activity` count.** A date in the metadata or in
+  prose is not a contact, so a renewal date cannot make a dead account look
+  freshly worked.
+- **`next_action` and `next_action_date` are never read.** They are null in 68%
+  and 94% of activities respectively. The activity date is the only signal.
+- **Order in the file does not matter.** Newest-first is the convention, but the
+  tools take the maximum date, so a misfiled entry cannot hide an account.
 
-If an account has no `## Activity` section at all, Ranger will say it cannot
-tell rather than guessing, and it will not appear in the quiet list.
+### Statuses that change the reading
 
-### Front matter
+- `- **Status:** UNCONFIRMED` marks a note reconstructed from the activity log
+  rather than the accounts export. Several are near-duplicates of real
+  accounts, so the quiet check sets them aside and says how many. Configurable
+  as `accounts.skip_statuses`.
+- An account with no `## Activity` section at all is reported as **never
+  touched**, separately from lapsed accounts. Mixed together it would sort to
+  the top on staleness and bury the accounts that actually lapsed.
 
-Optional, and only two fields are read:
+### Size
 
-```markdown
----
-last_contact: 2026-08-12   # overrides the Activity section, for backfill
-status: active             # active | paused | closed. Anything but active is
----                        # left out of the quiet list.
-```
-
-Use `last_contact` when you are importing history you do not want to retype as
-an activity log. Use `status` to stop a dormant account nagging you forever.
-
-### A whole note
-
-```markdown
----
-status: active
----
-
-# Illes Foods
-
-Food manufacturer, Dallas. Rod Illes is the decision maker, Marcy runs ops
-and joins the technical calls.
-
-## Where we are
-Film program for Q4 is verbally agreed. Blocked on them confirming volumes,
-which Rod owes me. SupplyBox pricing sent and not yet discussed.
-
-## Activity
-- 2026-08-12 Call with Rod. Film program on for Q4, waiting on volumes.
-- 2026-07-30 Sent revised SupplyBox pricing.
-- 2026-07-02 Intro call.
-```
-
-With `accounts.quiet_after_days = 21`, that note goes quiet three weeks after
-12 August.
-
----
+Notes run from a few hundred characters to about 25,000. Account recall returns
+a **digest**: the metadata, clipped prose sections, and the most recent
+activities with their bodies clipped. The whole note never enters the
+conversation. Bounds live under `[recall]` in the config.
 
 ## Knowledge
 
-Loaded whole into Ranger's context on every turn. There is no tool to fetch it
-and there will not be one, so keep it to what actually changes how Ranger
-answers. The config expects these five, in this order:
+Loaded whole into context on every turn, per Amendment C. There is no tool to
+fetch it and there will not be one. The config expects `company.md`,
+`products.md`, `icp.md`, `competitors.md`, `playbook.md`; extras load after,
+alphabetically.
 
-| File | What goes in it |
-| ---- | --------------- |
-| `company.md` | Who you are, what you sell, how you talk about yourselves |
-| `products.md` | Products and services, what each is for, rough pricing shape |
-| `icp.md` | Ideal client profile. Who is a fit, who is not, and why |
-| `competitors.md` | The competitive landscape and how you position against it |
-| `playbook.md` | The sales playbook. Stages, qualification, what good looks like |
-
-Extra files are fine; they load after these five, alphabetically. `ranger
-doctor` lists which of the five are still missing.
-
-Two things to keep in mind while writing them:
-
-- **Prose beats bullets.** This becomes prompt context, not a checklist. Write
-  the way you would brief a new hire.
-- **There is a budget.** `knowledge.budget_chars` is 60,000. Past that, Ranger
-  says which files it left out rather than truncating one mid-sentence. That is
-  the signal to start splitting these up, which is what the retrieval seam in
-  `knowledge.py` is for.
-
-Start rough. A half-page `company.md` is worth more than an empty folder, and
-these are the easiest files in the vault to improve later.
-
----
+An empty Knowledge folder is fine and silent. The system prompt says once that
+Ranger does not know the business, rather than warning on every startup.
 
 ## Ranger's own folders
 
-You do not seed these. Ranger creates the files itself and you can read and
-correct any of them in Obsidian.
+Not seeded by hand. Ranger creates these files and they stay readable and
+correctable in Obsidian.
 
 | Folder | Holds | Tier |
 | ------ | ----- | ---- |
-| `Ranger/drafts/` | Drafts it has written and is holding for you | 2 |
-| `Ranger/memory/` | Durable facts, one per file, hand-editable | 4 |
-| `Ranger/inbox/` | Notices it has surfaced and you have not cleared | 5 |
-| `Ranger/log/` | The audit trail. Append only | 6 |
+| `Ranger/drafts/` | Drafts written and held, never sent | 2 |
+| `Ranger/memory/` | Durable facts, one per file | 4 |
+| `Ranger/inbox/` | Notices surfaced and not yet cleared | 5 |
+| `Ranger/log/` | The audit trail, append only | 6 |

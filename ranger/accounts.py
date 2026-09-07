@@ -1,0 +1,387 @@
+"""Reading account notes.
+
+The format is the operator's, documented in docs/vault-conventions.md. Only one
+thing in a note is parsed strictly: the activity heading
+
+    ### YYYY-MM-DD | activity_type | contact_name
+
+with the contact omitted when unknown. Everything else is read loosely, because
+notes are written by a person and by an exporter and neither owes this module a
+schema.
+
+Two rules that come from the shape of the real data:
+  - next_action and next_action_date are null in most activities, so nothing
+    here reads them. The activity date is the only signal.
+  - a note can run to 25,000 characters, so recall returns a bounded digest and
+    never the whole note.
+"""
+
+from __future__ import annotations
+
+import difflib
+import re
+import unicodedata
+from dataclasses import dataclass, field
+from datetime import date
+from pathlib import Path
+
+# ### 2026-09-04 | Call | Rod Illes      (contact optional, trailing pipe ok)
+_ACTIVITY_HEADING = re.compile(
+    r"^###[ \t]+(\d{4}-\d{2}-\d{2})[ \t]*\|([^|\n]*)(?:\|([^\n]*))?[ \t]*$",
+    re.MULTILINE,
+)
+# - **Status:** UNCONFIRMED
+_METADATA_LINE = re.compile(r"^-[ \t]+\*\*(?P<label>[^*:]+):\*\*[ \t]*(?P<value>.*?)[ \t]*$", re.MULTILINE)
+_SECTION = re.compile(r"^##[ \t]+(?P<title>.+?)[ \t]*$", re.MULTILINE)
+_DATE_ONLY = re.compile(r"^###[ \t]+(\d{4}-\d{2}-\d{2})[ \t]*\|", re.MULTILINE)
+_STATUS_ONLY = re.compile(r"^-[ \t]+\*\*Status:\*\*[ \t]*(.*?)[ \t]*$", re.MULTILINE | re.IGNORECASE)
+
+
+def _to_date(text: str) -> date | None:
+    try:
+        return date.fromisoformat(text)
+    except ValueError:
+        return None
+
+
+@dataclass(frozen=True)
+class Activity:
+    date: date
+    kind: str
+    contact: str | None
+    body: str = ""
+
+    def heading(self) -> str:
+        parts = [self.date.isoformat(), self.kind]
+        if self.contact:
+            parts.append(self.contact)
+        return " | ".join(parts)
+
+
+@dataclass(frozen=True)
+class AccountNote:
+    name: str
+    path: Path | None = None
+    metadata: dict[str, str] = field(default_factory=dict)
+    sections: dict[str, str] = field(default_factory=dict)
+    activities: tuple[Activity, ...] = ()
+    size: int = 0
+
+    @property
+    def status(self) -> str:
+        return self.metadata.get("Status", "")
+
+    @property
+    def unconfirmed(self) -> bool:
+        return self.status.strip().upper() == "UNCONFIRMED"
+
+    @property
+    def last_activity(self) -> date | None:
+        return self.activities[0].date if self.activities else None
+
+    @property
+    def first_activity(self) -> date | None:
+        return self.activities[-1].date if self.activities else None
+
+
+@dataclass(frozen=True)
+class NoteScan:
+    """What the quiet check needs, without slicing any bodies out."""
+
+    name: str
+    path: Path
+    status: str
+    last_activity: date | None
+    activity_count: int
+
+    @property
+    def unconfirmed(self) -> bool:
+        return self.status.strip().upper() == "UNCONFIRMED"
+
+
+def scan_note(text: str, name: str, path: Path) -> NoteScan:
+    """Cheap pass for the quiet check: status and the newest activity date.
+
+    Deliberately does not build Activity objects. The contract says the heading
+    is the only thing this check may parse, and 69 notes of up to 25k characters
+    is not worth parsing twice.
+    """
+    status_match = _STATUS_ONLY.search(text)
+    dates = [d for d in (_to_date(m.group(1)) for m in _DATE_ONLY.finditer(text)) if d]
+    return NoteScan(
+        name=name,
+        path=path,
+        status=status_match.group(1) if status_match else "",
+        # Headings are newest first by convention, but max() does not depend on it.
+        last_activity=max(dates) if dates else None,
+        activity_count=len(dates),
+    )
+
+
+def parse_note(text: str, name: str, path: Path | None = None) -> AccountNote:
+    """Full parse, for recall."""
+    section_starts = [(m.start(), m.group("title")) for m in _SECTION.finditer(text)]
+
+    head = text[: section_starts[0][0]] if section_starts else text
+    metadata = {m.group("label").strip(): m.group("value").strip() for m in _METADATA_LINE.finditer(head)}
+
+    sections: dict[str, str] = {}
+    for index, (start, title) in enumerate(section_starts):
+        end = section_starts[index + 1][0] if index + 1 < len(section_starts) else len(text)
+        body = text[start:end]
+        body = body[body.index("\n") + 1 :] if "\n" in body else ""
+        sections[title.strip()] = body.strip()
+
+    return AccountNote(
+        name=name,
+        path=path,
+        metadata=metadata,
+        sections=sections,
+        activities=_parse_activities(sections.get("Activity", "")),
+        size=len(text),
+    )
+
+
+def _parse_activities(section: str) -> tuple[Activity, ...]:
+    matches = list(_ACTIVITY_HEADING.finditer(section))
+    activities: list[Activity] = []
+    for index, match in enumerate(matches):
+        when = _to_date(match.group(1))
+        if when is None:
+            continue
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(section)
+        contact = (match.group(3) or "").strip()
+        activities.append(
+            Activity(
+                date=when,
+                kind=match.group(2).strip(),
+                contact=contact or None,
+                body=section[match.end() : end].strip(),
+            )
+        )
+    # Newest first regardless of how the file was ordered.
+    activities.sort(key=lambda a: a.date, reverse=True)
+    return tuple(activities)
+
+
+# -- resolving a spoken name ------------------------------------------------
+
+
+def _normalise(text: str) -> str:
+    """Fold case, accents and punctuation so 'Illes' matches 'Illes Foods'."""
+    folded = unicodedata.normalize("NFKD", text)
+    folded = "".join(c for c in folded if not unicodedata.combining(c))
+    folded = re.sub(r"[^\w\s]", " ", folded.lower())
+    return re.sub(r"\s+", " ", folded).strip()
+
+
+@dataclass(frozen=True)
+class Resolution:
+    """Never guesses. Either one match, or the operator gets asked."""
+
+    match: str | None = None
+    candidates: tuple[str, ...] = ()
+    how: str = "none"  # exact | substring | close | ambiguous | none
+
+    @property
+    def ambiguous(self) -> bool:
+        return self.how == "ambiguous"
+
+    @property
+    def found(self) -> bool:
+        return self.match is not None
+
+
+def resolve_account(query: str, names: list[str], cutoff: float = 0.6) -> Resolution:
+    """Case-insensitive substring first, then close match.
+
+    More than one hit is always a question for the operator, never a silent
+    pick of the first.
+    """
+    wanted = _normalise(query)
+    if not wanted:
+        return Resolution()
+
+    pairs = [(name, _normalise(name)) for name in names]
+
+    exact = [name for name, norm in pairs if norm == wanted]
+    if len(exact) == 1:
+        return Resolution(match=exact[0], how="exact")
+    if len(exact) > 1:
+        return Resolution(candidates=tuple(sorted(exact)), how="ambiguous")
+
+    substring = [name for name, norm in pairs if wanted in norm]
+    if len(substring) == 1:
+        return Resolution(match=substring[0], how="substring")
+    if len(substring) > 1:
+        return Resolution(candidates=tuple(sorted(substring)), how="ambiguous")
+
+    # Fuzzy matching compares the fragment against each word of the name as
+    # well as the whole thing. "Northwynd" scores 0.55 against "northwind
+    # provisions" and 0.89 against "northwind", and the operator said the
+    # fragment, not the filename.
+    if len(wanted) < 3:
+        return Resolution()
+
+    scored = [(name, _similarity(wanted, norm)) for name, norm in pairs]
+    best = max((score for _, score in scored), default=0.0)
+    if best < cutoff:
+        return Resolution()
+
+    # Anything within a whisker of the best is a genuine rival, not a runner up.
+    matched = sorted(name for name, score in scored if score >= max(cutoff, best - 0.05))
+    if len(matched) == 1:
+        return Resolution(match=matched[0], how="close")
+    return Resolution(candidates=tuple(matched), how="ambiguous")
+
+
+def _similarity(wanted: str, name: str) -> float:
+    ratio = difflib.SequenceMatcher(None, wanted, name).ratio
+    best = ratio()
+    for word in name.split():
+        best = max(best, difflib.SequenceMatcher(None, wanted, word).ratio())
+    return best
+
+
+# -- the bounded digest -----------------------------------------------------
+
+#: Sections worth surfacing, in the order they are useful when answering.
+DIGEST_SECTIONS = ("Pain points", "Target solution", "Notes")
+
+
+def _clip(text: str, limit: int) -> str:
+    text = text.strip()
+    if len(text) <= limit:
+        return text
+    return text[:limit].rsplit(" ", 1)[0].rstrip() + " ..."
+
+
+def render_digest(
+    note: AccountNote,
+    *,
+    activities: int = 5,
+    section_chars: int = 400,
+    body_chars: int = 300,
+    max_chars: int = 4000,
+) -> str:
+    """A digest, never the note.
+
+    Notes reach 25,000 characters. Dropping one of those into the conversation
+    would blow the turn out and bury the answer, so this returns the metadata,
+    a clipped slice of the prose sections, and the most recent activities with
+    their bodies clipped.
+    """
+    lines: list[str] = [f"# {note.name}"]
+
+    if note.metadata:
+        lines.append("")
+        lines.extend(f"- **{label}:** {value}" for label, value in note.metadata.items())
+
+    total = len(note.activities)
+    if total:
+        first, last = note.first_activity, note.last_activity
+        lines += [
+            "",
+            f"{total} logged activit{'y' if total == 1 else 'ies'}, "
+            f"{first} to {last}." if first else "",
+        ]
+    else:
+        lines += ["", "No activity has ever been logged against this account."]
+
+    for title in DIGEST_SECTIONS:
+        body = note.sections.get(title)
+        if body:
+            lines += ["", f"## {title}", _clip(body, section_chars)]
+
+    for title in ("Contacts", "Opportunities"):
+        body = note.sections.get(title)
+        if body:
+            lines += ["", f"## {title}", _clip(body, section_chars)]
+
+    if note.activities:
+        shown = note.activities[:activities]
+        lines += ["", f"## Activity, {len(shown)} most recent of {total}"]
+        for item in shown:
+            lines.append(f"### {item.heading()}")
+            if item.body:
+                lines.append(_clip(item.body, body_chars))
+        if total > len(shown):
+            lines.append(
+                f"\n{total - len(shown)} older activities not shown. "
+                "Ask for detail on this account to see more."
+            )
+
+    text = "\n".join(line for line in lines if line is not None)
+    if len(text) > max_chars:
+        text = text[:max_chars].rsplit("\n", 1)[0] + "\n\n[digest truncated]"
+    return text
+
+
+# -- what went quiet --------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class QuietAccount:
+    name: str
+    last_activity: date
+    days: int
+
+
+@dataclass(frozen=True)
+class QuietReport:
+    threshold_days: int
+    as_of: date
+    lapsed: tuple[QuietAccount, ...] = ()
+    never_touched: tuple[str, ...] = ()
+    active: int = 0
+    skipped_unconfirmed: tuple[str, ...] = ()
+
+    @property
+    def considered(self) -> int:
+        return len(self.lapsed) + len(self.never_touched) + self.active
+
+
+def quiet_report(
+    scans: list[NoteScan],
+    *,
+    threshold_days: int,
+    as_of: date,
+    skip_statuses: tuple[str, ...] = ("UNCONFIRMED",),
+) -> QuietReport:
+    """Split accounts into lapsed, never touched, and fine.
+
+    Three things the real data forces:
+      - UNCONFIRMED notes are set aside. They came from the activity log rather
+        than the accounts export and several are near-duplicates.
+      - accounts with no activity at all are their own group. Mixed in with
+        genuinely lapsed accounts they would sort to the top and drown them.
+      - only the activity date counts. next_action_date is null in 94% of rows.
+    """
+    lapsed: list[QuietAccount] = []
+    never: list[str] = []
+    skipped: list[str] = []
+    active = 0
+
+    skip = {status.strip().upper() for status in skip_statuses}
+    for scan in scans:
+        if scan.status.strip().upper() in skip:
+            skipped.append(scan.name)
+            continue
+        if scan.last_activity is None:
+            never.append(scan.name)
+            continue
+        days = (as_of - scan.last_activity).days
+        if days > threshold_days:
+            lapsed.append(QuietAccount(scan.name, scan.last_activity, days))
+        else:
+            active += 1
+
+    lapsed.sort(key=lambda a: (-a.days, a.name))
+    return QuietReport(
+        threshold_days=threshold_days,
+        as_of=as_of,
+        lapsed=tuple(lapsed),
+        never_touched=tuple(sorted(never)),
+        active=active,
+        skipped_unconfirmed=tuple(sorted(skipped)),
+    )

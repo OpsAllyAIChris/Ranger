@@ -19,7 +19,8 @@ from .events import (
 )
 from .knowledge import KnowledgeLoader
 from .provider import Provider, build_provider
-from .tools import Tool, ToolRegistry, ToolResult, build_registry
+from .tools import Tool, ToolRegistry, ToolResult
+from .toolset import build_registry
 from .vault import Vault, VaultError, VaultPathDenied, VaultWriteDenied
 
 __version__ = "0.1.0"
