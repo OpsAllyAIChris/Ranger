@@ -139,9 +139,25 @@ def test_the_window_is_asked_for_as_an_app_not_a_tab():
 
 
 def test_probe_says_nothing_is_running_when_nothing_is(config):
+    """Against a port nothing can be listening on, not the configured one.
+
+    This used to probe config.server.port, which is 8765 by default, so the
+    operator running their own Ranger while running the suite failed a test
+    about something else entirely. A bound but unlistening socket is refused
+    deterministically and cannot collide with anything real.
+    """
+    import socket as sockets
+    from dataclasses import replace
+
     from ranger.server import probe
 
-    assert probe(config, timeout=0.2) is None
+    holder = sockets.socket()
+    holder.bind(("127.0.0.1", 0))
+    try:
+        dead = replace(config, server=replace(config.server, port=holder.getsockname()[1]))
+        assert probe(dead, timeout=0.2) is None
+    finally:
+        holder.close()
 
 
 def test_probe_answers_a_running_server(config):

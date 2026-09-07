@@ -188,3 +188,93 @@ def test_the_definition_is_valid_xml_with_a_path_that_needs_escaping(config):
     xml = to_xml(build_plan(config, command=awkward))
     assert "&amp;" in xml
     assert ElementTree.fromstring(xml) is not None
+
+
+# -- the interface task ----------------------------------------------------
+
+
+@pytest.fixture
+def interface(config):
+    from ranger.schedule import build_interface_plan
+
+    return build_interface_plan(config, command=EXE)
+
+
+def test_the_interface_starts_at_logon_rather_than_on_a_clock(interface):
+    """A server is started once and left alone. An hourly trigger would kill
+    the window the operator is looking at."""
+    assert find(interface, "t:Triggers/t:LogonTrigger/t:Enabled") == "true"
+    assert parse(interface).find("t:Triggers/t:CalendarTrigger", NS) is None
+
+
+def test_the_logon_trigger_names_the_user_or_it_needs_an_elevated_shell(interface):
+    """The whole reason the heartbeat registered and this one did not.
+
+    A LogonTrigger with no UserId means "when *any* user logs on", which is a
+    machine-wide setting and refused with a bare "Access is denied." from a
+    normal shell. A calendar trigger has no such distinction, which is why one
+    task worked and the other did not from the same prompt.
+    """
+    from ranger.schedule import current_user
+
+    assert find(interface, "t:Triggers/t:LogonTrigger/t:UserId") == current_user()
+    assert find(interface, "t:Principals/t:Principal/t:UserId") == current_user()
+
+
+def test_the_interface_task_is_never_stopped_for_running_too_long(interface):
+    assert find(interface, "t:Settings/t:ExecutionTimeLimit") == "PT0S"
+
+
+def test_the_heartbeat_is_still_time_limited(plan):
+    assert find(plan, "t:Settings/t:ExecutionTimeLimit") == "PT1H"
+
+
+def test_the_interface_runs_the_ui(config, interface):
+    arguments = find(interface, "t:Actions/t:Exec/t:Arguments")
+    assert " ui " in f" {arguments} "
+    assert "--log" in arguments
+    assert str(config.source_path.resolve()) in arguments
+
+
+# -- what it says when Windows refuses -------------------------------------
+
+
+class Refused:
+    returncode = 1
+    stdout = ""
+    stderr = "ERROR: Access is denied."
+
+
+def test_a_refusal_reports_the_command_and_everything_windows_said(interface):
+    """"ERROR: Access is denied." on its own says nothing about what was
+    denied, which invocation produced it, or whether elevation would help."""
+    from ranger.schedule import _explain
+
+    message = _explain(interface, ["/Create", "/TN", interface.name, "/XML", "C:/t/x.xml"], Refused())
+
+    assert "Ranger interface" in message
+    assert "exit 1" in message
+    assert "schtasks /Create /TN" in message
+    assert "ERROR: Access is denied." in message
+    assert "elevation problem" in message
+    assert "logon trigger with no user named on it" in message
+
+
+def test_an_ordinary_refusal_does_not_blame_elevation(interface):
+    from ranger.schedule import _explain
+
+    class Other:
+        returncode = 1
+        stdout = "ERROR: The task XML contains a value which is incorrectly formatted."
+        stderr = ""
+
+    message = _explain(interface, ["/Create"], Other())
+    assert "incorrectly formatted" in message
+    assert "elevation" not in message
+
+
+def test_an_argument_with_a_space_is_shown_quoted(interface):
+    from ranger.schedule import _explain
+
+    message = _explain(interface, ["/TN", "Ranger interface"], Refused())
+    assert '"Ranger interface"' in message

@@ -800,8 +800,20 @@ hearing a real voice through them: `quick` (20/120ms), `natural` (45/220ms,
 the default) and `slow` (90/400ms). Switchable live with
 `rangerOrb.smoothing('quick')`.
 
-Two bugs found by running it, both in the same family and each with a
-different cause:
+**The audio carries its own format.** `tts.output_format` is `pcm_24000`,
+which is 16 bit little endian samples and nothing else: no header, no
+container, no way for anything to work out what it is. The terminal path plays
+it straight into PortAudio at a rate it was told separately, and
+`decodeAudioData` rejects it outright, so voice worked in the terminal and was
+silent in the browser. Neither autoplay nor an ElevenLabs problem, and not
+something the bytes could ever have said for themselves. The rate now travels
+with the audio and the browser builds an `AudioBuffer` directly for raw PCM.
+
+Asking ElevenLabs for MP3 for the browser and PCM for the terminal was the
+alternative: a second format to keep working, and a decoder in the way of the
+thing that was chosen precisely because it needs none.
+
+Three bugs found by running it, each with a different cause:
 
 - `hidden` is a property of `HTMLElement`, and an `<svg>` is an `SVGElement`.
   Setting `svg.hidden = true` succeeds, writes no attribute, and changes
@@ -809,6 +821,7 @@ different cause:
   icon shows is now decided in CSS from `data-state` and nowhere else.
 - A `display` rule on an element beats the browser's own `[hidden]` rule, which
   is the same shape as the confirmation overlay that ate every click in 7c.
+- Raw PCM has no container, above.
 
 ## Opening it from the taskbar
 
@@ -849,6 +862,14 @@ one image.
 Windows service. A service needs a wrapper or pywin32 to speak the service
 control protocol, and it runs as SYSTEM, which has none of the operator's
 environment: not their `.env`, not their `HKCU`, not their mapped drives.
+
+**A logon trigger has to name its user.** A `<LogonTrigger>` with no `<UserId>`
+means "when *any* user logs on", which is machine-wide and refused with a bare
+`ERROR: Access is denied.` from an ordinary shell. A calendar trigger has no
+such distinction, which is why the heartbeat task registered and the interface
+task did not from the same prompt. Both now name the registering user, and a
+refusal reports the whole schtasks invocation and everything Windows said,
+rather than one line of it.
 
 The task runs `ranger heartbeat --once --log <path>` hourly. Hourly rather than
 once at the morning hour, because Ranger's own scheduler already decides what is

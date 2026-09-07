@@ -207,14 +207,25 @@ export function createSpeaker({ onLevel, onDone } = {}) {
     requestAnimationFrame(tick);
   }
 
-  /** Queue one sentence. Bytes in, scheduled immediately after the last one. */
-  async function play(bytes) {
+  /**
+   * Queue one sentence. Bytes in, scheduled immediately after the last one.
+   *
+   * `format` says how to read them, because for the default output the bytes
+   * cannot say for themselves: pcm_24000 is 16 bit little endian samples with
+   * no header of any kind, and decodeAudioData rejects it. That is not an
+   * ElevenLabs problem or an autoplay problem, it is the absence of a
+   * container, and the same bytes play perfectly through PortAudio because
+   * that path is told the rate separately.
+   */
+  async function play(bytes, format) {
     const audio = ensure();
     // Autoplay policy: a context created before any click starts suspended,
     // and a resume inside the click that started this is what unlocks it.
     if (audio.state === 'suspended') await audio.resume();
 
-    const buffer = await audio.decodeAudioData(bytes.slice(0));
+    const buffer = (format && format.encoding === 'pcm')
+      ? pcmBuffer(audio, bytes, format)
+      : await audio.decodeAudioData(bytes.slice(0));
     const source = audio.createBufferSource();
     source.buffer = buffer;
     source.connect(analyser);
@@ -257,6 +268,26 @@ export function createSpeaker({ onLevel, onDone } = {}) {
   }
 
   return { play, stop, unlock, get speaking() { return playing > 0; } };
+}
+
+/** Raw 16 bit little endian samples into something the graph can play. */
+function pcmBuffer(audio, bytes, format) {
+  const rate = format.rate || 24000;
+  const channels = format.channels || 1;
+  const view = new DataView(bytes);
+  // Floor, because a sentence can end mid sample when chunks are concatenated.
+  const frames = Math.floor(view.byteLength / 2 / channels);
+  const buffer = audio.createBuffer(channels, frames, rate);
+
+  for (let channel = 0; channel < channels; channel++) {
+    const target = buffer.getChannelData(channel);
+    for (let i = 0; i < frames; i++) {
+      // 32768 rather than 32767: it is the magnitude of the most negative
+      // sample, so nothing can come out above 1.0 and clip.
+      target[i] = view.getInt16((i * channels + channel) * 2, true) / 32768;
+    }
+  }
+  return buffer;
 }
 
 /** A blob to the base64 the socket carries. */

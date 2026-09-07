@@ -73,6 +73,9 @@ class Plan:
     #: a server: it starts once and stays up, and restarting it hourly would
     #: drop whatever window was connected to it.
     at_logon: bool = False
+    #: Who the task belongs to. Empty means the account registering it, which
+    #: is what a per-user task needs to say to avoid needing an elevated shell.
+    user: str = ""
 
     def describe(self) -> list[str]:
         when = (
@@ -161,6 +164,7 @@ def build_plan(
         log_path=log,
         interval_minutes=interval_minutes,
         start_hour=config.schedule.morning_hour,
+        user=current_user(),
     )
 
 
@@ -197,6 +201,7 @@ def build_interface_plan(
         working_directory=Path(settings).resolve().parent,
         log_path=log,
         at_logon=True,
+        user=current_user(),
     )
 
 
@@ -211,6 +216,7 @@ def _triggers(plan: Plan) -> str:
         return (
             "    <LogonTrigger>\n"
             "      <Enabled>true</Enabled>\n"
+            f"      <UserId>{escape(plan.user)}</UserId>\n"
             "      <Delay>PT20S</Delay>\n"
             "    </LogonTrigger>"
         )
@@ -249,6 +255,7 @@ def to_xml(plan: Plan) -> str:
   </Triggers>
   <Principals>
     <Principal id="Author">
+      <UserId>{escape(plan.user)}</UserId>
       <LogonType>InteractiveToken</LogonType>
       <RunLevel>LeastPrivilege</RunLevel>
     </Principal>
@@ -284,6 +291,22 @@ def to_xml(plan: Plan) -> str:
 
 
 # -- talking to Windows -----------------------------------------------------
+
+
+def current_user() -> str:
+    """DOMAIN\\user, the way Task Scheduler wants to be told who this is for.
+
+    Load bearing rather than cosmetic. A LogonTrigger with no UserId means
+    "when *any* user logs on", which is a machine-wide setting and needs an
+    elevated shell to register. Named to this user it is an ordinary per-user
+    task, and the heartbeat task never hit this because a calendar trigger has
+    no such distinction.
+    """
+    import getpass
+
+    user = os.environ.get("USERNAME") or getpass.getuser()
+    domain = os.environ.get("USERDOMAIN")
+    return f"{domain}\\{user}" if domain else user
 
 
 def on_windows() -> bool:
@@ -333,8 +356,51 @@ def install(plan: Plan, *, replace: bool = True) -> str:
             pass
 
     if result.returncode != 0:
-        raise ScheduleError((result.stderr or result.stdout).strip() or "schtasks refused it")
+        raise ScheduleError(_explain(plan, arguments, result))
     return (result.stdout or "").strip()
+
+
+#: What Windows says when a task needs rights the shell does not have. Checked
+#: as text because schtasks returns 1 for everything.
+DENIED = ("access is denied", "e_accessdenied", "0x80070005")
+
+
+def _explain(plan: Plan, arguments: list[str], result: subprocess.CompletedProcess) -> str:
+    """The whole failure, not a fragment of it.
+
+    "ERROR: Access is denied." on its own says nothing about what was denied,
+    which invocation produced it, or whether elevation would help. Every one of
+    those is knowable here.
+    """
+    output = "\n".join(
+        part.strip() for part in (result.stdout, result.stderr) if part and part.strip()
+    )
+    lines = [
+        f"schtasks refused to register {plan.name} (exit {result.returncode}).",
+        "",
+        "  what ran:",
+        "    schtasks " + " ".join(_show(a) for a in arguments),
+        "",
+        "  what it said:",
+    ]
+    lines += [f"    {line}" for line in (output or "nothing at all").splitlines()]
+
+    if any(marker in output.lower() for marker in DENIED):
+        lines += [
+            "",
+            "  This is an elevation problem, and it is a task setting rather than",
+            "  a permissions accident: a logon trigger with no user named on it",
+            "  means 'when anyone logs on', which is machine wide. It is now named",
+            "  to " + plan.user + ", which should not need an elevated shell.",
+            "",
+            "  If it still refuses, run this once from an elevated PowerShell:",
+            "    ranger schedule install --interface",
+        ]
+    return "\n".join(lines)
+
+
+def _show(argument: str) -> str:
+    return f'"{argument}"' if " " in argument else argument
 
 
 def remove(name: str = TASK_NAME) -> bool:

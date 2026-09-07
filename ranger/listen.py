@@ -105,6 +105,40 @@ async def transcribe(transcriber: Any, utterance: Utterance, *, hints: bool = Tr
     )
 
 
+#: What a container-less format has to be told to the browser as. Anything
+#: with a header decodes itself; raw PCM has no header at all.
+CONTAINERS = {
+    "mp3": "audio/mpeg",
+    "opus": "audio/ogg",
+    "ulaw": "audio/basic",
+    "alaw": "audio/basic",
+}
+
+
+def speech_format(output_format: str) -> dict[str, Any]:
+    """How the browser should read the audio it is about to be sent.
+
+    `tts.output_format` defaults to `pcm_24000`, which is 16 bit little endian
+    mono samples and nothing else: no header, no container, no way for anything
+    to work out what it is. `decodeAudioData` rejects it outright, which is why
+    the terminal path plays it straight into PortAudio at a rate it was told
+    and the browser could not play it at all.
+
+    So the rate travels with the audio. The alternative was asking ElevenLabs
+    for MP3 for the browser and PCM for the terminal, which is a second format
+    to keep working and a decoder in the way of the thing that was chosen
+    precisely because it needs no decoder.
+    """
+    from .tts import output_samplerate
+
+    rate = output_samplerate(output_format)
+    if rate is not None:
+        return {"encoding": "pcm", "rate": rate, "bits": 16, "channels": 1}
+
+    head = output_format.strip().lower().split("_")[0]
+    return {"encoding": "container", "mime": CONTAINERS.get(head, "audio/mpeg")}
+
+
 async def speak(speaker: Any, text: str) -> bytes:
     """Collect one sentence of speech. Returned whole, not streamed.
 

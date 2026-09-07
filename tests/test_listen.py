@@ -410,3 +410,62 @@ def test_a_spoken_yes_cannot_reach_the_gate():
     assert "stopListening(true)" in opened
     assert "el.mic.disabled = true" in opened
     assert "if (document.activeElement === el.say || openToken) return;" in script
+
+
+# -- how the browser is told to read the audio -----------------------------
+
+
+def test_raw_pcm_travels_with_its_sample_rate():
+    """The default output has no header of any kind.
+
+    tts.output_format is pcm_24000, which is 16 bit little endian samples and
+    nothing else. decodeAudioData rejects it outright, so voice worked in the
+    terminal, where PortAudio is told the rate separately, and was silent in
+    the browser. Neither autoplay nor an ElevenLabs problem: the absence of a
+    container.
+    """
+    from ranger.listen import speech_format
+
+    assert speech_format("pcm_24000") == {
+        "encoding": "pcm", "rate": 24000, "bits": 16, "channels": 1,
+    }
+    assert speech_format("pcm_16000")["rate"] == 16000
+
+
+@pytest.mark.parametrize(
+    "output_format, mime",
+    [
+        ("mp3_44100_128", "audio/mpeg"),
+        ("mp3_22050_32", "audio/mpeg"),
+        ("opus_48000_64", "audio/ogg"),
+        ("ulaw_8000", "audio/basic"),
+    ],
+)
+def test_a_format_with_a_container_decodes_itself(output_format, mime):
+    from ranger.listen import speech_format
+
+    assert speech_format(output_format) == {"encoding": "container", "mime": mime}
+
+
+def test_the_format_is_sent_with_every_sentence(spoken):
+    port, _, _ = spoken
+    client = Client(port)
+    try:
+        client.until("panel")
+        client.send({"type": "audio", "audio": encode_audio(b"x" * 512), "mime": "audio/webm"})
+        speech = [e for e in client.until("done") if e["kind"] == "speech"]
+        assert speech
+        for event in speech:
+            assert event["format"]["encoding"] in {"pcm", "container"}
+    finally:
+        client.close()
+
+
+def test_the_browser_builds_a_buffer_for_pcm_rather_than_decoding_it():
+    from pathlib import Path
+
+    source = Path(__import__("ranger").__path__[0], "web", "voice.js").read_text(encoding="utf-8")
+    assert "function pcmBuffer(" in source
+    assert "getInt16(" in source
+    assert "32768" in source, "scaled by the magnitude of the most negative sample"
+    assert "format.encoding === 'pcm'" in source

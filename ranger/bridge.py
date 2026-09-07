@@ -277,7 +277,7 @@ class Session:
         is a notice, never the end of a turn: losing the voice is bad, losing
         the answer is worse.
         """
-        from .listen import encode_audio, speak
+        from .listen import encode_audio, speak, speech_format
 
         try:
             audio = await speak(self.speaker, sentence)
@@ -287,7 +287,15 @@ class Session:
             self.emit("notice", level="warn", message=f"could not speak that: {exc}")
             return
         if audio:
-            self.emit("speech", index=index, text=sentence, audio=encode_audio(audio))
+            self.emit(
+                "speech",
+                index=index,
+                text=sentence,
+                audio=encode_audio(audio),
+                # The browser cannot work this out from the bytes: pcm_24000
+                # has no header to work it out from.
+                format=speech_format(self.agent.config.tts.output_format),
+            )
 
     def _remember_tool(self, event: Any) -> None:
         self.tools.insert(0, {"name": event.name, "ok": event.ok, "summary": event.summary})

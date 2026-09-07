@@ -426,8 +426,9 @@ export function createShell(orb) {
       }
       case 'speech':
         if (speaker) {
-          speaker.play(fromBase64(event.audio)).catch((err) => {
+          speaker.play(fromBase64(event.audio), event.format).catch((err) => {
             toast('could not play that: ' + err);
+            console.error('playback failed', event.format, err);
           });
         }
         break;
