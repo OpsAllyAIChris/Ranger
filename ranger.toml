@@ -120,6 +120,46 @@ exclude_files = ["_vault-build-report.md"]
 # UNCONFIRMED notes came from the activity log and not the accounts export,
 # and several are near-duplicates of real accounts.
 skip_statuses = ["UNCONFIRMED"]
+# The Tier vocabulary as it appears in the notes, best first. Nothing in the
+# code knows what a tier is called. Run 'ranger accounts survey' to see the
+# values actually in your vault, then list them here. Empty means tier does
+# not affect the morning brief's ranking.
+tier_order = []
+# Which opportunity stages count as live. Empty means every opportunity counts,
+# which is wrong the moment closed deals stay in the CRM export. The survey
+# lists the stages actually present.
+open_stages = []
+
+[brief]
+# Tier 5. A morning brief has a size, not a threshold.
+#
+# accounts.quiet_after_days decides what is eligible. These decide what gets
+# read. With 58 accounts a plain threshold produced 41 lines sorted by how
+# thoroughly each account had been abandoned, topped by one at 215 days, which
+# is the list least likely to be acted on.
+#
+# Hard cap on the whole brief.
+lines = 5
+# Accounts that crossed the threshold since the last brief. The only genuinely
+# new information in the report: an account quiet 25, then 26, then 27 days is
+# the same fact three times.
+slipping_max = 3
+# Past the threshold with a live opportunity, ranked by tier then recency.
+deals_max = 3
+# Past this an account is not lapsing, it has lapsed. Cold accounts never
+# appear in the daily buckets. Capital equipment runs a twelve to eighteen
+# month cycle, so quiet since March is mid-cycle and not dead, which is why
+# they come back as a question rather than being dropped.
+cold_after_days = 90
+# Close the brief with one cold account and ask whether it should keep
+# appearing. This drains the backlog one decision at a time instead of
+# reprinting it every morning.
+decision_prompt = true
+# Both relative to the Ranger folder in the vault. They live there rather than
+# in the account notes because scripts/build_vault.py regenerates those from
+# the CRM export and would wipe anything written into them.
+seen_file = "quiet-seen.md"
+dormant_file = "dormant.md"
 
 [recall]
 # Account notes run to about 25,000 characters. Recall returns a digest, never

@@ -219,6 +219,11 @@ class MorningSurface:
     hour: int
     name: str = "morning"
     runs_in_quiet_hours: bool = False
+    #: Where "when did each account first go quiet" is kept. Set by
+    #: build_checks; None in tests that do not care.
+    store: Any = None
+    #: Rebuilt each run so the record matches what was actually surfaced.
+    scan: Any = None
 
     def status(self, now: datetime, inbox: Inbox) -> Dueness:
         # Only today. Six missed mornings are not replayed on the seventh,
@@ -232,8 +237,16 @@ class MorningSurface:
     def due(self, now: datetime, inbox: Inbox) -> bool:
         return self.status(now, inbox).due
 
-    async def run(self) -> Notice | None:
+    async def run(self, *, record: bool = True) -> Notice | None:
+        """Surface what is slipping, and remember that it was said.
+
+        `record` is false for a forced run. Forcing a check to see how it looks
+        must not consume tomorrow's "just went quiet", for the same reason it
+        must not consume the day's scheduled run.
+        """
         result = await self.registry.run("what_went_quiet", {})
+        if record:
+            self._remember()
         if not result.ok:
             return Notice(
                 kind=self.name,
@@ -248,6 +261,21 @@ class MorningSurface:
             body=result.content,
             created=now,
         )
+
+
+    def _remember(self) -> None:
+        """Write back which accounts are now known to be quiet.
+
+        Wrapped, because failing to write this is a worse morning brief
+        tomorrow and never a reason to lose today's notice.
+        """
+        if self.store is None or self.scan is None:
+            return
+        try:
+            _, seen = self.scan()
+            self.store.write_seen(seen)
+        except Exception:
+            pass
 
 
 # -- the loop --------------------------------------------------------------
@@ -414,8 +442,11 @@ class Heartbeat:
             state = SURFACED
             detail = ""
             try:
+                # A forced run records nothing, so it cannot consume tomorrow's
+                # "just went quiet" any more than it consumes today's schedule.
                 notice = await asyncio.wait_for(
-                    check.run(), timeout=self.config.heartbeat.check_timeout_seconds
+                    check.run(record=not compelled) if _records(check) else check.run(),
+                    timeout=self.config.heartbeat.check_timeout_seconds,
                 )
             except asyncio.TimeoutError:
                 state = TIMED_OUT
@@ -486,6 +517,42 @@ class Heartbeat:
                 return
 
 
-def build_checks(config: Config, registry: Any) -> list[Check]:
+def _records(check: Any) -> bool:
+    """Whether this check's run() takes a record flag. Not every check will."""
+    import inspect
+
+    try:
+        return "record" in inspect.signature(check.run).parameters
+    except (TypeError, ValueError):
+        return False
+
+
+def build_checks(config: Config, registry: Any, vault: Any = None) -> list[Check]:
     """Tier 5 has one check. Adding a second is one entry here."""
-    return [MorningSurface(registry=registry, hour=config.schedule.morning_hour)]
+    store = None
+    scan = None
+    if vault is not None:
+        from .accounts import scan_all
+        from .brief import BriefStore, build
+
+        store = BriefStore(vault, config.vault.ranger, config.brief)
+
+        def scan():
+            scans, _ = scan_all(vault, config.vault.accounts, config.accounts.exclude_files)
+            return build(
+                scans,
+                accounts=config.accounts,
+                brief=config.brief,
+                as_of=date.today(),
+                seen=store.seen(),
+                dormant=store.dormant(),
+            )
+
+    return [
+        MorningSurface(
+            registry=registry,
+            hour=config.schedule.morning_hour,
+            store=store,
+            scan=scan,
+        )
+    ]

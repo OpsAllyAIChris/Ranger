@@ -372,6 +372,27 @@ Ranger root. It is now the whole `Ranger/` tree, exactly as Amendment D states,
 with a test that Accounts, Knowledge, the vault root and everything above it
 are still refused.
 
+## Planned: a read-only web text tool
+
+Not built. A tool that fetches a URL and returns the readable article text,
+stripped of navigation and boilerplate, the way defuddle does.
+
+**It is the most dangerous tool in the registry from an injection standpoint**,
+because it pulls prose written by strangers straight into a turn, with no
+relationship to the operator at all. Vault notes are at least the operator's
+own; a web page is not. Before it ships:
+
+- `untrusted.py` fencing must cover its output, not just vault and tool output.
+- `tests/test_planted_instructions.py` must gain a case that plants an
+  instruction in fetched page text and proves it is flagged rather than obeyed.
+- It is read only and it is never a write path. Fetching costs nothing and
+  reaches no paid API, so it stays ungated; anything it suggests doing does not.
+
+This came from a different architecture, Claude Code running inside an Obsidian
+vault with skills in `.claude/skills/`. That mechanism is not Ranger's and its
+skill packs assume a vault layout that would fight `build_vault.py` and
+Amendment D. The capability is worth having; the mechanism is not adopted.
+
 ## Coming after Tier 6: a read-only email tool
 
 Not built, and not to be built before Tier 6. Recorded so Tier 6 does not paint
@@ -696,6 +717,7 @@ ranger/
   cli.py         the terminal. first caller of the core, permanent debug path
   server.py      Tier 7: the local server. static files, and one websocket
   panel.py       Tier 7c: what the activity panel shows, read from the vault
+  brief.py       Tier 5: the morning brief. a size, not a threshold
   wsframe.py     Tier 7b: RFC 6455 framing, and nothing above it
   bridge.py      Tier 7b: the browser as the fourth caller of the core
   assembly.py    putting a Ranger together, with no default gate
@@ -713,6 +735,32 @@ ranger/
   import ...` that broke collection for anyone running it normally.
   `tests/test_suite_hygiene.py` now fails on that pattern. Shared test helpers
   are fixtures, never imports.
+
+## Closing out a session
+
+Every session ends with a debrief written to `docs/sessions/<date>.md`, and it
+is committed with the session's last push. Two parts, both short:
+
+- **What happened.** What was built, what was verified on Windows and what was
+  not, and any defect found by running something rather than reading it.
+- **Where the next session starts.** The first thing to pick up, what is
+  waiting on the operator, and any decision that was deferred rather than made.
+
+Context runs out mid-build and the next session begins from a summary. The
+debrief is what makes that recoverable, so it records what a summary loses:
+which claims are verified against Windows and which are only tested against
+fakes.
+
+The vault lives on the operator's machine and this repository cannot see it, so
+the debrief is written here and travels on a pull. To mirror it into the vault:
+
+```powershell
+Copy-Item docs\sessions\*.md $HOME\Obsidian\Ranger-Vault\Ranger\sessions\ -Force
+```
+
+`Ranger/sessions/` is inside Ranger's own folder, so it is a legal write under
+Amendment D, and it is not one of the four folders the activity panel reads, so
+build notes never appear in the morning inbox.
 
 ## Handing over a verification block
 

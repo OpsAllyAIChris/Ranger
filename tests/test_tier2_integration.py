@@ -122,7 +122,8 @@ async def test_a_quiet_turn_end_to_end(agent):
     )
     events = await collect(ranger, "what went quiet")
     finished = [e for e in events if isinstance(e, ToolFinished)][0]
-    assert finished.summary == "2 quiet, 1 never touched"
+    # The default is the brief, not the full list: a morning has a size.
+    assert "slipping" in finished.summary and "withheld" in finished.summary
 
 
 async def test_the_model_is_told_to_ask_when_a_name_is_ambiguous(agent):

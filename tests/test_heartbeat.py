@@ -253,8 +253,8 @@ async def test_the_morning_surface_calls_what_went_quiet(seeded):
     notice = await check.run()
 
     assert notice is not None
-    assert "Rusty Supply Co: 180 days" in notice.body
-    assert "Never had any activity" in notice.body
+    assert "quiet means no logged activity" in notice.body
+    assert "Rusty Supply Co" in notice.body
 
 
 async def test_the_morning_surface_reports_a_tool_failure_rather_than_crashing(config):

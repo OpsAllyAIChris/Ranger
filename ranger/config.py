@@ -118,6 +118,61 @@ class AccountsConfig:
     quiet_after_days: int
     exclude_files: tuple[str, ...] = ()
     skip_statuses: tuple[str, ...] = ()
+    #: The operator's Tier vocabulary, best first. Empty means tier does not
+    #: affect ranking. Nothing in the code knows what a tier is called;
+    #: `ranger accounts survey` reports what is actually in the vault.
+    tier_order: tuple[str, ...] = ()
+    #: Which opportunity stages count as live. Empty means all of them do,
+    #: which is wrong the moment closed deals stay in the export, so the
+    #: survey says loudly when this is unset.
+    open_stages: tuple[str, ...] = ()
+
+    def tier_rank(self, tier: str) -> int:
+        """Lower is better. Anything unrecognised sorts last, never first."""
+        value = tier.strip()
+        for index, known in enumerate(self.tier_order):
+            if value.casefold() == known.strip().casefold():
+                return index
+        return len(self.tier_order) + 1
+
+    def is_open(self, stage: str) -> bool:
+        if not self.open_stages:
+            return True
+        return stage.strip().casefold() in {
+            value.strip().casefold() for value in self.open_stages
+        }
+
+
+@dataclass(frozen=True)
+class BriefConfig:
+    """Tier 5. What the morning brief is allowed to say.
+
+    A brief has a size, not a threshold. `accounts.quiet_after_days` decides
+    what is eligible; these decide what the operator actually reads. With 58
+    accounts a boolean threshold produced 41 lines sorted by how thoroughly
+    each one had been abandoned, which is the list least likely to be acted on.
+    """
+
+    #: Hard cap. Everything below is a share of this.
+    lines: int = 5
+    #: Accounts that crossed the threshold since the last brief. The only
+    #: genuinely new information in the report.
+    slipping_max: int = 3
+    #: Past the threshold with a live opportunity. A deal going quiet is a
+    #: different emergency from a relationship going quiet.
+    deals_max: int = 3
+    #: Past this, an account is not lapsing, it has lapsed. Cold accounts never
+    #: appear in the daily buckets; they come back one at a time as a decision.
+    cold_after_days: int = 90
+    #: Whether to close the brief with one cold account and ask if it should
+    #: keep appearing. This is what drains the backlog instead of reprinting it.
+    decision_prompt: bool = True
+    #: When each account was first reported quiet, so the brief can report a
+    #: crossing rather than a state.
+    seen_file: str = "quiet-seen.md"
+    #: Accounts the operator has said to stop surfacing. In Ranger's folder
+    #: rather than the note, because build_vault.py overwrites the notes.
+    dormant_file: str = "dormant.md"
 
 
 @dataclass(frozen=True)
@@ -279,6 +334,7 @@ class Config:
     context: ContextConfig
     schedule: ScheduleConfig
     accounts: AccountsConfig
+    brief: BriefConfig
     recall: RecallConfig
     drafts: DraftsConfig
     voice: VoiceConfig
@@ -371,7 +427,13 @@ KNOWN_KEYS: dict[str, frozenset[str]] = {
     "memory": frozenset({"reserve_chars", "file"}),
     "context": frozenset({"budget_chars"}),
     "schedule": frozenset({"morning_hour", "quiet_start_hour", "quiet_end_hour"}),
-    "accounts": frozenset({"quiet_after_days", "exclude_files", "skip_statuses"}),
+    "accounts": frozenset({
+        "quiet_after_days", "exclude_files", "skip_statuses", "tier_order", "open_stages",
+    }),
+    "brief": frozenset({
+        "lines", "slipping_max", "deals_max", "cold_after_days", "decision_prompt",
+        "seen_file", "dormant_file",
+    }),
     "recall": frozenset({
         "activities", "detail_activities", "section_chars", "body_chars", "max_chars",
     }),
@@ -647,9 +709,30 @@ def load_config(path: str | Path | None = None, *, load_env: bool = True) -> Con
         quiet_after_days=int(accounts_section.get("quiet_after_days", 21)),
         exclude_files=tuple(str(n) for n in accounts_section.get("exclude_files", ())),
         skip_statuses=tuple(str(s) for s in accounts_section.get("skip_statuses", ("UNCONFIRMED",))),
+        tier_order=tuple(str(t) for t in accounts_section.get("tier_order", ())),
+        open_stages=tuple(str(t) for t in accounts_section.get("open_stages", ())),
     )
     if accounts.quiet_after_days < 1:
         raise ConfigError("accounts.quiet_after_days must be at least 1")
+
+    brief_section = table.get("brief", {})
+    brief = BriefConfig(
+        lines=int(brief_section.get("lines", 5)),
+        slipping_max=int(brief_section.get("slipping_max", 3)),
+        deals_max=int(brief_section.get("deals_max", 3)),
+        cold_after_days=int(brief_section.get("cold_after_days", 90)),
+        decision_prompt=bool(brief_section.get("decision_prompt", True)),
+        seen_file=str(brief_section.get("seen_file", "quiet-seen.md")),
+        dormant_file=str(brief_section.get("dormant_file", "dormant.md")),
+    )
+    if brief.lines < 1:
+        raise ConfigError("brief.lines must be at least 1")
+    if brief.cold_after_days <= accounts.quiet_after_days:
+        raise ConfigError(
+            f"brief.cold_after_days ({brief.cold_after_days}) must be more than "
+            f"accounts.quiet_after_days ({accounts.quiet_after_days}), or every "
+            "lapsed account is cold the moment it lapses and the brief is empty"
+        )
 
     recall_section = table.get("recall", {})
     recall = RecallConfig(
@@ -772,6 +855,7 @@ def load_config(path: str | Path | None = None, *, load_env: bool = True) -> Con
         context=context,
         schedule=schedule,
         accounts=accounts,
+        brief=brief,
         recall=recall,
         drafts=drafts,
         voice=voice,

@@ -630,7 +630,7 @@ def cmd_heartbeat(config: Config, args) -> int:
     beat = Heartbeat(
         config,
         _inbox(config),
-        build_checks(config, build_registry(config, vault)),
+        build_checks(config, build_registry(config, vault), vault),
         kill_switch=switch,
         audit=AuditLog(vault, config.vault.log),
     )
@@ -963,6 +963,118 @@ def pcm_wav_bytes(path: Path) -> bytes:
     return path.read_bytes()
 
 
+def cmd_dormant(config: Config, args: Any) -> int:
+    """Answer the morning brief's one decision, and see the answers so far."""
+    from .brief import BriefStore
+
+    paint = _colour(sys.stdout.isatty())
+    vault = Vault(config.vault)
+    store = BriefStore(vault, config.vault.ranger, config.brief)
+
+    if not args.account:
+        names = sorted(store.dormant_lines())
+        if not names:
+            print(paint("  nothing is dormant. The morning brief considers every account.", DIM))
+        else:
+            print(paint(f"{len(names)} dormant, not surfaced in the morning brief", BOLD))
+            for name in names:
+                print(f"  {name}")
+        print(paint(f"  {store.dormant_path}", DIM))
+        return 0
+
+    name = " ".join(args.account).strip()
+    try:
+        if args.remove:
+            changed = store.wake(name)
+            print(
+                paint(f"  {name} is back in the morning brief.", TEAL)
+                if changed
+                else paint(f"  {name} was not dormant.", DIM)
+            )
+        else:
+            changed = store.sleep(name)
+            print(
+                paint(f"  {name} will not be surfaced again.", TEAL)
+                if changed
+                else paint(f"  {name} was already dormant.", DIM)
+            )
+    except Exception as exc:
+        print(paint(f"  could not write {store.dormant_path}: {exc}", RED), file=sys.stderr)
+        return 1
+    print(paint(f"  {store.dormant_path}, hand-editable", DIM))
+    return 0
+
+
+def cmd_accounts_survey(config: Config, args: Any) -> int:
+    """What is actually in the vault, so nobody has to guess at the vocabulary.
+
+    Tier values and opportunity stages are the operator's, set by their CRM
+    export. Ranking accounts by either one means knowing what the values are
+    and what order they go in, and asking for that in conversation produced a
+    template pasted back with the placeholders still in it. This reads them.
+    """
+    from collections import Counter
+
+    from .accounts import scan_all
+
+    paint = _colour(sys.stdout.isatty())
+    vault = Vault(config.vault)
+    scans, errors = scan_all(vault, config.vault.accounts, config.accounts.exclude_files)
+
+    if not scans:
+        print(paint(f"  no account notes under {config.vault.accounts}", DIM))
+        return 1
+
+    print(paint(f"{len(scans)} account notes", BOLD))
+    print()
+
+    tiers = Counter((scan.tier.strip() or "(no Tier line)") for scan in scans)
+    print(paint("Tier", BOLD))
+    ordered = config.accounts.tier_order
+    for value, count in sorted(tiers.items(), key=lambda pair: (-pair[1], pair[0])):
+        known = value in ordered
+        rank = f"rank {ordered.index(value) + 1}" if known else "unranked, sorts last"
+        print(f"  {count:>3}  {value:<28} {paint(rank, DIM if known else YELLOW)}")
+    if not ordered:
+        print(paint("  accounts.tier_order is empty, so tier does not affect ranking yet.", YELLOW))
+        print(paint("  Put these values in it, best first.", DIM))
+    print()
+
+    stages: Counter = Counter()
+    with_opps = 0
+    for scan in scans:
+        if scan.opportunity_stages:
+            with_opps += 1
+        for stage in scan.opportunity_stages:
+            stages[stage.strip() or "(no Stage line)"] += 1
+
+    print(paint("Opportunity stages", BOLD))
+    if not stages:
+        print(paint("  no ## Opportunities sections found in any note.", DIM))
+    else:
+        print(paint(f"  {with_opps} accounts carry {sum(stages.values())} opportunities", DIM))
+        open_stages = {value.strip().lower() for value in config.accounts.open_stages}
+        for value, count in sorted(stages.items(), key=lambda pair: (-pair[1], pair[0])):
+            if not open_stages:
+                mark = ""
+            elif value.strip().lower() in open_stages:
+                mark = paint("counts as open", TEAL)
+            else:
+                mark = paint("counts as closed", DIM)
+            print(f"  {count:>3}  {value:<28} {mark}")
+        if not open_stages:
+            print(paint("  accounts.open_stages is empty, so every opportunity counts as", YELLOW))
+            print(paint("  open. Put the live stages in it and the rest are ignored.", YELLOW))
+    print()
+
+    counted = sum(1 for scan in scans if not scan.unconfirmed)
+    print(paint(f"{counted} notes count toward the morning brief, "
+                f"{len(scans) - counted} are UNCONFIRMED and set aside", DIM))
+    for error in errors:
+        print(paint(f"  unreadable: {error}", YELLOW), file=sys.stderr)
+    return 0
+
+
 def cmd_ui(config: Config, args: Any) -> int:
     """Tier 7a. Serve the front end. No agent logic passes through here."""
     from dataclasses import replace
@@ -1047,6 +1159,18 @@ def main(argv: list[str] | None = None) -> int:
     ui.add_argument("--verbose", action="store_true", help="log every request")
     ui.add_argument("--port", type=int, help="override [server] port for this run")
 
+    dormant = sub.add_parser(
+        "dormant", help="stop surfacing an account in the morning brief, or list those set aside"
+    )
+    dormant.add_argument("account", nargs="*", help="the account name. Omit to list")
+    dormant.add_argument("--remove", action="store_true", help="bring it back instead")
+
+    accounts = sub.add_parser("accounts", help="what is in the account notes")
+    accounts_sub = accounts.add_subparsers(dest="accounts_command")
+    accounts_sub.add_parser(
+        "survey", help="the Tier values and opportunity stages actually in the vault"
+    )
+
     sub.add_parser("voices", help="Tier 3c: list the ElevenLabs voices on the account")
     say = sub.add_parser("say", help="Tier 3c: speak a line aloud")
     say.add_argument("text", nargs="+", help="what to say")
@@ -1089,6 +1213,13 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_log(config, args)
     if args.command == "keyterms":
         return cmd_keyterms(config, args)
+    if args.command == "dormant":
+        return cmd_dormant(config, args)
+    if args.command == "accounts":
+        if args.accounts_command == "survey":
+            return cmd_accounts_survey(config, args)
+        print("usage: ranger accounts survey", file=sys.stderr)
+        return 2
     if args.command == "ui":
         return cmd_ui(config, args)
     if args.command == "voices":

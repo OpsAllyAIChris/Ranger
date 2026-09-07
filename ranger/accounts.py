@@ -35,6 +35,18 @@ _METADATA_LINE = re.compile(r"^-[ \t]+\*\*(?P<label>[^*:]+):\*\*[ \t]*(?P<value>
 _SECTION = re.compile(r"^##[ \t]+(?P<title>.+?)[ \t]*$", re.MULTILINE)
 _DATE_ONLY = re.compile(r"^###[ \t]+(\d{4}-\d{2}-\d{2})[ \t]*\|", re.MULTILINE)
 _STATUS_ONLY = re.compile(r"^-[ \t]+\*\*Status:\*\*[ \t]*(.*?)[ \t]*$", re.MULTILINE | re.IGNORECASE)
+_TIER_ONLY = re.compile(r"^-[ \t]+\*\*Tier:\*\*[ \t]*(.*?)[ \t]*$", re.MULTILINE | re.IGNORECASE)
+# The Opportunities section, up to the next ## heading.
+_OPPS_SECTION = re.compile(
+    r"^##[ \t]+Opportunities[ \t]*$(?P<body>.*?)(?=^##[ \t]|\Z)",
+    re.MULTILINE | re.DOTALL | re.IGNORECASE,
+)
+# ### <name>, then a stage somewhere in that opportunity's own fields.
+_OPP_HEADING = re.compile(r"^###[ \t]+(?P<name>.+?)[ \t]*$", re.MULTILINE)
+_OPP_STAGE = re.compile(
+    r"^-[ \t]+\*\*(?:Stage|Status):\*\*[ \t]*(?P<value>.*?)[ \t]*$",
+    re.MULTILINE | re.IGNORECASE,
+)
 
 
 def _to_date(text: str) -> date | None:
@@ -93,10 +105,20 @@ class NoteScan:
     status: str
     last_activity: date | None
     activity_count: int
+    #: The metadata Tier line, verbatim. Nothing here knows what the operator's
+    #: tier vocabulary is; ranking reads it against a configured order.
+    tier: str = ""
+    #: One entry per `###` under `## Opportunities`, holding whatever that
+    #: opportunity's Stage or Status line said, or "" if it said nothing.
+    opportunity_stages: tuple[str, ...] = ()
 
     @property
     def unconfirmed(self) -> bool:
         return self.status.strip().upper() == "UNCONFIRMED"
+
+    @property
+    def opportunities(self) -> int:
+        return len(self.opportunity_stages)
 
 
 def scan_note(text: str, name: str, path: Path) -> NoteScan:
@@ -107,6 +129,7 @@ def scan_note(text: str, name: str, path: Path) -> NoteScan:
     is not worth parsing twice.
     """
     status_match = _STATUS_ONLY.search(text)
+    tier_match = _TIER_ONLY.search(text)
     dates = [d for d in (_to_date(m.group(1)) for m in _DATE_ONLY.finditer(text)) if d]
     return NoteScan(
         name=name,
@@ -115,7 +138,31 @@ def scan_note(text: str, name: str, path: Path) -> NoteScan:
         # Headings are newest first by convention, but max() does not depend on it.
         last_activity=max(dates) if dates else None,
         activity_count=len(dates),
+        tier=tier_match.group(1) if tier_match else "",
+        opportunity_stages=scan_opportunities(text),
     )
+
+
+def scan_opportunities(text: str) -> tuple[str, ...]:
+    """Every opportunity in the note, and the stage it declares.
+
+    Deliberately returns the stage verbatim rather than a judgement about it.
+    Whether "Closed Won" still counts as an opportunity is the operator's
+    vocabulary, and this module does not get to invent one: `ranger accounts
+    survey` reports what is actually in the vault and the config decides.
+    """
+    section = _OPPS_SECTION.search(text)
+    if not section:
+        return ()
+
+    body = section.group("body")
+    starts = [m.start() for m in _OPP_HEADING.finditer(body)]
+    stages: list[str] = []
+    for index, start in enumerate(starts):
+        end = starts[index + 1] if index + 1 < len(starts) else len(body)
+        stage = _OPP_STAGE.search(body[start:end])
+        stages.append(stage.group("value") if stage else "")
+    return tuple(stages)
 
 
 def parse_note(text: str, name: str, path: Path | None = None) -> AccountNote:

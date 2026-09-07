@@ -132,7 +132,8 @@ async def test_recall_with_no_account_named(registry):
 
 
 async def test_quiet_groups_lapsed_and_never_touched_separately(registry):
-    result = await run(registry, "what_went_quiet")
+    """full=true is the whole list, longest first. The default is the brief."""
+    result = await run(registry, "what_went_quiet", full=True)
     assert result.ok
 
     lapsed_at = result.content.index("Gone quiet")
@@ -147,19 +148,19 @@ async def test_quiet_groups_lapsed_and_never_touched_separately(registry):
 
 
 async def test_quiet_excludes_the_build_report(registry):
-    result = await run(registry, "what_went_quiet")
+    result = await run(registry, "what_went_quiet", full=True)
     assert "vault-build-report" not in result.content
     assert "5 accounts checked" in result.content
 
 
 async def test_quiet_sets_unconfirmed_notes_aside(registry):
-    result = await run(registry, "what_went_quiet", days=1)
+    result = await run(registry, "what_went_quiet", days=1, full=True)
     assert "Cedar Ridge Dairy" not in result.content
     assert "1 unconfirmed notes were left out" in result.content
 
 
 async def test_quiet_threshold_can_be_overridden(registry):
-    result = await run(registry, "what_went_quiet", days=365)
+    result = await run(registry, "what_went_quiet", days=365, full=True)
     assert "Nothing has gone quiet" in result.content
     assert "Northwind Provisions" in result.content   # still never touched
 

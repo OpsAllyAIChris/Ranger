@@ -208,10 +208,40 @@ def _what_went_quiet(config: Config, vault: Vault, today: Callable[[], date]) ->
         except (TypeError, ValueError):
             days = config.accounts.quiet_after_days
         days = max(1, days)
+        full = bool(payload.get("full", False))
 
         scans, unreadable = scan_all(
             vault, config.vault.accounts, config.accounts.exclude_files
         )
+
+        if not full:
+            from dataclasses import replace as _replace
+
+            from .brief import BriefStore, build
+
+            store = BriefStore(vault, config.vault.ranger, config.brief)
+            # The threshold can be overridden per question, so the brief is
+            # built against what was actually asked for.
+            accounts_config = (
+                config.accounts
+                if days == config.accounts.quiet_after_days
+                else _replace(config.accounts, quiet_after_days=days)
+            )
+            brief, _ = build(
+                scans,
+                accounts=accounts_config,
+                brief=config.brief,
+                as_of=today(),
+                seen=store.seen(),
+                dormant=store.dormant(),
+            )
+            # Deliberately not written back. Being told on demand must not
+            # consume tomorrow's "just went quiet".
+            summary = (
+                f"{len(brief.slipping)} slipping, {len(brief.deals)} deals, "
+                f"{brief.withheld} withheld"
+            )
+            return ToolResult(ok=True, content=brief.render(), summary=summary)
 
         report = quiet_report(
             scans,
@@ -258,10 +288,12 @@ def _what_went_quiet(config: Config, vault: Vault, today: Callable[[], date]) ->
     return Tool(
         name="what_went_quiet",
         description=(
-            "List the accounts with no logged activity for a while, longest first. Use this "
-            "when the operator asks what is slipping, what has gone quiet, or who they have "
-            "not spoken to. Accounts that have never had any activity are reported "
-            "separately, because they are a different problem."
+            "What is slipping. Use this when the operator asks what has gone quiet, what is "
+            "slipping, or who they have not spoken to. By default it returns a short brief: "
+            "what has just gone quiet, which open deals have stalled, and one older account "
+            "to make a decision about, with a count of everything held back. Pass full=true "
+            "only when the operator asks for the whole list. Accounts that have never had "
+            "any activity are reported separately, because they are a different problem."
         ),
         input_schema={
             "type": "object",
@@ -269,7 +301,14 @@ def _what_went_quiet(config: Config, vault: Vault, today: Callable[[], date]) ->
                 "days": {
                     "type": "integer",
                     "description": "Override the quiet threshold in days. Omit to use the operator's setting.",
-                }
+                },
+                "full": {
+                    "type": "boolean",
+                    "description": (
+                        "Every quiet account, longest first, instead of the brief. Only when "
+                        "the operator asks for the full list."
+                    ),
+                },
             },
         },
         handler=handler,
