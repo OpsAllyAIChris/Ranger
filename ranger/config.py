@@ -110,7 +110,6 @@ class DraftsConfig:
 class VoiceConfig:
     push_to_talk: bool
     wake_word: bool
-    tts_provider: str
     voice_id: str
     model_id: str = "eleven_flash_v2_5"
     trigger: str = "hold"
@@ -137,7 +136,28 @@ class SttConfig:
     keyterms: tuple[str, ...] = ()
     #: Intensifier for keyword boosting only. Ignored by keyterm prompting.
     boost: float = 2.0
+    #: Deepgram's real limit is not documented here because it could not be
+    #: verified; if it is lower than this the request 400s and says so.
     max_hints: int = 100
+    #: Build the hint list from the account filenames rather than by hand.
+    keyterms_from_accounts: bool = True
+
+
+@dataclass(frozen=True)
+class TtsConfig:
+    """Text to speech. ElevenLabs, streaming."""
+
+    provider: str = "elevenlabs"
+    voice_id: str = ""
+    #: Flash or Turbo. Latency is the whole experience with push to talk.
+    model_id: str = "eleven_flash_v2_5"
+    #: pcm_24000 plays with no decoder. mp3_44100_128 works on every plan but
+    #: needs soundfile.
+    output_format: str = "pcm_24000"
+    stability: float = 0.5
+    similarity_boost: float = 0.75
+    speed: float = 1.0
+    timeout_seconds: float = 30.0
 
 
 @dataclass(frozen=True)
@@ -157,6 +177,7 @@ class Config:
     drafts: DraftsConfig
     voice: VoiceConfig
     stt: SttConfig
+    tts: TtsConfig
     server: ServerConfig
     source_path: Path | None = None
     warnings: tuple[str, ...] = field(default_factory=tuple)
@@ -422,7 +443,6 @@ def load_config(path: str | Path | None = None, *, load_env: bool = True) -> Con
     voice = VoiceConfig(
         push_to_talk=bool(voice_section.get("push_to_talk", True)),
         wake_word=bool(voice_section.get("wake_word", False)),
-        tts_provider=str(voice_section.get("tts_provider", "elevenlabs")),
         voice_id=str(voice_section.get("voice_id", "")),
         model_id=str(voice_section.get("model_id", "eleven_flash_v2_5")),
         trigger=str(voice_section.get("trigger", "hold")),
@@ -455,9 +475,26 @@ def load_config(path: str | Path | None = None, *, load_env: bool = True) -> Con
         keyterms=tuple(str(t).strip() for t in stt_section.get("keyterms", ()) if str(t).strip()),
         boost=float(stt_section.get("boost", 2.0)),
         max_hints=int(stt_section.get("max_hints", 100)),
+        keyterms_from_accounts=bool(stt_section.get("keyterms_from_accounts", True)),
     )
+    if stt.max_hints < 0:
+        raise ConfigError("stt.max_hints cannot be negative")
     if stt.timeout_seconds <= 0:
         raise ConfigError("stt.timeout_seconds must be greater than zero")
+
+    tts_section = table.get("tts", {})
+    tts = TtsConfig(
+        provider=str(tts_section.get("provider", "elevenlabs")),
+        voice_id=str(tts_section.get("voice_id", "")),
+        model_id=str(tts_section.get("model_id", "eleven_flash_v2_5")),
+        output_format=str(tts_section.get("output_format", "pcm_24000")),
+        stability=float(tts_section.get("stability", 0.5)),
+        similarity_boost=float(tts_section.get("similarity_boost", 0.75)),
+        speed=float(tts_section.get("speed", 1.0)),
+        timeout_seconds=float(tts_section.get("timeout_seconds", 30.0)),
+    )
+    if not 0.0 <= tts.stability <= 1.0:
+        raise ConfigError("tts.stability must be between 0 and 1")
 
     server_section = table.get("server", {})
     server = ServerConfig(
@@ -487,6 +524,7 @@ def load_config(path: str | Path | None = None, *, load_env: bool = True) -> Con
         drafts=drafts,
         voice=voice,
         stt=stt,
+        tts=tts,
         server=server,
         source_path=config_path,
         warnings=tuple(warnings),

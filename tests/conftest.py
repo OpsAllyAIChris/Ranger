@@ -54,7 +54,6 @@ filename_format = "{{date}}-{{slug}}.md"
 [voice]
 push_to_talk = true
 wake_word = false
-tts_provider = "elevenlabs"
 voice_id = ""
 trigger = "hold"
 key = "space"
@@ -69,6 +68,12 @@ provider = "deepgram"
 model = "nova-3"
 language = "en"
 keyterms = ["Wexxar", "Illes", "corrugated"]
+
+[tts]
+provider = "elevenlabs"
+voice_id = "test-voice-id"
+model_id = "eleven_flash_v2_5"
+output_format = "pcm_24000"
 
 [server]
 host = "127.0.0.1"

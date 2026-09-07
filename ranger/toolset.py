@@ -17,7 +17,7 @@ from .accounts import (
     quiet_report,
     render_digest,
     resolve_account,
-    scan_note,
+    scan_all,
 )
 from .config import Config
 from .drafts import DraftRejected, hold_draft
@@ -208,13 +208,9 @@ def _what_went_quiet(config: Config, vault: Vault, today: Callable[[], date]) ->
             days = config.accounts.quiet_after_days
         days = max(1, days)
 
-        scans: list[NoteScan] = []
-        unreadable: list[str] = []
-        for item in _account_files(config, vault):
-            try:
-                scans.append(scan_note(vault.read_text(item.path), item.path.stem, item.path))
-            except Exception as exc:
-                unreadable.append(f"{item.relative}: {exc}")
+        scans, unreadable = scan_all(
+            vault, config.vault.accounts, config.accounts.exclude_files
+        )
 
         report = quiet_report(
             scans,

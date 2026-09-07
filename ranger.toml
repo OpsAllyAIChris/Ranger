@@ -119,8 +119,6 @@ channels = 1
 # Hard ceiling on one recording, so a stuck key cannot record all afternoon.
 max_seconds = 60
 
-# Tier 3c, unused until then.
-tts_provider = "elevenlabs"
 voice_id = ""            # from 'ranger voices' in 3c
 # Flash or Turbo. Latency is the whole experience, so the fastest model wins.
 model_id = "eleven_flash_v2_5"
@@ -145,9 +143,39 @@ keyterms = [
   "Wexxar", "Pregis", "Illes", "Pegasus", "CaptiveAire", "Amcor", "Vytalogy",
   "corrugated", "case erector", "stretch wrapper", "Texoma",
 ]
+# Also hint the account names, taken from the filenames in Accounts/ so the
+# list never goes stale. Distinctive words only: a token has to be at least
+# four letters, not a generic business word, and appear in exactly one account
+# name. They are ranked by recency of activity, because that is what predicts
+# what you are about to say, and cut at max_hints.
+# Run 'ranger keyterms' to see exactly what would be sent.
+keyterms_from_accounts = true
+
 # Intensifier, keyword boosting only. Keyterm prompting ignores it.
 boost = 2.0
+# Deepgram's real keyterm limit is not documented here because it could not be
+# verified from the sandbox. If this is above their limit the request comes
+# back 400 and the error names the parameter. Lower it if that happens.
+# More hints may also cost latency, which matters more than coverage here.
 max_hints = 100
+
+[tts]
+# Text to speech. ElevenLabs, streaming, plain HTTP.
+provider = "elevenlabs"
+# Run 'ranger voices' to list what the account has, then paste an id here.
+voice_id = ""
+# Flash or Turbo. Latency is the whole experience with push to talk.
+model_id = "eleven_flash_v2_5"
+# pcm_24000 plays straight through with no decoder at all. If the plan refuses
+# it the request comes back 422 and says so; mp3_44100_128 works everywhere and
+# needs soundfile to decode.
+output_format = "pcm_24000"
+# Leave these alone until a voice has been chosen unmodified. Tuning a bad
+# match wastes more time than picking a better voice.
+stability = 0.5
+similarity_boost = 0.75
+speed = 1.0
+timeout_seconds = 30.0
 
 [server]
 # Tier 7. The browser talks to the same core the terminal does.

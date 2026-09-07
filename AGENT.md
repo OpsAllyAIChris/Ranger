@@ -106,7 +106,7 @@ quiet" tool.
 | ---- | ---- | ----- |
 | 1 | The brain. Config, provider seam, agent core as a library, event stream, vault guard, terminal REPL | done |
 | 2 | The hands. Three tools: account recall, draft and hold, what went quiet | done |
-| 3 | The ears and mouth. 3a loopback and 3b transcription done. 3c speak, 3d full loop to come | 3a, 3b done |
+| 3 | The ears and mouth. 3a loopback, 3b transcription, 3c speech done. 3d full loop to come | 3a, 3b, 3c done |
 | 4 | The memory. Durable facts in `Ranger/memory`, one fact per entry, hand-editable | later |
 | 5 | The heartbeat. Morning surface, quiet hours, held notices, a schedule that survives restarts | later |
 | 6 | The rails. Confirmation gate, audit trail, cost tally, kill switch, everything tunable in config | later |
@@ -247,12 +247,50 @@ already matches fuzzily. So the temptation is to loosen the matcher. **Do not.**
 
 So: hinting only, at the transcription layer. `resolve_account` is unchanged.
 
+**Measured, once real audio existed.** Every residual mishearing turned out to
+be a spelling variant of a name heard correctly: wexar/Wexxar, illus/Illes,
+vitalogy/Vytalogy, prejus/Pregis, captivair/CaptiveAire. All of them already
+resolve to the right account, at 0.80 to 0.91 similarity. `prejus` at 0.67 is
+the thin one, and is the reason the 0.6 cutoff should not be raised either.
+
+**Not every name is hintable, and the reason is acoustic.** Hinting rescued
+Pregis and CaptiveAire but not Wexxar, Illes or Vytalogy. The rescued ones were
+misheard as different *sounds* (prejus, captivair): the hint gave the decoder
+information it lacked. The unrescued ones are **homophones of their
+mis-spelling**. "wexar" and "Wexxar" sound identical, so there is no acoustic
+evidence for a hint to tip. Doubling a letter, or swapping i for y, changes the
+spelling and not the sound. Expect names of that shape to stay wrong in the
+transcript and to be caught downstream by `resolve_account` instead.
+
 The next move, once there is evidence, is **not** a looser cutoff but deriving
 `keyterms` from the account filenames in the vault, so the hint list is exactly
 the 69 names that matter and stays current as accounts are added. That is still
 the transcription layer. Only if hinting demonstrably fails on a name should the
 recall layer change, and then by adding a spoken-form alias to the note rather
 than by loosening the matcher for all 69.
+
+## Where the hint list comes from
+
+`ranger/keyterms.py` builds it from the account filenames, so it cannot go
+stale. Three decisions in it:
+
+- **Only distinctive words get a slot.** A token needs four letters, must not
+  be a generic business word, and must appear in exactly one account name.
+  Document frequency does most of the work: "Packaging" in a dozen names
+  disqualifies itself with no list to maintain. A name made entirely of common
+  words falls back to hinting the whole name.
+- **Ranked by recency of activity, then volume.** That is what predicts what
+  the operator is about to say. An account worked last week earns a slot over
+  one last touched in January.
+- **Cut at `stt.max_hints`, default 100.** Deepgram's real limit could not be
+  verified from the sandbox. If the cap is above their limit the request comes
+  back 400 and the error names the parameter, which is the same path that
+  covers the parameter names changing.
+
+Hints are not free: the operator measured 827ms with 11 hints against 516ms
+with none. That is one sample and could be noise, but it means raising
+`max_hints` toward 100 should be checked against latency rather than assumed.
+`ranger keyterms` shows exactly what would be sent and what was cut.
 
 ## Layout
 
@@ -274,6 +312,8 @@ ranger/
   audiocheck.py  Tier 3a: 'ranger audio devices' and 'ranger audio check'
   stt.py         Tier 3b: Deepgram behind a seam, plain HTTP, no SDK
   compare.py     what you said against what it heard, with a word error rate
+  keyterms.py    the hint list, derived from account filenames and ranked
+  tts.py         Tier 3c: ElevenLabs behind a seam, streaming, plain HTTP
   core.py        the agent. one entry point. all the logic
   cli.py         the terminal. first caller of the core, permanent debug path
   testing.py     ScriptedProvider, so the core is verifiable with no API key

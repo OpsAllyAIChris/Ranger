@@ -164,6 +164,23 @@ def _parse_activities(section: str) -> tuple[Activity, ...]:
     return tuple(activities)
 
 
+def scan_all(
+    vault: "Vault", folder: Path, exclude_files: tuple[str, ...] = ()
+) -> tuple[list[NoteScan], list[str]]:
+    """Every account note, cheaply scanned. Returns what failed as well."""
+    excluded = {name.lower() for name in exclude_files}
+    scans: list[NoteScan] = []
+    errors: list[str] = []
+    for item in vault.list_markdown(folder):
+        if item.path.name.lower() in excluded:
+            continue
+        try:
+            scans.append(scan_note(vault.read_text(item.path), item.path.stem, item.path))
+        except Exception as exc:
+            errors.append(f"{item.relative}: {exc}")
+    return scans, errors
+
+
 # -- resolving a spoken name ------------------------------------------------
 
 

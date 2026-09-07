@@ -354,6 +354,174 @@ def cmd_audio_check(config: Config, args) -> int:
     )
 
 
+def _keyterm_plan(config: Config):
+    """The hint list actually sent: config terms plus derived account names."""
+    from datetime import date
+
+    from .accounts import scan_all
+    from .keyterms import derive_keyterms
+    from .vault import Vault
+
+    if not config.stt.keyterms_from_accounts:
+        from .keyterms import KeytermPlan
+
+        terms = config.stt.keyterms[: config.stt.max_hints]
+        return KeytermPlan(terms=terms, cap=config.stt.max_hints)
+
+    scans, _ = scan_all(Vault(config.vault), config.vault.accounts, config.accounts.exclude_files)
+    return derive_keyterms(
+        scans,
+        config.stt.keyterms,
+        cap=config.stt.max_hints,
+        as_of=date.today(),
+        skip_statuses=config.accounts.skip_statuses,
+    )
+
+
+def cmd_keyterms(config: Config, args) -> int:
+    """Show exactly which vocabulary hints would be sent, and why."""
+    paint = _colour(sys.stdout.isatty())
+    plan = _keyterm_plan(config)
+
+    print(f"  {len(plan.terms)} hints, cap {plan.cap}, parameter "
+          f"{__import__('ranger.stt', fromlist=['x']).hint_parameter(config.stt.model)!r} "
+          f"for model {config.stt.model}")
+    print(f"  {plan.accounts_considered} account notes considered"
+          + (f", {plan.skipped_unconfirmed} unconfirmed skipped" if plan.skipped_unconfirmed else ""))
+    print()
+    limit = None if args.all else 25
+    for candidate in plan.kept[:limit]:
+        score = "always" if candidate.score == float("inf") else f"{candidate.score:5.2f}"
+        print(f"  {score}  {candidate.term:<24} {paint(candidate.reason, DIM)}")
+    if limit and len(plan.kept) > limit:
+        print(paint(f"  ... and {len(plan.kept) - limit} more, use --all", DIM))
+
+    if plan.over_cap:
+        print()
+        print(paint(f"  {len(plan.cut)} names did not fit and are not hinted:", YELLOW))
+        for candidate in plan.cut[:10]:
+            print(paint(f"    {candidate.term:<24} {candidate.reason}", DIM))
+        if len(plan.cut) > 10:
+            print(paint(f"    ... and {len(plan.cut) - 10} more", DIM))
+        print()
+        print("  These are the least recently worked accounts. Raise stt.max_hints to")
+        print("  include them, but watch the latency: hints are not free.")
+    return 0
+
+
+def cmd_voices(config: Config, args) -> int:
+    """Tier 3c. What the account has, so a voice can be chosen."""
+    import asyncio
+
+    from .tts import SpeechError, build_speaker
+
+    try:
+        api_key = require_api_key("ELEVENLABS_API_KEY")
+    except ConfigError as exc:
+        print(f"  {exc}", file=sys.stderr)
+        return 1
+
+    speaker = build_speaker(config.tts, api_key)
+    try:
+        voices = asyncio.run(speaker.voices())
+    except SpeechError as exc:
+        print(f"  {exc}", file=sys.stderr)
+        return 1
+
+    if not voices:
+        print("  the account has no voices on it.")
+        return 1
+
+    paint = _colour(sys.stdout.isatty())
+    for voice in voices:
+        marker = "  <- tts.voice_id" if voice.voice_id == config.tts.voice_id else ""
+        print(f"  {voice.voice_id}  {voice.name:<18} {paint(voice.describe(), DIM)}{marker}")
+    print()
+    print("  Copy an id into tts.voice_id in ranger.toml, then:")
+    print('    ranger say "Rod owes you confirmed volumes before you can price the changeover."')
+    return 0
+
+
+def cmd_say(config: Config, args) -> int:
+    """Tier 3c. Text in, sound out. No microphone, no transcription."""
+    import asyncio
+    import time
+
+    from .audio import AudioError, SoundDeviceBackend, resolve_device, write_wav
+    from .tts import SpeechError, build_speaker, decode
+
+    text = " ".join(args.text).strip()
+    if not text:
+        print("  nothing to say.", file=sys.stderr)
+        return 1
+
+    try:
+        api_key = require_api_key("ELEVENLABS_API_KEY")
+    except ConfigError as exc:
+        print(f"  {exc}", file=sys.stderr)
+        return 1
+
+    tts = config.tts
+    if args.voice:
+        from dataclasses import replace
+
+        tts = replace(tts, voice_id=args.voice)
+
+    print(f'  saying: "{text}"')
+    print(f"  voice {tts.voice_id or '(unset)'}, model {tts.model_id}, {tts.output_format}")
+
+    speaker = build_speaker(tts, api_key)
+
+    async def collect() -> tuple[bytes, int]:
+        chunks: list[bytes] = []
+        first_at: float | None = None
+        started = time.monotonic()
+        async for chunk in speaker.stream(text):
+            if first_at is None:
+                first_at = time.monotonic() - started
+            chunks.append(chunk)
+        return b"".join(chunks), int((first_at or 0) * 1000)
+
+    try:
+        audio, first_ms = asyncio.run(collect())
+    except SpeechError as exc:
+        print(f"  {exc}", file=sys.stderr)
+        return 1
+
+    if not audio:
+        print("  ElevenLabs returned no audio.", file=sys.stderr)
+        return 1
+
+    try:
+        pcm, rate = decode(audio, tts.output_format)
+    except SpeechError as exc:
+        print(f"  {exc}", file=sys.stderr)
+        return 1
+
+    seconds = len(pcm) / (2 * rate) if rate else 0
+    print(f"  {len(audio)} bytes, {seconds:.1f}s, first chunk after {first_ms} ms")
+
+    if args.keep:
+        try:
+            written = write_wav(Path(args.keep).expanduser().resolve(), pcm, samplerate=rate, channels=1)
+            print(f"  saved {written}")
+        except OSError as exc:
+            print(f"  could not save: {exc}")
+
+    if args.no_play:
+        return 0
+
+    try:
+        backend = SoundDeviceBackend()
+        device = resolve_device(config.voice.output_device, backend.devices(), kind="output")
+        print("  playing ...")
+        backend.play(pcm, samplerate=rate, channels=1, device=device)
+    except AudioError as exc:
+        print(f"  {exc}", file=sys.stderr)
+        return 1
+    return 0
+
+
 def cmd_transcribe(config: Config, args) -> int:
     """Tier 3b. A WAV in, a transcript out. No microphone involved."""
     import asyncio
@@ -388,9 +556,15 @@ def cmd_transcribe(config: Config, args) -> int:
     seconds = len(pcm) / (2 * max(1, channels) * rate) if rate else 0
     hints = not args.no_hints
     print(f"  {path.name}, {seconds:.1f}s, {rate} Hz, {channels} channel")
-    print(f"  model {stt.model}, hinting {'on' if hints and stt.keyterms else 'off'}")
+    hint_count = len(_keyterm_plan(config).terms) if hints else 0
+    print(f"  model {stt.model}, {hint_count} hints" if hint_count else f"  model {stt.model}, hinting off")
     print()
 
+    plan = _keyterm_plan(config)
+    if hints and plan.terms:
+        from dataclasses import replace as _replace
+
+        stt = _replace(stt, keyterms=plan.terms)
     transcriber = build_transcriber(stt, api_key)
     try:
         transcript = asyncio.run(transcriber.transcribe(pcm_wav_bytes(path), hints=hints))
@@ -482,6 +656,16 @@ def main(argv: list[str] | None = None) -> int:
     )
     transcribe.add_argument("--model", help="override stt.model for this run")
 
+    keyterms = sub.add_parser("keyterms", help="show the vocabulary hints that would be sent")
+    keyterms.add_argument("--all", action="store_true", help="show every hint, not the top 25")
+
+    sub.add_parser("voices", help="Tier 3c: list the ElevenLabs voices on the account")
+    say = sub.add_parser("say", help="Tier 3c: speak a line aloud")
+    say.add_argument("text", nargs="+", help="what to say")
+    say.add_argument("--voice", help="override tts.voice_id for this run")
+    say.add_argument("--keep", help="save the spoken audio to this WAV path")
+    say.add_argument("--no-play", action="store_true", help="fetch but do not play")
+
     args = parser.parse_args(argv)
 
     try:
@@ -503,6 +687,12 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     if args.command == "transcribe":
         return cmd_transcribe(config, args)
+    if args.command == "keyterms":
+        return cmd_keyterms(config, args)
+    if args.command == "voices":
+        return cmd_voices(config, args)
+    if args.command == "say":
+        return cmd_say(config, args)
 
     try:
         return asyncio.run(repl(config, show_state=not args.quiet_state))

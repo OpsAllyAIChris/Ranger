@@ -93,6 +93,21 @@ Deepgram wants depends on the model, and the code picks it: `keyterm` for
 nova-3, `keywords` for nova-2 and earlier. Change `stt.model`, not the
 parameter.
 
+## Speech (Tier 3c)
+
+```powershell
+ranger voices                 # what the account has
+# paste an id into tts.voice_id in ranger.toml
+ranger say "Rod owes you confirmed volumes before you can price the changeover."
+ranger say "..." --voice <other-id> --keep sample.wav
+```
+
+`ranger keyterms` shows the vocabulary hints that would be sent to Deepgram,
+ranked, with whatever did not fit the cap.
+
+Ranger touches exactly two ElevenLabs endpoints, so a key scoped to Text to
+Speech plus Voices read only is enough.
+
 ## Test
 
 ```bash
