@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Ranger transport</title>
+<!-- Only so the page makes no request the server answers with a 404. A stray
+     console error on the page you debug with is exactly the wrong noise. -->
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='7' fill='%232DD4A8'/%3E%3C/svg%3E" />
+</head>
+<body>
+<!--
+  Tier 7b. Deliberately ugly.
+
+  No stylesheet, no orb, no framework. Everything on this page is either a
+  control that sends a turn or a plain rendering of what came back, so that
+  when something is wrong it is wrong in one layer. The shell in 7c sits on
+  top of this transport; this page is what proves the transport before it does.
+-->
+<h1>Ranger transport</h1>
+
+<p id="status">connecting&hellip;</p>
+
+<p>
+  <input id="text" size="70" autofocus placeholder="type a turn and press enter" />
+  <button id="send">send</button>
+  <button id="clear">clear</button>
+</p>
+
+<h2>state</h2>
+<p id="state">-</p>
+
+<h2>reply</h2>
+<pre id="reply" style="white-space: pre-wrap"></pre>
+
+<h2>every frame, as it arrived</h2>
+<pre id="log" style="white-space: pre-wrap"></pre>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const url = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws';
+
+let socket = null;
+
+function line(text) {
+  $('log').textContent += text + '\n';
+  window.scrollTo(0, document.body.scrollHeight);
+}
+
+function connect() {
+  $('status').textContent = 'connecting to ' + url + ' ...';
+  socket = new WebSocket(url);
+
+  socket.onopen = () => { $('status').textContent = 'connected to ' + url; };
+
+  socket.onclose = (e) => {
+    $('status').textContent =
+      'closed (code ' + e.code + (e.reason ? ', ' + e.reason : '') + '). reload to reconnect.';
+    line('-- socket closed, code ' + e.code + ' ' + (e.reason || ''));
+  };
+
+  socket.onerror = () => {
+    $('status').textContent = 'socket error. is "ranger ui" still running?';
+  };
+
+  socket.onmessage = (e) => {
+    line(e.data);
+    let event;
+    try { event = JSON.parse(e.data); } catch (err) { return; }
+
+    // The state stream from Tier 1, arriving over the socket. In 7c this
+    // drives the status dot and the orb. Here it is just text, on purpose.
+    if (event.kind === 'state') $('state').textContent = event.state;
+
+    // Streamed reply, assembled the same way the terminal assembles it.
+    if (event.kind === 'text') $('reply').textContent += event.text;
+    if (event.kind === 'turn_complete') line('-- turn complete');
+  };
+}
+
+function send() {
+  const text = $('text').value.trim();
+  if (!text) return;
+  if (!socket || socket.readyState !== WebSocket.OPEN) {
+    line('-- not connected, nothing sent');
+    return;
+  }
+  $('reply').textContent = '';
+  line('>> ' + text);
+  socket.send(JSON.stringify({ type: 'turn', text }));
+  $('text').value = '';
+}
+
+$('send').onclick = send;
+$('clear').onclick = () => { $('log').textContent = ''; $('reply').textContent = ''; };
+$('text').onkeydown = (e) => { if (e.key === 'Enter') send(); };
+
+connect();
+</script>
+</body>
+</html>

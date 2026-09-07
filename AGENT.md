@@ -110,7 +110,7 @@ quiet" tool.
 | 4 | The memory. Durable facts in `Ranger/memory`, one fact per entry, hand-editable | done |
 | 5 | The heartbeat. Morning surface, quiet hours, held notices, a schedule that survives restarts | done |
 | 6 | The rails. Confirmation gate, planted-instruction proof, audit trail, cost tally, kill switch | done |
-| 7 | The face. Browser front end: orb, transport, glass shell, mic bar | 7a done |
+| 7 | The face. Browser front end: orb, transport, glass shell, mic bar | 7a, 7b done |
 
 Each tier ends with something runnable and a verification step in
 `start-here.md`. Do not start a tier until the one before it verifies, and do
@@ -123,7 +123,7 @@ Tier 7 is built in four independently runnable steps, in this order:
 | Step | What | How it is verified |
 | ---- | ---- | ------------------ |
 | 7a | The orb and the cosmic background | `ranger ui`, look at it |
-| 7b | The transport alone: websocket, a turn in, a reply out, no styling | a plain page, type into it |
+| 7b | The transport: websocket, a turn in, a reply out, no styling | `/transport.html`, type into it |
 | 7c | The glass shell: header, activity panel, response cards | the shell over the orb |
 | 7d | The mic bar | hold to talk in the browser |
 
@@ -562,6 +562,53 @@ the alternative is visibly wrong:
   very wide, very shallow gradient on a near black background quantises into
   visible concentric rings, and the widest layer reads as a stack of discs.
 
+## Tier 7b: the transport
+
+`ranger ui` serves the page and the socket on one port. The orb is `/`, the
+plain page that proves the socket is `/transport.html`, and the socket itself is
+`/ws`. One port means one URL to remember and one thing to unblock in a
+firewall.
+
+The browser is the fourth caller of the core and nothing more. `bridge.py` reads
+JSON off the socket, calls the same `Ranger.turn()` the terminal calls, and
+writes the core's own events back as JSON. Every event was built
+JSON-serialisable in Tier 1 for exactly this, so this is a transport and not a
+refactor. One connection is one conversation; two tabs are two transcripts, the
+same way two terminals would be.
+
+**The gate.** A browser session wires no gate, so it gets `DenyingGate`. That is
+not an oversight, it is Tier 6's rule meeting a caller that cannot yet render a
+question. Building it revealed that `_build_agent` in cli.py defaulted the gate
+to `TerminalGate`, which any new caller would have inherited: a browser turn
+would have blocked forever on an `input()` nobody could see. Assembling a core
+now lives in `assembly.py`, where the gate is passed or it is not passed, and
+not passing it means the core's own `DenyingGate`.
+
+**Origin is checked, because CORS does not apply to websockets.** Nothing stops
+a page on any site the operator happens to have open from opening
+`ws://localhost:8765/ws` and asking Ranger about their accounts. The `Origin`
+header is checked against the server's own address or the connection is refused
+with a 403. This is the browser-shaped version of the untrusted-content rule.
+
+**The framing is written out, in `wsframe.py`, rather than taken as a
+dependency.** Ranger runs on two packages, both of which had to be installed on
+a Python 3.14 machine where wheel availability has already cost a round trip,
+and the part of the protocol this uses is a text frame, a close and a ping.
+
+Two things that only showed up by running it:
+
+- The `Sec-WebSocket-Accept` constant was wrong, by one character sitting in
+  the wrong half of a GUID. Every unit test passed, because they all agreed
+  with each other and with nothing outside. Chromium refused the handshake and
+  that was the only signal. The test suite now checks RFC 6455's own worked
+  example, which is the vector that catches it.
+- The reader ran on `asyncio.to_thread`, whose pool threads are not daemons and
+  which the interpreter joins on the way out. A reader blocked on a socket
+  nobody is going to write to never returns, so ctrl-c printed its goodbye and
+  then hung forever with a browser tab still open. Same shape as the timer that
+  once made the suite report success and then sit there for sixty seconds.
+  Reads now run on a daemon thread.
+
 ## Layout
 
 ```
@@ -590,7 +637,10 @@ ranger/
   voiceloop.py   Tier 3d: push to talk wrapped around the core, no agent logic
   core.py        the agent. one entry point. all the logic
   cli.py         the terminal. first caller of the core, permanent debug path
-  server.py      Tier 7: the local server the browser front end talks to
+  server.py      Tier 7: the local server. static files, and one websocket
+  wsframe.py     Tier 7b: RFC 6455 framing, and nothing above it
+  bridge.py      Tier 7b: the browser as the fourth caller of the core
+  assembly.py    putting a Ranger together, with no default gate
   web/           Tier 7: the front end. index.html, orb.js, vendored three.js
   testing.py     ScriptedProvider, so the core is verifiable with no API key
 ```

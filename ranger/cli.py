@@ -52,21 +52,14 @@ def _colour(enabled: bool):
 
 
 def _build_agent(config: Config, *, gate=None, origin: str = "conversation") -> Ranger:
-    from .audit import AuditLog
+    """The terminal's agent. The gate is TerminalGate because there is a keyboard.
+
+    Every other caller wires its own, and one that wires none gets DenyingGate.
+    """
+    from .assembly import build_agent
     from .gate import TerminalGate
 
-    api_key = require_api_key()
-    vault = Vault(config.vault)
-    return Ranger(
-        config=config,
-        provider=build_provider(config.model, api_key),
-        registry=build_registry(config, vault),
-        vault=vault,
-        knowledge_loader=KnowledgeLoader(vault, config.vault, config.knowledge),
-        gate=gate or TerminalGate(out=sys.stdout),
-        audit=AuditLog(vault, config.vault.log),
-        origin=origin,
-    )
+    return build_agent(config, gate=gate or TerminalGate(out=sys.stdout), origin=origin)
 
 
 def _describe_config(config: Config) -> str:
