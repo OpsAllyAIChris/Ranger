@@ -194,6 +194,22 @@ similarity_boost = 0.75
 speed = 1.0
 timeout_seconds = 30.0
 
+[heartbeat]
+# The loop that lets Ranger act without being spoken to. Quiet by default:
+# notices go to Ranger/inbox/ as markdown and nothing interrupts.
+#
+# There is no schedule file. The inbox is the schedule: whether the morning
+# surface has run today is answered by whether today's notice exists. So a
+# restart cannot lose the schedule, a laptop asleep at 07:00 catches up when it
+# wakes, and coming back after a week does not replay six mornings.
+enabled = true
+# How often the loop wakes. Checks decide whether they are due, so this only
+# bounds how late a catch-up can be.
+interval_seconds = 300
+# Nothing waits on a person. A check that runs longer than this is stopped and
+# leaves a note saying so.
+check_timeout_seconds = 120
+
 [server]
 # Tier 7. The browser talks to the same core the terminal does.
 host = "127.0.0.1"

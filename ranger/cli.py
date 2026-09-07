@@ -172,6 +172,7 @@ async def voice_loop(config: Config, show_state: bool) -> int:
     print(paint("Ranger", BOLD + TEAL) + paint(f"  {config.model.name}, voice {config.tts.voice_id}", DIM))
     print(paint(f"  {len(plan.terms)} vocabulary hints, {config.stt.model}", DIM))
     print(paint("  the typed interface is still there: run 'ranger' with no flags", DIM))
+    _announce_inbox(config, paint)
     print()
 
     loop = VoiceLoop(
@@ -204,6 +205,7 @@ async def repl(config: Config, show_state: bool) -> int:
     knowledge = agent.knowledge()
     if knowledge.docs:
         print(paint(f"  knowledge: {len(knowledge.docs)} file(s), {knowledge.total_chars} chars", DIM))
+    _announce_inbox(config, paint)
     print(paint("  /help for commands, /quit to leave", DIM))
     print()
 
@@ -458,6 +460,110 @@ def _local_config_path(config: Config) -> Path:
         return config.local_path
     source = config.source_path or Path("ranger.toml")
     return source.with_name(source.stem + LOCAL_SUFFIX)
+
+
+def _announce_inbox(config: Config, paint) -> None:
+    """Catch-up on return: what was surfaced while nobody was looking."""
+    try:
+        pending = _inbox(config).pending()
+    except Exception:
+        return
+    if not pending:
+        return
+    word = "notice" if len(pending) == 1 else "notices"
+    print(paint(f"  {len(pending)} {word} waiting: {pending[0].title}", YELLOW))
+    if len(pending) > 1:
+        print(paint(f"  and {len(pending) - 1} more. 'ranger inbox' to read them.", DIM))
+    else:
+        print(paint("  'ranger inbox' to read it.", DIM))
+
+
+def _inbox(config: Config):
+    from .heartbeat import Inbox
+    from .vault import Vault
+
+    return Inbox(Vault(config.vault), config.vault.inbox)
+
+
+def cmd_inbox(config: Config, args) -> int:
+    """Tier 5. What was surfaced while you were away, held until you clear it."""
+    paint = _colour(sys.stdout.isatty())
+    inbox = _inbox(config)
+    notices = inbox.all() if args.all else inbox.pending()
+
+    if args.dismiss is not None:
+        pending = inbox.pending()
+        if not 1 <= args.dismiss <= len(pending):
+            print(f"  there is no pending notice {args.dismiss}.", file=sys.stderr)
+            return 1
+        chosen = pending[args.dismiss - 1]
+        inbox.dismiss(chosen)
+        print(f"  dismissed: {chosen.title}")
+        print(paint(f"  cleared in {chosen.path}, not just on screen.", DIM))
+        return 0
+
+    if not notices:
+        print("  nothing waiting.")
+        return 0
+
+    for index, notice in enumerate(notices, start=1):
+        mark = paint(" (dismissed)", DIM) if notice.dismissed else ""
+        print(f"  {index}. {paint(notice.title, BOLD)}{mark}")
+        print(paint(f"     {notice.created:%A %-d %B, %H:%M}  {notice.path.name}", DIM))
+        for line in notice.body.splitlines()[: 3 if not args.full else 10_000]:
+            print(f"     {line}")
+        if not args.full and len(notice.body.splitlines()) > 3:
+            print(paint("     ...", DIM))
+        print()
+    if not args.all:
+        print(paint("  'ranger inbox dismiss N' clears one in the vault.", DIM))
+    return 0
+
+
+def cmd_heartbeat(config: Config, args) -> int:
+    """Tier 5. The loop, or one pass of it."""
+    import asyncio
+
+    from .heartbeat import Heartbeat, build_checks
+    from .toolset import build_registry
+    from .vault import Vault
+
+    paint = _colour(sys.stdout.isatty())
+    if not config.heartbeat.enabled and not args.once:
+        print("  heartbeat.enabled is false, so the loop will not start.")
+        return 0
+
+    vault = Vault(config.vault)
+    beat = Heartbeat(config, _inbox(config), build_checks(config, build_registry(config, vault)))
+
+    async def once() -> int:
+        report = await beat.tick()
+        if report.surfaced:
+            print(f"  surfaced: {', '.join(report.surfaced)}")
+        if report.skipped_quiet:
+            print(paint(
+                f"  held until quiet hours end: {', '.join(report.skipped_quiet)}", DIM))
+        if report.timed_out:
+            print(paint(f"  timed out: {', '.join(report.timed_out)}", YELLOW))
+        if not (report.ran or report.skipped_quiet):
+            print(paint("  nothing due.", DIM))
+        return 0
+
+    if args.once:
+        return asyncio.run(once())
+
+    schedule = config.schedule
+    print(paint("Ranger heartbeat", BOLD + TEAL))
+    print(paint(
+        f"  morning surface at {schedule.morning_hour:02d}:00, quiet "
+        f"{schedule.quiet_start_hour:02d}:00 to {schedule.quiet_end_hour:02d}:00", DIM))
+    print(paint(f"  waking every {config.heartbeat.interval_seconds}s. Ctrl-C to stop.", DIM))
+    print(paint("  notices go to Ranger/inbox/ and wait there until you clear them.", DIM))
+    try:
+        asyncio.run(beat.run())
+    except KeyboardInterrupt:
+        print()
+    return 0
 
 
 def cmd_memory(config: Config, args) -> int:
@@ -793,6 +899,14 @@ def main(argv: list[str] | None = None) -> int:
     transcribe.add_argument("--model", help="override stt.model for this run")
 
     sub.add_parser("memory", help="Tier 4: show what Ranger remembers")
+
+    inbox = sub.add_parser("inbox", help="Tier 5: notices waiting for you")
+    inbox.add_argument("dismiss", nargs="?", type=int, help="clear notice N in the vault")
+    inbox.add_argument("--all", action="store_true", help="include dismissed notices")
+    inbox.add_argument("--full", action="store_true", help="print each notice in full")
+
+    beat = sub.add_parser("heartbeat", help="Tier 5: run the background loop")
+    beat.add_argument("--once", action="store_true", help="one pass, then exit")
     keyterms = sub.add_parser("keyterms", help="show the vocabulary hints that would be sent")
     keyterms.add_argument("--all", action="store_true", help="show every hint, not the top 25")
 
@@ -826,6 +940,10 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_transcribe(config, args)
     if args.command == "memory":
         return cmd_memory(config, args)
+    if args.command == "inbox":
+        return cmd_inbox(config, args)
+    if args.command == "heartbeat":
+        return cmd_heartbeat(config, args)
     if args.command == "keyterms":
         return cmd_keyterms(config, args)
     if args.command == "voices":

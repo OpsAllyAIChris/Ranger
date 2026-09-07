@@ -81,6 +81,11 @@ voice_id = "test-voice-id"
 model_id = "eleven_flash_v2_5"
 output_format = "pcm_24000"
 
+[heartbeat]
+enabled = true
+interval_seconds = 60
+check_timeout_seconds = 5
+
 [server]
 host = "127.0.0.1"
 port = 8765

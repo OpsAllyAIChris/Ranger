@@ -108,7 +108,7 @@ quiet" tool.
 | 2 | The hands. Three tools: account recall, draft and hold, what went quiet | done |
 | 3 | The ears and mouth. Push to talk, transcript shown, barge-in, speech starts on the first sentence | done |
 | 4 | The memory. Durable facts in `Ranger/memory`, one fact per entry, hand-editable | done |
-| 5 | The heartbeat. Morning surface, quiet hours, held notices, a schedule that survives restarts | later |
+| 5 | The heartbeat. Morning surface, quiet hours, held notices, a schedule that survives restarts | done |
 | 6 | The rails. Confirmation gate, audit trail, cost tally, kill switch, everything tunable in config | later |
 | 7 | The face. Browser front end: orb, glass shell, mic bar | after 6 |
 
@@ -243,6 +243,42 @@ Rules that hold across all four:
 - **No non-daemon timers.** One leaked `threading.Timer(60, ...)` held the
   whole process open for a minute after the command had finished, while the
   suite cheerfully reported passing in 1.6 seconds.
+
+## Tier 5: the inbox is the schedule
+
+There is no state file. Whether the morning surface has run today is answered by
+whether `Ranger/inbox/2026-09-08 morning.md` exists. One decision, and restart
+safety, catch-up and no-refire-storm all fall out of it rather than being
+separately engineered:
+
+- **Asleep at 07:00, opened at 14:30.** Today's file is missing and the hour has
+  passed, so it runs then. Catch-up, not skip. This is the case the operator
+  asked about by name.
+- **Restarted three times before lunch.** The file exists, so nothing fires.
+- **Away for a week.** Only today is considered. Six missed mornings are not
+  replayed, because a week-old list of what went quiet is not news.
+- **No state file to drift** from the vault, be lost on a reinstall, or need
+  migrating.
+
+Other rules that hold:
+
+- **Quiet hours hold, they do not drop.** A check due at 23:00 is skipped and
+  stays due, so it fires when the window ends. `runs_in_quiet_hours` is the
+  opt-out for something genuinely urgent; nothing sets it yet.
+- **Nothing waits on a person.** Every check runs under
+  `heartbeat.check_timeout_seconds` and a hang leaves a note saying nothing was
+  changed, rather than deadlocking on someone who is asleep.
+- **No stacking.** A check still running when its next turn comes round is
+  skipped, not queued.
+- **Dismissal rewrites the file's front matter** to `status: dismissed`, at the
+  operator's explicit command. Nothing is deleted: the vault has no delete path
+  and is not getting one, so a dismissed notice stays readable as a record.
+- **The morning surface calls the existing `what_went_quiet` tool.** There is no
+  second implementation of that logic, so the spoken answer and the morning file
+  cannot disagree.
+- **Both front ends announce what is waiting** on startup. That is the
+  catch-up-on-return half: the notice is held in the vault, and seen when the
+  operator comes back.
 
 ## Memory against account notes, and the context budget
 
@@ -393,6 +429,7 @@ ranger/
   compare.py     what you said against what it heard, with a word error rate
   keyterms.py    the hint list, derived from account filenames and ranked
   memory.py      Tier 4: durable facts, plain markdown, read fresh every turn
+  heartbeat.py   Tier 5: the loop, the inbox, and the checks. Inbox is the state
   tts.py         Tier 3c: ElevenLabs behind a seam, streaming, plain HTTP
   speech.py      splitting a streaming reply into speakable sentences
   voiceloop.py   Tier 3d: push to talk wrapped around the core, no agent logic

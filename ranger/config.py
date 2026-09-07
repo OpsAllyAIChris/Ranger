@@ -189,6 +189,20 @@ class TtsConfig:
 
 
 @dataclass(frozen=True)
+class HeartbeatConfig:
+    """Tier 5. The loop that acts without being spoken to."""
+
+    #: The kill switch until Tier 6 builds a better one.
+    enabled: bool = True
+    #: How often the loop wakes. Checks decide for themselves whether they are
+    #: due, so this only bounds how late a catch-up can be.
+    interval_seconds: int = 300
+    #: Nothing waits on a person. A check that runs longer than this is stopped
+    #: and leaves a note.
+    check_timeout_seconds: int = 120
+
+
+@dataclass(frozen=True)
 class ServerConfig:
     host: str
     port: int
@@ -234,6 +248,7 @@ class Config:
     voice: VoiceConfig
     stt: SttConfig
     tts: TtsConfig
+    heartbeat: HeartbeatConfig
     server: ServerConfig
     source_path: Path | None = None
     local_path: Path | None = None
@@ -334,6 +349,7 @@ KNOWN_KEYS: dict[str, frozenset[str]] = {
         "provider", "voice_id", "model_id", "output_format", "stability",
         "similarity_boost", "speed", "timeout_seconds",
     }),
+    "heartbeat": frozenset({"enabled", "interval_seconds", "check_timeout_seconds"}),
     "server": frozenset({"host", "port"}),
 }
 
@@ -648,6 +664,17 @@ def load_config(path: str | Path | None = None, *, load_env: bool = True) -> Con
     if not 0.0 <= tts.stability <= 1.0:
         raise ConfigError("tts.stability must be between 0 and 1")
 
+    heartbeat_section = table.get("heartbeat", {})
+    heartbeat = HeartbeatConfig(
+        enabled=bool(heartbeat_section.get("enabled", True)),
+        interval_seconds=int(heartbeat_section.get("interval_seconds", 300)),
+        check_timeout_seconds=int(heartbeat_section.get("check_timeout_seconds", 120)),
+    )
+    if heartbeat.interval_seconds < 10:
+        raise ConfigError("heartbeat.interval_seconds must be at least 10")
+    if heartbeat.check_timeout_seconds < 1:
+        raise ConfigError("heartbeat.check_timeout_seconds must be at least 1")
+
     server_section = table.get("server", {})
     server = ServerConfig(
         host=str(server_section.get("host", "127.0.0.1")),
@@ -679,6 +706,7 @@ def load_config(path: str | Path | None = None, *, load_env: bool = True) -> Con
         voice=voice,
         stt=stt,
         tts=tts,
+        heartbeat=heartbeat,
         server=server,
         source_path=config_path,
         local_path=local_path if local_path.is_file() else None,

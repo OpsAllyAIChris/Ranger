@@ -139,6 +139,24 @@ Plain markdown in `Ranger/memory/facts.md`. Edit or delete a line in Obsidian
 and Ranger reads the change on the next turn. Facts about companies belong in
 the account note, not here.
 
+## The heartbeat (Tier 5)
+
+```powershell
+ranger heartbeat            # the loop. Ctrl-C to stop
+ranger heartbeat --once     # one pass, then exit
+ranger inbox                # what is waiting
+ranger inbox 1              # dismiss the first, cleared in the vault
+ranger inbox --all --full   # including dismissed, in full
+```
+
+Notices are markdown in `Ranger/inbox/`, read them in Obsidian. Nothing
+interrupts; `ranger` and `ranger --voice` say what is waiting when you start
+them.
+
+**If the laptop is asleep at 07:00 the check catches up when it wakes.** The
+inbox is the schedule: today's notice is either there or it is not. Being away
+for a week does not replay six mornings.
+
 ## Test
 
 ```bash

@@ -119,5 +119,5 @@ correctable in Obsidian.
 | ------ | ----- | ---- |
 | `Ranger/drafts/` | Drafts written and held, never sent | 2 |
 | `Ranger/memory/` | Durable facts, one per file | 4 |
-| `Ranger/inbox/` | Notices surfaced and not yet cleared | 5 |
+| `Ranger/inbox/` | Notices surfaced and not yet cleared, one file per notice | 5 |
 | `Ranger/log/` | The audit trail, append only | 6 |
