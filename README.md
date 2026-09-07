@@ -49,6 +49,28 @@ tracked one key by key; the rest of each section still comes from `ranger.toml`.
 `vault.root` is written as `~/Obsidian/Ranger-Vault` and expands correctly on
 Windows too, to `C:\Users\<you>\Obsidian\Ranger-Vault`.
 
+## Pulling an update
+
+Most of the time a `git pull` is the whole job. The install is editable, so
+Python code, the front end under `ranger/web/` and the vendored assets are all
+read straight from the working tree.
+
+Re-run `pip install -e ".[dev]"` only when one of these changed:
+
+- the dependencies or the optional dev extras
+- the `[project.scripts]` entry point
+- the Python version the venv was built against
+
+**Stop `ranger ui` before you reinstall.** A running server holds
+`.venv\Scripts\ranger.exe` open, and pip deletes the old package before it
+writes the new one. On Windows that fails with `WinError 32, the process cannot
+access the file because it is being used by another process` **after** the
+uninstall step, which leaves no package installed at all and makes the next
+`pytest` die with `ModuleNotFoundError: No module named 'ranger'`.
+
+If that has already happened: stop the server, then run the same install again.
+It succeeds the second time and nothing is lost.
+
 ## Run
 
 ```bash

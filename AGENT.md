@@ -714,6 +714,22 @@ ranger/
   `tests/test_suite_hygiene.py` now fails on that pattern. Shared test helpers
   are fixtures, never imports.
 
+## Handing over a verification block
+
+The operator runs these by hand, in order, on a machine this repository cannot
+see. Two rules, both learned by wasting their time:
+
+- **Anything that changes the environment goes first, before the commands that
+  depend on it.** A `pip install` in the middle of a block runs after the tests
+  it was supposed to enable.
+- **Do not ask for a reinstall that is not needed.** The install is editable,
+  so new files under `ranger/web/`, new modules and edited code all take effect
+  on a plain `git pull`. Only a dependency change, an entry point change or a
+  new Python version needs `pip install -e`. Asking for one anyway is not
+  harmless: on Windows it fails with `WinError 32` if `ranger ui` is running,
+  and it fails *after* uninstalling, so the operator is left with no package
+  and a `ModuleNotFoundError` from a test run that had nothing to do with it.
+
 ## Windows cannot be verified from here
 
 The operator develops on Windows. Every agent session for this project runs in
