@@ -970,6 +970,17 @@ def pcm_wav_bytes(path: Path) -> bytes:
     return path.read_bytes()
 
 
+def cmd_ui(config: Config, args: Any) -> int:
+    """Tier 7a. Serve the front end. No agent logic passes through here."""
+    from dataclasses import replace
+
+    from .server import serve
+
+    if args.port:
+        config = replace(config, server=replace(config.server, port=args.port))
+    return serve(config, open_browser=args.open, verbose=args.verbose)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="ranger", description="Ranger, a voice-first assistant.")
     parser.add_argument("-c", "--config", help="path to ranger.toml")
@@ -1038,6 +1049,11 @@ def main(argv: list[str] | None = None) -> int:
     keyterms = sub.add_parser("keyterms", help="show the vocabulary hints that would be sent")
     keyterms.add_argument("--all", action="store_true", help="show every hint, not the top 25")
 
+    ui = sub.add_parser("ui", help="Tier 7: serve the browser front end")
+    ui.add_argument("--open", action="store_true", help="open the browser as well")
+    ui.add_argument("--verbose", action="store_true", help="log every request")
+    ui.add_argument("--port", type=int, help="override [server] port for this run")
+
     sub.add_parser("voices", help="Tier 3c: list the ElevenLabs voices on the account")
     say = sub.add_parser("say", help="Tier 3c: speak a line aloud")
     say.add_argument("text", nargs="+", help="what to say")
@@ -1080,6 +1096,8 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_log(config, args)
     if args.command == "keyterms":
         return cmd_keyterms(config, args)
+    if args.command == "ui":
+        return cmd_ui(config, args)
     if args.command == "voices":
         return cmd_voices(config, args)
     if args.command == "say":

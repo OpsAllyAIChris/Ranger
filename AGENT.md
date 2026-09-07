@@ -110,7 +110,7 @@ quiet" tool.
 | 4 | The memory. Durable facts in `Ranger/memory`, one fact per entry, hand-editable | done |
 | 5 | The heartbeat. Morning surface, quiet hours, held notices, a schedule that survives restarts | done |
 | 6 | The rails. Confirmation gate, planted-instruction proof, audit trail, cost tally, kill switch | done |
-| 7 | The face. Browser front end: orb, glass shell, mic bar | after 6 |
+| 7 | The face. Browser front end: orb, transport, glass shell, mic bar | 7a done |
 
 Each tier ends with something runnable and a verification step in
 `start-here.md`. Do not start a tier until the one before it verifies, and do
@@ -118,9 +118,22 @@ not fuse two tiers together.
 
 Each tier is verified before the next one starts. Tier 7 waits for Tier 6.
 
-One exception: `prototypes/orb.html` (Tier 7a) is a standalone preview that
-touches nothing else and may be built early. It is a preview, not a
-dependency.
+Tier 7 is built in four independently runnable steps, in this order:
+
+| Step | What | How it is verified |
+| ---- | ---- | ------------------ |
+| 7a | The orb and the cosmic background | `ranger ui`, look at it |
+| 7b | The transport alone: websocket, a turn in, a reply out, no styling | a plain page, type into it |
+| 7c | The glass shell: header, activity panel, response cards | the shell over the orb |
+| 7d | The mic bar | hold to talk in the browser |
+
+Transport comes before the shell deliberately. Every layer tested in isolation
+went smoothly; everything integrated before its pieces were proven cost a round
+trip.
+
+`prototypes/orb.html` was the standalone preview of 7a, built early under the
+Order of Operations exception. It has been promoted to `ranger/web/` and
+deleted, so there is only ever one orb to be looking at.
 
 ## Configuration
 
@@ -507,6 +520,48 @@ with none. That is one sample and could be noise, but it means raising
 `max_hints` toward 100 should be checked against latency rather than assumed.
 `ranger keyterms` shows exactly what would be sent and what was cut.
 
+## Tier 7a: the orb, and three decisions it forced
+
+The orb is `ranger/web/orb.js`. It is a scene and nothing else. Its entire
+input is one number between 0 and 1, `setVoiceBright`, which Tier 7b will feed
+from playback amplitude. Amendment A says no agent logic in the browser; this
+file is the far end of that rule, where there is not even any interface logic,
+and a test asserts it never learns what a `WebSocket` is.
+
+**three.js is vendored, not linked.** The preview loaded it from jsdelivr. Three
+reasons that had to stop before the browser became a real front end: a
+corporate proxy that blocks a CDN turns the interface into a black rectangle
+that looks like a bug in Ranger; the page will render account names and draft
+text, and a third-party script tag means a third party gets a request every
+time it is opened; and a CDN link can change under you between one morning and
+the next. `ranger/web/vendor/three/` holds the exact import closure and its
+licence. A test walks every `import` in the tree and fails if one resolves to a
+file that is not there, because a missed transitive import works everywhere
+except the browser.
+
+**JavaScript MIME types are pinned in code.** `mimetypes` seeds itself from
+`HKEY_CLASSES_ROOT` on Windows, and plenty of machines have `.js` mapped to
+`text/plain` because an installer wrote it there years ago. A browser refuses to
+execute a module script served under that, so the page would load, fetch
+`orb.js`, and do nothing, with no error anywhere in Python. This is the fifth
+class of Windows-only failure to reach the operator, so it is guarded rather
+than trusted. `ranger/server.py` calls `_force_types()` before binding.
+
+**The server binds 127.0.0.1 and has no authentication.** The vault holds
+customer emails and pricing. Changing `server.host` must be a deliberate
+decision in config, never a default.
+
+Two things the scene does that the design brief does not mention, both because
+the alternative is visibly wrong:
+
+- Amplitude is smoothed, not followed. Attack 45ms, release 220ms, applied
+  frame rate independently so a 144Hz screen and a 30fps one settle the same.
+  Following raw amplitude makes the orb strobe at syllable rate, and every gap
+  between words reads as a stop.
+- The glow layers and the nebula are dithered by well under one 8-bit step. A
+  very wide, very shallow gradient on a near black background quantises into
+  visible concentric rings, and the widest layer reads as a stack of discs.
+
 ## Layout
 
 ```
@@ -535,6 +590,8 @@ ranger/
   voiceloop.py   Tier 3d: push to talk wrapped around the core, no agent logic
   core.py        the agent. one entry point. all the logic
   cli.py         the terminal. first caller of the core, permanent debug path
+  server.py      Tier 7: the local server the browser front end talks to
+  web/           Tier 7: the front end. index.html, orb.js, vendored three.js
   testing.py     ScriptedProvider, so the core is verifiable with no API key
 ```
 

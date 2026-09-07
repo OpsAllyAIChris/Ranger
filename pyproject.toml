@@ -24,6 +24,11 @@ build-backend = "setuptools.build_meta"
 [tool.setuptools]
 packages = ["ranger"]
 
+# The browser front end ships with the package, so a non-editable install still
+# has a face. Paths, not a glob, would miss the vendored three.js tree.
+[tool.setuptools.package-data]
+ranger = ["web/**/*"]
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
