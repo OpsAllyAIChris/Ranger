@@ -122,10 +122,15 @@ class AccountsConfig:
     #: affect ranking. Nothing in the code knows what a tier is called;
     #: `ranger accounts survey` reports what is actually in the vault.
     tier_order: tuple[str, ...] = ()
-    #: Which opportunity stages count as live. Empty means all of them do,
-    #: which is wrong the moment closed deals stay in the export, so the
-    #: survey says loudly when this is unset.
-    open_stages: tuple[str, ...] = ()
+    #: Which opportunity stages mean the deal is over. Everything else is
+    #: live, including a stage nobody has seen before and an opportunity with
+    #: no stage at all.
+    #:
+    #: Deliberately the closed list rather than the open one. With an open
+    #: list, a stage added to the CRM later would count as closed and the deal
+    #: would vanish from the brief silently. With a closed list it shows up
+    #: wrongly instead, which the operator can see and correct.
+    closed_stages: tuple[str, ...] = ()
 
     def tier_rank(self, tier: str) -> int:
         """Lower is better. Anything unrecognised sorts last, never first."""
@@ -136,10 +141,9 @@ class AccountsConfig:
         return len(self.tier_order) + 1
 
     def is_open(self, stage: str) -> bool:
-        if not self.open_stages:
-            return True
-        return stage.strip().casefold() in {
-            value.strip().casefold() for value in self.open_stages
+        """Live unless it is explicitly one of the finished stages."""
+        return stage.strip().casefold() not in {
+            value.strip().casefold() for value in self.closed_stages
         }
 
 
@@ -428,7 +432,7 @@ KNOWN_KEYS: dict[str, frozenset[str]] = {
     "context": frozenset({"budget_chars"}),
     "schedule": frozenset({"morning_hour", "quiet_start_hour", "quiet_end_hour"}),
     "accounts": frozenset({
-        "quiet_after_days", "exclude_files", "skip_statuses", "tier_order", "open_stages",
+        "quiet_after_days", "exclude_files", "skip_statuses", "tier_order", "closed_stages",
     }),
     "brief": frozenset({
         "lines", "slipping_max", "deals_max", "cold_after_days", "decision_prompt",
@@ -458,6 +462,12 @@ KNOWN_KEYS: dict[str, frozenset[str]] = {
 
 #: Settings that used to exist. A pointer beats "not a setting Ranger reads".
 RETIRED_KEYS: dict[str, str] = {
+    "accounts.open_stages": (
+        "Replaced by accounts.closed_stages, which lists the stages that mean the deal is "
+        "over. Everything else counts as live. Listing the open ones meant a stage added to "
+        "the CRM later would silently count as closed and the deal would drop out of the "
+        "morning brief with nothing to show for it."
+    ),
     "knowledge.budget_chars": (
         "Knowledge now takes whatever is left of context.budget_chars after memory's "
         "reserve. There is no separate knowledge ceiling, because having both meant the "
@@ -710,7 +720,7 @@ def load_config(path: str | Path | None = None, *, load_env: bool = True) -> Con
         exclude_files=tuple(str(n) for n in accounts_section.get("exclude_files", ())),
         skip_statuses=tuple(str(s) for s in accounts_section.get("skip_statuses", ("UNCONFIRMED",))),
         tier_order=tuple(str(t) for t in accounts_section.get("tier_order", ())),
-        open_stages=tuple(str(t) for t in accounts_section.get("open_stages", ())),
+        closed_stages=tuple(str(t) for t in accounts_section.get("closed_stages", ())),
     )
     if accounts.quiet_after_days < 1:
         raise ConfigError("accounts.quiet_after_days must be at least 1")

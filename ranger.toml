@@ -131,10 +131,16 @@ tier_order = ["1", "2", "3", "4", "Historical"]
 # Which opportunity stages count as live. Empty means every opportunity counts,
 # which is wrong the moment closed deals stay in the CRM export. The survey
 # lists the stages actually present.
-# The survey found 45 opportunities and not one Stage line, so there is nothing
-# to filter on yet and every opportunity counts as open. Run the survey again
-# to see where the stage actually lives before setting this.
-open_stages = []
+# Stages that mean the deal is over. Everything else is live, including a stage
+# nobody has seen before and an opportunity with no stage at all.
+#
+# The closed list rather than the open one on purpose: with an open list, a
+# stage added to the CRM later would count as closed and the deal would vanish
+# from the morning brief with nothing to show for it. This way it shows up
+# wrongly instead, which is visible and correctable.
+#
+# 'ranger accounts survey' prints the stages actually in the vault.
+closed_stages = []
 
 [brief]
 # Tier 5. A morning brief has a size, not a threshold.

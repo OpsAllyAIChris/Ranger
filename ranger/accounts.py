@@ -41,12 +41,42 @@ _OPPS_SECTION = re.compile(
     r"^##[ \t]+Opportunities[ \t]*$(?P<body>.*?)(?=^##[ \t]|\Z)",
     re.MULTILINE | re.DOTALL | re.IGNORECASE,
 )
-# ### <name>, then a stage somewhere in that opportunity's own fields.
+# ### <name>, then a pipe-delimited meta line on the line directly after it:
+#
+#     ### Wexxar Case Sealers (5 Units)
+#     Proposal | 40000 | Q1 2026 | 60 probability
+#
+# Stage, estimated value, expected close, probability. Any of the four may be
+# absent, and then the line simply has fewer elements, so nothing past the
+# first can be read by position.
 _OPP_HEADING = re.compile(r"^###[ \t]+(?P<name>.+?)[ \t]*$", re.MULTILINE)
-_OPP_STAGE = re.compile(
+_OPP_STAGE_LABEL = re.compile(
     r"^-[ \t]+\*\*(?:Stage|Status):\*\*[ \t]*(?P<value>.*?)[ \t]*$",
     re.MULTILINE | re.IGNORECASE,
 )
+
+#: The first element is the stage only when there *is* one. When it is absent
+#: the value, the close or the probability slides into first place, so each has
+#: to be recognisable as not-a-stage. A stage is words; these are not.
+_NOT_A_STAGE = re.compile(
+    r"""^(?:
+        [$£€]?\s*[\d,]+(?:\.\d+)?\s*(?:[kKmM])?      # 40000, $40,000, 40k
+      | (?:FY)?\s*Q[1-4](?:\s*[/-]?\s*(?:FY)?\d{2,4})?  # Q1 2026, Q1
+      | (?:FY)?\s*\d{4}\s*Q[1-4]                       # 2026 Q1
+      | \d{4}-\d{2}(?:-\d{2})?                         # 2026-01, 2026-01-15
+      | \d+\s*(?:%|percent|probability)                 # 60 probability, 60%
+      | (?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\s*\d{2,4}
+    )$""",
+    re.IGNORECASE | re.VERBOSE,
+)
+
+
+def stage_from_meta(line: str) -> str:
+    """The stage off an opportunity's meta line, or "" if it has none."""
+    first = line.split("|")[0].strip()
+    if not first or _NOT_A_STAGE.match(first):
+        return ""
+    return first
 
 
 def _to_date(text: str) -> date | None:
@@ -160,8 +190,23 @@ def scan_opportunities(text: str) -> tuple[str, ...]:
     stages: list[str] = []
     for index, start in enumerate(starts):
         end = starts[index + 1] if index + 1 < len(starts) else len(body)
-        stage = _OPP_STAGE.search(body[start:end])
-        stages.append(stage.group("value") if stage else "")
+        block = body[start:end]
+        lines = block.splitlines()
+        stage = ""
+        # The meta line is the first non-empty line after the heading, and it
+        # is not a bullet. A labelled Stage field is honoured too, so a
+        # hand-written opportunity is not silently stageless.
+        for line in lines[1:]:
+            stripped = line.strip()
+            if not stripped:
+                continue
+            if not stripped.startswith(("-", "#")):
+                stage = stage_from_meta(stripped)
+            break
+        if not stage:
+            labelled = _OPP_STAGE_LABEL.search(block)
+            stage = labelled.group("value") if labelled else ""
+        stages.append(stage)
     return tuple(stages)
 
 

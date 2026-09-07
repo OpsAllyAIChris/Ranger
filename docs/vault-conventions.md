@@ -24,13 +24,41 @@ Sections in order:
    Decision structure, Source.
 2. Optional `## Pain points`, `## Target solution`, `## Notes`.
 3. Optional `## Contacts`, bulleted, one per contact.
-4. Optional `## Opportunities`: `### <name>`, a pipe-delimited meta line, then
-   `- **Label:** value` lines.
+4. Optional `## Opportunities`. See below.
 5. `## Activity`.
 
 Only the metadata block counts as metadata. `- **Label:** value` lines below a
 `##` heading belong to that section, so an opportunity's `- **Owner:**` is not
 mistaken for an account field.
+
+### The opportunities section
+
+Each opportunity is a heading and then one pipe-delimited line, written by
+`build_vault.py`:
+
+```markdown
+## Opportunities
+### Wexxar Case Sealers (5 Units)
+Proposal | 40000 | Q1 2026 | 60 probability
+```
+
+Stage, estimated value, expected close, probability. **Any of the four may be
+absent**, and an absent element shortens the line rather than leaving a gap, so
+nothing past the first can be read by position. The stage is the first element
+when there is one; when there is not, the value or the close or the probability
+slides into first place, and each of those is recognisable as not a stage.
+
+Two things follow.
+
+- `accounts.closed_stages` lists the stages that mean the deal is over, and
+  everything else counts as live. The closed list rather than the open one, so
+  a stage added to the CRM later shows up wrongly rather than disappearing
+  silently.
+- **The second element is a dollar amount.** `ranger accounts survey` prints
+  the stage and never any other element, which is a guarantee of shape rather
+  than a pattern that might not match. It also withholds any value that looks
+  like an amount, including a bare integer, because the export writes `40000`
+  with no currency symbol.
 
 ### The activity section
 

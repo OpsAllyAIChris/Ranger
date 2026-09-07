@@ -1041,31 +1041,8 @@ def cmd_accounts_survey(config: Config, args: Any) -> int:
         print(paint("  Put these values in it, best first.", DIM))
     print()
 
-    stages: Counter = Counter()
-    with_opps = 0
-    for scan in scans:
-        if scan.opportunity_stages:
-            with_opps += 1
-        for stage in scan.opportunity_stages:
-            stages[stage.strip() or "(no Stage line)"] += 1
-
-    print(paint("Opportunity stages", BOLD))
-    if not stages:
-        print(paint("  no ## Opportunities sections found in any note.", DIM))
-    else:
-        print(paint(f"  {with_opps} accounts carry {sum(stages.values())} opportunities", DIM))
-        open_stages = {value.strip().lower() for value in config.accounts.open_stages}
-        for value, count in sorted(stages.items(), key=lambda pair: (-pair[1], pair[0])):
-            if not open_stages:
-                mark = ""
-            elif value.strip().lower() in open_stages:
-                mark = paint("counts as open", TEAL)
-            else:
-                mark = paint("counts as closed", DIM)
-            print(f"  {count:>3}  {value:<28} {mark}")
-        if not open_stages:
-            print(paint("  accounts.open_stages is empty, so every opportunity counts as", YELLOW))
-            print(paint("  open. Put the live stages in it and the rest are ignored.", YELLOW))
+    with_opps = sum(1 for scan in scans if scan.opportunity_stages)
+    print(paint(f"{with_opps} accounts carry opportunities", DIM))
     print()
 
     _survey_opportunity_shape(config, vault, scans, paint)
@@ -1088,29 +1065,36 @@ CATEGORY_LIMIT = 12
 #: suppressed by cardinality alone, but a column where every deal happens to
 #: carry the same figure would not be, and pricing is the one thing they have
 #: said twice must never leave the vault.
-_LOOKS_LIKE_MONEY = re.compile(r"[$£€]|\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+\.\d{2}\b")
+_LOOKS_LIKE_MONEY = re.compile(
+    r"[$£€]|\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+\.\d{2}\b|\b\d{4,}\b"
+)
 
 
 def _survey_opportunity_shape(config: Config, vault: Vault, scans, paint) -> None:
-    """Where a stage actually lives, when `- **Stage:**` is not it.
+    """What the opportunity meta line actually contains.
 
-    The operator's export carries 45 opportunities and not one Stage line, so
-    the brief cannot tell a live deal from a closed one. This reports the field
-    labels and the pipe-delimited meta line that are really there.
+    build_vault.py writes each opportunity as a heading and then one
+    pipe-delimited line:
 
-    It prints values only for fields with few enough distinct ones to be a
-    category. Anything with more is a quote amount or a date or a customer's
-    words, and none of those belong on a terminal that gets screenshotted.
+        ### Wexxar Case Sealers (5 Units)
+        Proposal | 40000 | Q1 2026 | 60 probability
+
+    Any of the four may be absent, so nothing past the first element can be
+    read by position. Only the stage is ever printed. The second element is a
+    dollar amount and the operator has said twice that pricing does not leave
+    the vault, so the other segments are counted and never shown, which is a
+    guarantee of shape rather than a pattern that might not match.
     """
     from collections import Counter
 
-    from .accounts import opportunity_shapes
+    from .accounts import opportunity_shapes, stage_from_meta
 
+    stages: Counter = Counter()
     labels: Counter = Counter()
     values: dict[str, Counter] = {}
-    segments: dict[int, Counter] = {}
     widths: Counter = Counter()
     total = 0
+    stageless = 0
 
     for scan in scans:
         try:
@@ -1121,8 +1105,13 @@ def _survey_opportunity_shape(config: Config, vault: Vault, scans, paint) -> Non
             total += 1
             if meta:
                 widths[len(meta)] += 1
-                for index, part in enumerate(meta):
-                    segments.setdefault(index, Counter())[part or "(empty)"] += 1
+                stage = stage_from_meta(" | ".join(meta))
+                if stage:
+                    stages[stage] += 1
+                else:
+                    stageless += 1
+            else:
+                stageless += 1
             for label, value in fields:
                 labels[label] += 1
                 values.setdefault(label, Counter())[value or "(empty)"] += 1
@@ -1130,24 +1119,31 @@ def _survey_opportunity_shape(config: Config, vault: Vault, scans, paint) -> Non
     if not total:
         return
 
-    print(paint("Where a stage might live", BOLD))
-    if widths:
-        shape = ", ".join(f"{count} with {width} segments" for width, count in widths.most_common())
-        print(paint(f"  pipe-delimited meta line: {shape}", DIM))
-        for index in sorted(segments):
-            counts = segments[index]
-            if any(_LOOKS_LIKE_MONEY.search(value) for value in counts):
-                print(paint(f"  segment {index}: looks like an amount, not printed", DIM))
-            elif len(counts) <= CATEGORY_LIMIT:
-                shown = ", ".join(f"{v} ({n})" for v, n in counts.most_common())
-                print(f"  segment {index}: {shown}")
+    print(paint("Opportunity meta line", BOLD))
+    shape = ", ".join(f"{count} with {width} elements" for width, count in widths.most_common())
+    print(paint(f"  {total} opportunities. {shape or 'none carry a meta line'}", DIM))
+    print(paint("  stage, value, expected close, probability. Only the stage is shown:", DIM))
+    print(paint("  the second element is a dollar amount.", DIM))
+
+    if stages:
+        closed = {value.strip().casefold() for value in config.accounts.closed_stages}
+        for value, count in sorted(stages.items(), key=lambda pair: (-pair[1], pair[0])):
+            if _LOOKS_LIKE_MONEY.search(value):
+                mark = paint("looks like an amount, not printed", DIM)
+                value = "(withheld)"
+            elif value.strip().casefold() in closed:
+                mark = paint("counts as finished", DIM)
             else:
-                print(paint(f"  segment {index}: {len(counts)} distinct values, not a category", DIM))
-    else:
-        print(paint("  no pipe-delimited meta line on any opportunity.", DIM))
+                mark = paint("counts as live", TEAL)
+            print(f"  {count:>3}  {value:<28} {mark}")
+    if stageless:
+        print(paint(f"  {stageless} with no stage in first position", YELLOW))
+    if not config.accounts.closed_stages and stages:
+        print(paint("  accounts.closed_stages is empty, so every opportunity counts as live.", YELLOW))
+        print(paint("  Put the finished stages in it and the rest still count.", YELLOW))
 
     if labels:
-        print(paint(f"  labelled fields across {total} opportunities:", DIM))
+        print(paint(f"  labelled fields as well:", DIM))
         for label, count in labels.most_common():
             counts = values[label]
             if any(_LOOKS_LIKE_MONEY.search(value) for value in counts):
@@ -1157,8 +1153,6 @@ def _survey_opportunity_shape(config: Config, vault: Vault, scans, paint) -> Non
                 print(f"  {count:>3}  {label:<20} {shown}")
             else:
                 print(paint(f"  {count:>3}  {label:<20} {len(counts)} distinct, not a category", DIM))
-    else:
-        print(paint("  no labelled fields under any opportunity either.", DIM))
     print()
 
 

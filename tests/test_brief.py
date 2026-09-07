@@ -47,7 +47,7 @@ def accounts():
         quiet_after_days=21,
         skip_statuses=("UNCONFIRMED",),
         tier_order=("Tier 1", "Tier 2", "Tier 3"),
-        open_stages=("Qualifying", "Proposal"),
+        closed_stages=("Closed Won", "Closed Lost"),
     )
 
 
@@ -196,14 +196,14 @@ def test_an_open_deal_going_quiet_gets_its_own_bucket(accounts, brief_config):
 
 
 def test_a_closed_deal_is_not_a_deal(accounts, brief_config):
-    """The whole point of accounts.open_stages, if closed rows stay in the export."""
+    """The whole point of accounts.closed_stages: won and lost rows stay in the export."""
     scans = [scan("Won It Already", days=40, stages=("Closed Won",))]
     seen = {"Won It Already": date(2026, 8, 1)}
     result, _ = make(scans, accounts, brief_config, seen=seen)
     assert result.deals == ()
 
 
-def test_with_no_open_stages_configured_every_opportunity_counts(brief_config):
+def test_with_no_closed_stages_configured_every_opportunity_counts(brief_config):
     plain = AccountsConfig(quiet_after_days=21)
     scans = [scan("Has Something", days=40, stages=("Closed Lost",))]
     result, _ = build(
@@ -445,16 +445,126 @@ def test_an_opportunity_with_no_meta_line_still_reports_its_fields():
         ("118,225.18", True),
         ("9400.00", True),
         ("£12,000", True),
-        ("2026-Q4", False),
+        ("40000", True),        # the real export writes it bare, with no symbol
+        ("2026-Q4", True),      # over-suppressed, and that is the safe direction
         ("Open", False),
+        ("Proposal", False),
         ("Closed Won", False),
+        ("Verbal Commit", False),
         ("WF20H", False),
     ],
 )
 def test_the_survey_never_prints_an_amount(value, hidden):
-    """Pricing is the one thing that must not reach a terminal that gets
-    screenshotted, and cardinality alone would not catch a column where every
-    deal carries the same figure."""
+    """Pricing must not reach a terminal that gets screenshotted.
+
+    Cardinality alone would not catch a column where every deal carries the
+    same figure, and the operator's export writes the value as a bare integer
+    with no currency symbol, which an earlier pattern missed entirely. A bare
+    four digit number is withheld even when it is a year: the cost of being
+    wrong that way is a line reading "not printed", and the cost of being wrong
+    the other way is a customer's quote in a screenshot.
+    """
     from ranger.cli import _LOOKS_LIKE_MONEY
 
     assert bool(_LOOKS_LIKE_MONEY.search(value)) is hidden
+
+
+@pytest.mark.parametrize(
+    "line, expected",
+    [
+        ("Proposal | 40000 | Q1 2026 | 60 probability", "Proposal"),
+        ("Closed Won | 12000", "Closed Won"),
+        ("Verbal Commit | 40000", "Verbal Commit"),
+        ("Proposal", "Proposal"),
+        # Any of the four may be absent, and then something else slides into
+        # first place. None of these is a stage.
+        ("40000 | Q1 2026 | 60 probability", ""),
+        ("$40,000 | Q1 2026", ""),
+        ("Q1 2026 | 60 probability", ""),
+        ("60 probability", ""),
+        ("2026-01-15", ""),
+        ("Jan 2026", ""),
+        ("40k | Q1", ""),
+        ("", ""),
+    ],
+)
+def test_the_stage_is_the_first_element_only_when_there_is_one(line, expected):
+    """build_vault.py writes stage, value, expected close, probability.
+
+    Position past the first cannot be relied on, because an absent element
+    shortens the line rather than leaving a gap.
+    """
+    from ranger.accounts import stage_from_meta
+
+    assert stage_from_meta(line) == expected
+
+
+def test_an_opportunity_stage_comes_off_the_meta_line():
+    from ranger.accounts import scan_note
+
+    note = """\
+- **Tier:** 1
+
+## Opportunities
+### Wexxar Case Sealers (5 Units)
+Proposal | 40000 | Q1 2026 | 60 probability
+- **Owner:** Chris
+
+### Tape award
+Closed Lost | 9400
+
+### Something vague
+40000 | Q1 2026
+
+## Activity
+### 2026-09-01 | Call | Rod
+"""
+    scanned = scan_note(note, "Illes Foods", Path("Illes Foods.md"))
+    assert scanned.opportunity_stages == ("Proposal", "Closed Lost", "")
+
+
+def test_a_hand_written_stage_label_still_counts():
+    """The export uses a meta line. A note written by a person may not."""
+    from ranger.accounts import scan_note
+
+    note = "## Opportunities\n### Hand written\n- **Stage:** Qualifying\n"
+    assert scan_note(note, "X", Path("X.md")).opportunity_stages == ("Qualifying",)
+
+
+def test_a_stage_nobody_has_configured_counts_as_live(brief_config):
+    """The direction of the failure matters more than the failure.
+
+    A stage added to the CRM later must not make a live deal disappear from the
+    brief with nothing to show for it. It shows up wrongly instead, which is
+    visible and correctable.
+    """
+    accounts = AccountsConfig(quiet_after_days=21, closed_stages=("Closed Won", "Closed Lost"))
+    scans = [scan("New Stage", days=40, stages=("Negotiation",))]
+    result, _ = build(
+        scans,
+        accounts=accounts,
+        brief=brief_config,
+        as_of=TODAY,
+        seen={"New Stage": date(2026, 8, 1)},
+    )
+    assert [line.account for line in result.deals] == ["New Stage"]
+
+
+def test_an_opportunity_with_no_stage_at_all_counts_as_live(brief_config):
+    accounts = AccountsConfig(quiet_after_days=21, closed_stages=("Closed Won",))
+    scans = [scan("Stageless", days=40, stages=("",))]
+    result, _ = build(
+        scans,
+        accounts=accounts,
+        brief=brief_config,
+        as_of=TODAY,
+        seen={"Stageless": date(2026, 8, 1)},
+    )
+    assert [line.account for line in result.deals] == ["Stageless"]
+
+
+def test_open_stages_is_retired_with_an_explanation():
+    from ranger.config import RETIRED_KEYS
+
+    assert "accounts.open_stages" in RETIRED_KEYS
+    assert "closed_stages" in RETIRED_KEYS["accounts.open_stages"]
