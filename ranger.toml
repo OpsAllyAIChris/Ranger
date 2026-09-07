@@ -7,7 +7,7 @@
 # The provider seam. "anthropic" is the only implementation today.
 provider = "anthropic"
 # Never hardcoded anywhere in the source. Change it here.
-name = "claude-opus-5"
+name = "claude-sonnet-5"
 # Adaptive thinking is on by default on current models and its tokens count
 # against this, so leave headroom. Ranger's spoken replies are short; drafts
 # are not.
@@ -34,7 +34,7 @@ history_turns = 24
 # Point this at the Obsidian vault. Ranger reads the whole vault and writes
 # only under <root>/<ranger>. Override at runtime with RANGER_VAULT_ROOT.
 # The 2TB external drive is a valid location; nothing assumes $HOME.
-root = "~/Obsidian/Vault"
+root = "~/Obsidian/Ranger-Vault"
 
 # Read only. Ranger never writes to these.
 accounts = "Accounts"
