@@ -124,6 +124,17 @@ dependency.
 
 ## Configuration
 
+**The operator's settings go in `ranger.local.toml`, which is git-ignored.**
+`ranger.toml` is tracked and changes as Ranger is built, so anything the
+operator set there conflicted on every pull and they lost their voice id
+repeatedly. The local file overrides the tracked one key by key, one level deep,
+so setting `tts.voice_id` does not discard the rest of `[tts]`. Overrides are
+listed by `ranger doctor` so they are visible rather than magic, and the
+unknown-key check runs on the merged result, so a typo in the local file is
+caught with the same did-you-mean. Never add a setting to `ranger.toml` that
+the operator is expected to fill in: give it an empty default there and tell
+them to override it.
+
 Every table's keys are checked against `KNOWN_KEYS` at startup and an unknown
 one is refused, with a pointer to the right table when the name exists
 elsewhere. This is not tidiness: a dead `voice_id` sat in `[voice]` while the

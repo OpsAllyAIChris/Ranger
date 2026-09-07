@@ -208,3 +208,94 @@ def test_relative_env_override_is_rejected_too(config_file, monkeypatch):
     monkeypatch.setenv("RANGER_VAULT_ROOT", "some/relative/vault")
     with pytest.raises(ConfigError, match="RANGER_VAULT_ROOT"):
         load_config(config_file(), load_env=False)
+
+
+# --- ranger.local.toml ----------------------------------------------------
+#
+# ranger.toml is tracked and changes as Ranger is built, so the operator
+# editing it means a merge conflict on every pull. Their settings go in a
+# git-ignored file beside it that overrides key by key.
+
+
+def local_beside(config_file, body: str):
+    path = config_file()
+    (path.parent / (path.stem + ".local.toml")).write_text(body, encoding="utf-8")
+    return path
+
+
+def test_the_local_file_overrides_one_key(config_file):
+    path = local_beside(config_file, '[tts]\nvoice_id = "iP95p4xOKvK53GoZ742B"\n')
+    loaded = load_config(path, load_env=False)
+
+    assert loaded.tts.voice_id == "iP95p4xOKvK53GoZ742B"
+    assert loaded.overrides == ("tts.voice_id",)
+    assert loaded.local_path is not None
+
+
+def test_overriding_one_key_keeps_the_rest_of_the_section(config_file):
+    """Setting tts.voice_id must not discard tts.model_id."""
+    path = local_beside(config_file, '[tts]\nvoice_id = "abc"\n')
+    loaded = load_config(path, load_env=False)
+
+    assert loaded.tts.voice_id == "abc"
+    assert loaded.tts.model_id == "eleven_flash_v2_5"
+    assert loaded.tts.output_format == "pcm_24000"
+
+
+def test_several_sections_can_be_overridden(config_file):
+    path = local_beside(
+        config_file,
+        '[tts]\nvoice_id = "abc"\n\n[voice]\ninput_device = "C920"\n\n[model]\neffort = "high"\n',
+    )
+    loaded = load_config(path, load_env=False)
+
+    assert loaded.tts.voice_id == "abc"
+    assert loaded.voice.input_device == "C920"
+    assert loaded.model.effort == "high"
+    assert set(loaded.overrides) == {"tts.voice_id", "voice.input_device", "model.effort"}
+
+
+def test_no_local_file_is_the_normal_case(config_file):
+    loaded = load_config(config_file(), load_env=False)
+    assert loaded.local_path is None and loaded.overrides == ()
+
+
+def test_a_typo_in_the_local_file_is_caught_too(config_file):
+    path = local_beside(config_file, '[tts]\nvoyce_id = "abc"\n')
+    with pytest.raises(ConfigError, match="tts.voyce_id"):
+        load_config(path, load_env=False)
+
+
+def test_a_setting_in_the_wrong_section_locally_still_points_at_the_right_one(config_file):
+    path = local_beside(config_file, '[voice]\nvoice_id = "abc"\n')
+    with pytest.raises(ConfigError, match="Did you mean tts.voice_id"):
+        load_config(path, load_env=False)
+
+
+def test_a_broken_local_file_names_itself(config_file):
+    path = local_beside(config_file, "[tts\nvoice_id =\n")
+    with pytest.raises(ConfigError, match=r"local\.toml is not valid TOML"):
+        load_config(path, load_env=False)
+
+
+def test_the_local_file_can_move_the_vault(config_file, tmp_path):
+    """The whole point: the operator's own paths, kept out of the tracked file."""
+    other = tmp_path / "Elsewhere" / "Vault"
+    other.mkdir(parents=True)
+    path = local_beside(config_file, f"[vault]\nroot = '{other.as_posix()}'\n")
+    loaded = load_config(path, load_env=False)
+
+    assert loaded.vault.root == other.resolve()
+    assert loaded.vault.drafts == (other / "Ranger" / "drafts").resolve()
+
+
+def test_an_env_override_still_beats_the_local_file(config_file, tmp_path, monkeypatch):
+    """RANGER_VAULT_ROOT stays the last word, as it was before."""
+    local_root = tmp_path / "FromLocal"
+    env_root = tmp_path / "FromEnv"
+    for folder in (local_root, env_root):
+        folder.mkdir()
+    path = local_beside(config_file, f"[vault]\nroot = '{local_root.as_posix()}'\n")
+    monkeypatch.setenv("RANGER_VAULT_ROOT", str(env_root))
+
+    assert load_config(path, load_env=False).vault.root == env_root.resolve()

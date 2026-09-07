@@ -16,8 +16,9 @@ macOS and Linux:
 python3 -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
 
-cp .env.example .env          # add your ANTHROPIC_API_KEY
-$EDITOR ranger.toml           # set vault.root, check the hours
+cp .env.example .env                          # add your ANTHROPIC_API_KEY
+cp ranger.local.toml.example ranger.local.toml # your settings, git-ignored
+$EDITOR ranger.local.toml                      # vault.root, voice, devices
 ```
 
 Windows PowerShell:
@@ -33,9 +34,17 @@ python -m venv .venv
 
 pip install -e ".[dev]"
 
-Copy-Item .env.example .env   # add your ANTHROPIC_API_KEY
-notepad ranger.toml           # set vault.root, check the hours
+Copy-Item .env.example .env
+Copy-Item ranger.local.toml.example ranger.local.toml
+notepad .env                  # add your ANTHROPIC_API_KEY
+notepad ranger.local.toml     # your voice, your devices. Git-ignored
 ```
+
+**Put your own settings in `ranger.local.toml`, not `ranger.toml`.**
+`ranger.toml` is tracked and changes as Ranger is built, so editing it means a
+merge conflict on every pull. The local file is git-ignored and overrides the
+tracked one key by key; the rest of each section still comes from `ranger.toml`.
+`ranger doctor` lists which values it overrode.
 
 `vault.root` is written as `~/Obsidian/Ranger-Vault` and expands correctly on
 Windows too, to `C:\Users\<you>\Obsidian\Ranger-Vault`.

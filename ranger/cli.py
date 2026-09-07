@@ -63,9 +63,16 @@ def _build_agent(config: Config) -> Ranger:
 
 def _describe_config(config: Config) -> str:
     schedule = config.schedule
+    local = (
+        f"{config.local_path}  ({len(config.overrides)} override"
+        f"{'' if len(config.overrides) == 1 else 's'})"
+        if config.local_path
+        else "none, so every setting comes from the tracked file"
+    )
     return "\n".join(
         [
             f"  config file      {config.source_path}",
+            f"  local overrides  {local}",
             f"  model            {config.model.name} via {config.model.provider}",
             f"  max tokens       {config.model.max_tokens}, effort {config.model.effort or 'unset'}",
             f"  vault root       {config.vault.root}",
@@ -73,6 +80,7 @@ def _describe_config(config: Config) -> str:
             f"  quiet hours      {schedule.quiet_start_hour:02d}:00 to {schedule.quiet_end_hour:02d}:00",
             f"  quiet after      {config.accounts.quiet_after_days} days",
             f"  knowledge budget {config.knowledge.budget_chars} chars",
+            *(f"    {key}" for key in config.overrides),
         ]
     )
 
@@ -140,7 +148,8 @@ async def voice_loop(config: Config, show_state: bool) -> int:
         return 1
 
     if not config.tts.voice_id:
-        print(paint("  tts.voice_id is not set. Run 'ranger voices' and pick one.", RED), file=sys.stderr)
+        print(paint("  tts.voice_id is not set. Run 'ranger voices', then put the id in", RED), file=sys.stderr)
+        print(paint(f"  {_local_config_path(config)}, which is git-ignored.", RED), file=sys.stderr)
         return 1
 
     try:
@@ -259,6 +268,12 @@ def cmd_doctor(config: Config) -> int:
     print(
         f"  ok       morning surface at {schedule.morning_hour:02d}:00 sits outside quiet hours"
     )
+
+    if config.tts.voice_id:
+        print("  ok       tts.voice_id is set")
+    else:
+        print("  todo     tts.voice_id is not set. Run 'ranger voices', then put the id in")
+        print(f"           {_local_config_path(config)}, which is git-ignored and survives a pull.")
 
     if not config.vault.root.is_dir():
         problems += 1
@@ -436,6 +451,15 @@ def _keyterm_plan(config: Config):
     )
 
 
+def _local_config_path(config: Config) -> Path:
+    from .config import LOCAL_SUFFIX
+
+    if config.local_path:
+        return config.local_path
+    source = config.source_path or Path("ranger.toml")
+    return source.with_name(source.stem + LOCAL_SUFFIX)
+
+
 def cmd_memory(config: Config, args) -> int:
     """Tier 4. What is remembered, and how much of the budget it is using."""
     from .memory import load_memory
@@ -538,7 +562,13 @@ def cmd_voices(config: Config, args) -> int:
         marker = "  <- tts.voice_id" if voice.voice_id == config.tts.voice_id else ""
         print(f"  {voice.voice_id}  {voice.name:<18} {paint(voice.describe(), DIM)}{marker}")
     print()
-    print("  Copy an id into tts.voice_id in ranger.toml, then:")
+    print(f"  Put the id in {_local_config_path(config)}, which is git-ignored so it")
+    print("  survives every pull:")
+    print()
+    print("    [tts]")
+    print('    voice_id = "<the id above>"')
+    print()
+    print("  then:")
     print('    ranger say "Rod owes you confirmed volumes before you can price the changeover."')
     return 0
 

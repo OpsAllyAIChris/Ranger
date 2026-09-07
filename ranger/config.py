@@ -18,6 +18,12 @@ from dotenv import load_dotenv
 
 DEFAULT_CONFIG_FILENAME = "ranger.toml"
 
+#: Settings that are the operator's rather than the project's live here, beside
+#: the tracked config and git-ignored. ranger.toml carries the defaults and gets
+#: edited by whoever is working on Ranger; this file carries the voice id, the
+#: microphone, and anything else that should survive a pull.
+LOCAL_SUFFIX = ".local.toml"
+
 
 class ConfigError(Exception):
     """Raised at startup when the config cannot be trusted."""
@@ -188,6 +194,32 @@ class ServerConfig:
     port: int
 
 
+def _merge_tables(base: dict[str, Any], override: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
+    """Overlay the local file, key by key, and report what it changed.
+
+    Only one level deep, because the config is sections of flat keys. Setting
+    tts.voice_id locally must not discard the rest of [tts].
+    """
+    merged = {section: dict(values) if isinstance(values, dict) else values
+              for section, values in base.items()}
+    changed: list[str] = []
+
+    for section, values in override.items():
+        if not isinstance(values, dict):
+            merged[section] = values
+            changed.append(section)
+            continue
+        target = merged.setdefault(section, {})
+        if not isinstance(target, dict):
+            merged[section] = dict(values)
+            changed.extend(f"{section}.{key}" for key in values)
+            continue
+        for key, value in values.items():
+            target[key] = value
+            changed.append(f"{section}.{key}")
+    return merged, changed
+
+
 @dataclass(frozen=True)
 class Config:
     model: ModelConfig
@@ -204,6 +236,10 @@ class Config:
     tts: TtsConfig
     server: ServerConfig
     source_path: Path | None = None
+    local_path: Path | None = None
+    #: "section.key" for every value the local file overrode, so an override is
+    #: visible rather than magic.
+    overrides: tuple[str, ...] = field(default_factory=tuple)
     warnings: tuple[str, ...] = field(default_factory=tuple)
 
 
@@ -427,6 +463,23 @@ def _validate_schedule(schedule: ScheduleConfig) -> None:
         )
 
 
+def _read_toml(path: Path) -> tuple[dict[str, Any], list[str]]:
+    raw = path.read_text(encoding="utf-8")
+    repaired, notes = _repair_windows_paths(raw)
+    try:
+        return tomllib.loads(repaired), notes
+    except tomllib.TOMLDecodeError as exc:
+        hint = ""
+        if "\\" in raw:
+            hint = (
+                "\n\nThere are backslashes in this file. Inside a double-quoted TOML "
+                "string a backslash starts an escape sequence, so a Windows path has to "
+                "be written with single quotes (root = 'C:\\Users\\you\\Vault') or with "
+                "forward slashes, which work fine on Windows."
+            )
+        raise ConfigError(f"{path} is not valid TOML: {exc}{hint}") from exc
+
+
 def load_config(path: str | Path | None = None, *, load_env: bool = True) -> Config:
     """Read, validate and freeze the configuration.
 
@@ -444,20 +497,14 @@ def load_config(path: str | Path | None = None, *, load_env: bool = True) -> Con
             "or set RANGER_CONFIG."
         )
 
-    raw = config_path.read_text(encoding="utf-8")
-    repaired, path_notes = _repair_windows_paths(raw)
-    try:
-        table = tomllib.loads(repaired)
-    except tomllib.TOMLDecodeError as exc:
-        hint = ""
-        if "\\" in raw:
-            hint = (
-                "\n\nThere are backslashes in this file. Inside a double-quoted TOML "
-                "string a backslash starts an escape sequence, so a Windows path has to "
-                "be written with single quotes (root = 'C:\\Users\\you\\Vault') or with "
-                "forward slashes, which work fine on Windows."
-            )
-        raise ConfigError(f"{config_path} is not valid TOML: {exc}{hint}") from exc
+    table, path_notes = _read_toml(config_path)
+
+    local_path = config_path.with_name(config_path.stem + LOCAL_SUFFIX)
+    overrides: list[str] = []
+    if local_path.is_file():
+        local_table, local_notes = _read_toml(local_path)
+        path_notes.extend(local_notes)
+        table, overrides = _merge_tables(table, local_table)
 
     _check_known_keys(table)
 
@@ -634,6 +681,8 @@ def load_config(path: str | Path | None = None, *, load_env: bool = True) -> Con
         tts=tts,
         server=server,
         source_path=config_path,
+        local_path=local_path if local_path.is_file() else None,
+        overrides=tuple(overrides),
         warnings=tuple(warnings),
     )
 

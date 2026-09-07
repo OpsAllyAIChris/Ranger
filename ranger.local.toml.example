@@ -1,0 +1,25 @@
+# Copy this to ranger.local.toml, which is git-ignored.
+#
+# ranger.toml is tracked and gets edited as Ranger is built, so anything you
+# set there is a merge conflict waiting for the next pull. Put your own
+# settings here instead. They override the tracked file key by key, so the rest
+# of each section still comes from ranger.toml.
+#
+# Secrets do not belong here either; those live in .env.
+
+[tts]
+# From 'ranger voices'.
+voice_id = ""
+
+[voice]
+# Part of a device name, from 'ranger audio devices'. Empty means the Windows
+# default.
+# input_device = "C920"
+# output_device = ""
+
+# Anything in ranger.toml can be overridden the same way, for example:
+# [model]
+# effort = "medium"
+#
+# [stt]
+# max_hints = 40
