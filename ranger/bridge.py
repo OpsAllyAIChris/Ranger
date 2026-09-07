@@ -31,6 +31,7 @@ TURN = "turn"
 DECISION = "decision"
 PANEL = "panel"
 DISMISS = "dismiss"
+STOP = "stop"
 
 #: How many tool calls the panel remembers. Enough to see what just happened,
 #: not a second audit log: the real one is in the vault and is append only.
@@ -100,6 +101,10 @@ class Session:
             return self.push_panel()
         if kind == DISMISS:
             return self._dismiss(message)
+        if kind == STOP:
+            if not self.stop():
+                self.emit("error", message="nothing was running")
+            return
         self.emit("error", message=f"unknown message type {kind!r}")
 
     def _start_turn(self, message: dict[str, Any]) -> None:
@@ -107,14 +112,29 @@ class Session:
         if not text:
             self.emit("error", message="an empty turn has nothing to answer")
             return
+
         if self.busy:
-            # Sequential on purpose. Interrupting a turn is barge-in, which
-            # needs cancellation in the core and belongs to 7d.
-            self.emit("error", message="still working on the last one")
-            return
+            if not bool(message.get("interrupt", False)):
+                self.emit("error", message="still working on the last one")
+                return
+            # Barge-in. The operator is talking over Ranger, so what Ranger was
+            # saying stops mattering. The core keeps what it managed to say, so
+            # "no, not that one" still has something to refer to.
+            self.stop("interrupted")
 
         self.busy = True
         self._turn = asyncio.create_task(self._run(text))
+
+    def stop(self, why: str = "stopped") -> bool:
+        """Cut the turn in flight. False if there was nothing to cut."""
+        if self._turn is None or self._turn.done():
+            return False
+        self._turn.cancel()
+        self._turn = None
+        self.busy = False
+        self.emit("stopped", reason=why)
+        self.emit("state", state=State.IDLE.value)
+        return True
 
     def _decide(self, message: dict[str, Any]) -> None:
         """A click on a confirmation card.
@@ -155,14 +175,21 @@ class Session:
                     self._remember_tool(event)
                 self.send(event.as_dict())
         except asyncio.CancelledError:
+            # Barge-in, and the replacement turn is already starting. Emitting
+            # idle or done here would tell the front end the new turn had
+            # finished before it began.
             raise
         except Exception as exc:  # a failed turn is an event, not a dead socket
             self.emit("error", message=f"{type(exc).__name__}: {exc}")
-        finally:
-            self.busy = False
-            self.emit("state", state=State.IDLE.value)
-            self.push_panel()
-            self.emit("done")
+            self._finish()
+        else:
+            self._finish()
+
+    def _finish(self) -> None:
+        self.busy = False
+        self.emit("state", state=State.IDLE.value)
+        self.push_panel()
+        self.emit("done")
 
     def _remember_tool(self, event: Any) -> None:
         self.tools.insert(0, {"name": event.name, "ok": event.ok, "summary": event.summary})

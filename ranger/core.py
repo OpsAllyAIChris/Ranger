@@ -11,6 +11,8 @@ any of them. If you find yourself writing some, stop and put it here.
 
 from __future__ import annotations
 
+import asyncio
+
 from datetime import datetime
 from typing import Any, AsyncIterator
 
@@ -151,7 +153,56 @@ class Ranger:
         """Take one turn of input, yield the reply as it streams.
 
         Every caller in this project goes through here.
+
+        Cancelling the task consuming this is barge-in, and it has to leave a
+        transcript the next turn can use. The checkpoint is taken here rather
+        than inside, because a turn stopped mid tool round has an assistant
+        message holding a tool_use that will never get its tool_result, and the
+        API rejects the whole conversation from then on. So an interrupted turn
+        rewinds to before it started and is replayed as what was actually said:
+        the operator's words, and whatever Ranger managed to say back.
         """
+        checkpoint = list(self.messages)
+        said: list[str] = []
+        stream = self._run_turn(user_input)
+        try:
+            async for event in stream:
+                if isinstance(event, TextDelta):
+                    said.append(event.text)
+                yield event
+        except asyncio.CancelledError:
+            try:
+                await stream.aclose()
+            except (asyncio.CancelledError, RuntimeError):
+                pass
+            self._interrupted(checkpoint, user_input, "".join(said))
+            raise
+        except GeneratorExit:
+            # A caller that breaks out of the loop rather than cancelling the
+            # task. Same damage to the transcript, same repair. Nothing may be
+            # awaited here, and nothing needs to be.
+            self._interrupted(checkpoint, user_input, "".join(said))
+            raise
+
+    def _interrupted(self, checkpoint: list, user_input: str, said: str) -> None:
+        """Put the transcript back into a state the next turn can build on.
+
+        Not a rollback to nothing: the model said part of a reply and the
+        operator talked over it, so "no, not that one" has to make sense. What
+        is dropped is any half-finished tool round, which is the only part that
+        cannot survive.
+        """
+        self.messages = list(checkpoint)
+        text = user_input.strip()
+        if text:
+            self.messages.append({"role": "user", "content": text})
+        if said.strip():
+            self.messages.append({"role": "assistant", "content": said.strip()})
+        self._trim_history()
+        self._state = State.IDLE
+        self._log("interrupted", (said.strip() or "(said nothing yet)")[:200])
+
+    async def _run_turn(self, user_input: str) -> AsyncIterator[Event]:
         text = user_input.strip()
         if not text:
             yield Notice("info", "empty input, nothing to do")

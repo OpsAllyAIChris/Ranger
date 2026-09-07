@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -1067,12 +1068,98 @@ def cmd_accounts_survey(config: Config, args: Any) -> int:
             print(paint("  open. Put the live stages in it and the rest are ignored.", YELLOW))
     print()
 
+    _survey_opportunity_shape(config, vault, scans, paint)
+
     counted = sum(1 for scan in scans if not scan.unconfirmed)
     print(paint(f"{counted} notes count toward the morning brief, "
                 f"{len(scans) - counted} are UNCONFIRMED and set aside", DIM))
     for error in errors:
         print(paint(f"  unreadable: {error}", YELLOW), file=sys.stderr)
     return 0
+
+
+#: A field with more distinct values than this is content, not a category, so
+#: the survey counts it and does not print it. Amounts, dates and free text all
+#: fall on that side; a stage or a status does not.
+CATEGORY_LIMIT = 12
+
+#: Even a low cardinality field is not printed if it looks like money or a long
+#: number. In the operator's real export quote amounts vary and would be
+#: suppressed by cardinality alone, but a column where every deal happens to
+#: carry the same figure would not be, and pricing is the one thing they have
+#: said twice must never leave the vault.
+_LOOKS_LIKE_MONEY = re.compile(r"[$£€]|\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+\.\d{2}\b")
+
+
+def _survey_opportunity_shape(config: Config, vault: Vault, scans, paint) -> None:
+    """Where a stage actually lives, when `- **Stage:**` is not it.
+
+    The operator's export carries 45 opportunities and not one Stage line, so
+    the brief cannot tell a live deal from a closed one. This reports the field
+    labels and the pipe-delimited meta line that are really there.
+
+    It prints values only for fields with few enough distinct ones to be a
+    category. Anything with more is a quote amount or a date or a customer's
+    words, and none of those belong on a terminal that gets screenshotted.
+    """
+    from collections import Counter
+
+    from .accounts import opportunity_shapes
+
+    labels: Counter = Counter()
+    values: dict[str, Counter] = {}
+    segments: dict[int, Counter] = {}
+    widths: Counter = Counter()
+    total = 0
+
+    for scan in scans:
+        try:
+            text = vault.read_text(scan.path)
+        except Exception:
+            continue
+        for meta, fields in opportunity_shapes(text):
+            total += 1
+            if meta:
+                widths[len(meta)] += 1
+                for index, part in enumerate(meta):
+                    segments.setdefault(index, Counter())[part or "(empty)"] += 1
+            for label, value in fields:
+                labels[label] += 1
+                values.setdefault(label, Counter())[value or "(empty)"] += 1
+
+    if not total:
+        return
+
+    print(paint("Where a stage might live", BOLD))
+    if widths:
+        shape = ", ".join(f"{count} with {width} segments" for width, count in widths.most_common())
+        print(paint(f"  pipe-delimited meta line: {shape}", DIM))
+        for index in sorted(segments):
+            counts = segments[index]
+            if any(_LOOKS_LIKE_MONEY.search(value) for value in counts):
+                print(paint(f"  segment {index}: looks like an amount, not printed", DIM))
+            elif len(counts) <= CATEGORY_LIMIT:
+                shown = ", ".join(f"{v} ({n})" for v, n in counts.most_common())
+                print(f"  segment {index}: {shown}")
+            else:
+                print(paint(f"  segment {index}: {len(counts)} distinct values, not a category", DIM))
+    else:
+        print(paint("  no pipe-delimited meta line on any opportunity.", DIM))
+
+    if labels:
+        print(paint(f"  labelled fields across {total} opportunities:", DIM))
+        for label, count in labels.most_common():
+            counts = values[label]
+            if any(_LOOKS_LIKE_MONEY.search(value) for value in counts):
+                print(paint(f"  {count:>3}  {label:<20} looks like an amount, not printed", DIM))
+            elif len(counts) <= CATEGORY_LIMIT:
+                shown = ", ".join(f"{v} ({n})" for v, n in counts.most_common())
+                print(f"  {count:>3}  {label:<20} {shown}")
+            else:
+                print(paint(f"  {count:>3}  {label:<20} {len(counts)} distinct, not a category", DIM))
+    else:
+        print(paint("  no labelled fields under any opportunity either.", DIM))
+    print()
 
 
 def cmd_ui(config: Config, args: Any) -> int:

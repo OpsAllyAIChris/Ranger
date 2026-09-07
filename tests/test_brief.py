@@ -395,3 +395,66 @@ def test_the_first_brief_does_not_claim_forty_accounts_just_crossed(accounts, br
     later, _ = make(scans, accounts, brief_config, seen=seen, as_of=tomorrow)
     assert [line.account for line in later.slipping] == ["Crossed Overnight"]
     assert not later.first_run
+
+
+# -- finding where a stage lives -------------------------------------------
+
+
+def test_an_opportunity_gives_up_its_meta_line_and_its_fields():
+    """The operator's export has 45 opportunities and no Stage line at all.
+
+    The survey has to report the shape that is really there, because the
+    export's schema is not written down anywhere this repository can see.
+    """
+    from ranger.accounts import opportunity_shapes
+
+    note = """\
+## Opportunities
+### Case erector replacement
+Open | $118,225.18 | 2026-Q4
+- **Owner:** Chris
+- **Product:** WF20H
+
+### Tape award
+Lost | $9,400.00 | 2025-Q3
+- **Owner:** Chris
+
+## Activity
+### 2026-09-01 | Call | Rod
+"""
+    shapes = opportunity_shapes(note)
+    assert len(shapes) == 2
+    meta, fields = shapes[0]
+    assert meta == ("Open", "$118,225.18", "2026-Q4")
+    assert ("Owner", "Chris") in fields
+    assert ("Product", "WF20H") in fields
+    assert shapes[1][0][0] == "Lost"
+
+
+def test_an_opportunity_with_no_meta_line_still_reports_its_fields():
+    from ranger.accounts import opportunity_shapes
+
+    shapes = opportunity_shapes("## Opportunities\n### Plain\n- **Owner:** Chris\n")
+    assert shapes == [((), (("Owner", "Chris"),))]
+
+
+@pytest.mark.parametrize(
+    "value, hidden",
+    [
+        ("$118,225.18", True),
+        ("118,225.18", True),
+        ("9400.00", True),
+        ("£12,000", True),
+        ("2026-Q4", False),
+        ("Open", False),
+        ("Closed Won", False),
+        ("WF20H", False),
+    ],
+)
+def test_the_survey_never_prints_an_amount(value, hidden):
+    """Pricing is the one thing that must not reach a terminal that gets
+    screenshotted, and cardinality alone would not catch a column where every
+    deal carries the same figure."""
+    from ranger.cli import _LOOKS_LIKE_MONEY
+
+    assert bool(_LOOKS_LIKE_MONEY.search(value)) is hidden

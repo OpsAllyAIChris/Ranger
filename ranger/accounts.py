@@ -165,6 +165,46 @@ def scan_opportunities(text: str) -> tuple[str, ...]:
     return tuple(stages)
 
 
+def opportunity_shapes(text: str) -> list[tuple[tuple[str, ...], tuple[tuple[str, str], ...]]]:
+    """The shape of every opportunity in a note, for the survey.
+
+    Returns the pipe-delimited meta line split into segments, and the labelled
+    fields under it. Shapes rather than content: this exists to find out where
+    a stage lives when `- **Stage:**` turns out not to be it, and the answer
+    has to come from the real notes because the export's schema is not
+    documented anywhere this repository can see.
+    """
+    section = _OPPS_SECTION.search(text)
+    if not section:
+        return []
+
+    body = section.group("body")
+    starts = [m.start() for m in _OPP_HEADING.finditer(body)]
+    shapes: list[tuple[tuple[str, ...], tuple[tuple[str, str], ...]]] = []
+    for index, start in enumerate(starts):
+        end = starts[index + 1] if index + 1 < len(starts) else len(body)
+        block = body[start:end]
+        lines = block.splitlines()[1:]  # past the ### heading itself
+
+        meta: tuple[str, ...] = ()
+        for line in lines:
+            stripped = line.strip()
+            if not stripped:
+                continue
+            if stripped.startswith("-") or stripped.startswith("#"):
+                break
+            if "|" in stripped:
+                meta = tuple(part.strip() for part in stripped.split("|"))
+            break
+
+        fields = tuple(
+            (m.group("label").strip(), m.group("value").strip())
+            for m in _METADATA_LINE.finditer(block)
+        )
+        shapes.append((meta, fields))
+    return shapes
+
+
 def parse_note(text: str, name: str, path: Path | None = None) -> AccountNote:
     """Full parse, for recall."""
     section_starts = [(m.start(), m.group("title")) for m in _SECTION.finditer(text)]

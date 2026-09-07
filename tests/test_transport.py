@@ -541,3 +541,119 @@ def test_the_terminal_still_gets_a_gate_that_can_ask(config, monkeypatch):
 
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key-not-used")
     assert isinstance(_build_agent(config).gate, TerminalGate)
+
+
+# ------------------------------------------------------------- barge-in
+
+
+class Slow:
+    """Streams like a real reply does, so a turn can be caught mid sentence."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def stream(self, *, system, messages, tools=None):
+        import asyncio
+
+        from ranger.provider import Completion, TextChunk
+
+        self.calls += 1
+        text = "Illes is quiet. " if self.calls == 1 else "The other one, then."
+        for word in text.split(" "):
+            yield TextChunk(word + " ")
+            await asyncio.sleep(0.25)
+        yield Completion(
+            stop_reason="end_turn", text=text, content=[{"type": "text", "text": text}]
+        )
+
+
+@pytest.fixture
+def slow(config):
+    """The same server, with a provider that does not finish instantly."""
+    from ranger.audit import AuditLog
+    from ranger.bridge import Session
+    from ranger.core import Ranger
+    from ranger.gate import SocketGate
+    from ranger.knowledge import KnowledgeLoader
+    from ranger.server import build
+    from ranger.toolset import build_registry
+    from ranger.vault import Vault
+
+    def factory(cfg, send):
+        vault = Vault(cfg.vault)
+        return Session(
+            agent=Ranger(
+                config=cfg,
+                provider=Slow(),
+                registry=build_registry(cfg, vault),
+                vault=vault,
+                knowledge_loader=KnowledgeLoader(vault, cfg.vault, cfg.knowledge),
+                gate=SocketGate(send),
+                audit=AuditLog(vault, cfg.vault.log),
+                origin="browser",
+            ),
+            send=send,
+        )
+
+    server = build(
+        replace(config, server=replace(config.server, port=0)), session_factory=factory
+    )
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield port
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+def test_a_second_turn_is_refused_unless_it_says_it_is_interrupting(slow):
+    client = Client(slow)
+    try:
+        client.until("state")
+        client.send({"type": "turn", "text": "where are we on Illes"})
+        client.send({"type": "turn", "text": "and Pegasus"})
+        assert "still working" in client.wait_for("error")["message"]
+    finally:
+        client.close()
+
+
+def test_barge_in_stops_the_turn_in_flight(slow):
+    """Talking over Ranger has to stop it, not queue behind it."""
+    client = Client(slow)
+    try:
+        client.until("state")
+        client.send({"type": "turn", "text": "where are we on Illes"})
+        client.wait_for("text")
+        client.send({"type": "turn", "text": "no, the other one", "interrupt": True})
+
+        stopped = client.wait_for("stopped")
+        assert stopped["reason"] == "interrupted"
+        # And the replacement turn runs rather than being swallowed with it.
+        client.until("done")
+    finally:
+        client.close()
+
+
+def test_stop_on_its_own_ends_the_turn(slow):
+    client = Client(slow)
+    try:
+        client.until("state")
+        client.send({"type": "turn", "text": "where are we on Illes"})
+        client.wait_for("text")
+        client.send({"type": "stop"})
+        assert client.wait_for("stopped")["reason"] == "stopped"
+    finally:
+        client.close()
+
+
+def test_stopping_nothing_says_so(served):
+    client = Client(served)
+    try:
+        client.until("state")
+        client.send({"type": "stop"})
+        assert "nothing was running" in client.wait_for("error")["message"]
+    finally:
+        client.close()

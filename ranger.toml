@@ -124,10 +124,16 @@ skip_statuses = ["UNCONFIRMED"]
 # code knows what a tier is called. Run 'ranger accounts survey' to see the
 # values actually in your vault, then list them here. Empty means tier does
 # not affect the morning brief's ranking.
-tier_order = []
+# From 'ranger accounts survey' on the real vault: bare numbers, plus
+# Historical. Ranked best first, so Historical sorts last among the known ones
+# and anything unrecognised sorts after that.
+tier_order = ["1", "2", "3", "4", "Historical"]
 # Which opportunity stages count as live. Empty means every opportunity counts,
 # which is wrong the moment closed deals stay in the CRM export. The survey
 # lists the stages actually present.
+# The survey found 45 opportunities and not one Stage line, so there is nothing
+# to filter on yet and every opportunity counts as open. Run the survey again
+# to see where the stage actually lives before setting this.
 open_stages = []
 
 [brief]

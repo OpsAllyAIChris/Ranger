@@ -244,3 +244,147 @@ async def test_a_failed_tool_round_rolls_back_to_before_the_turn(config):
     agent = Ranger(config=config, provider=DiesAfterTool(), registry=registry)
     await collect(agent, "look it up")
     assert agent.messages == []
+
+
+# -- barge-in ---------------------------------------------------------------
+
+
+async def test_an_interrupted_turn_leaves_a_transcript_the_next_turn_can_use(config):
+    """Tier 7d. Cancelling the task consuming turn() is barge-in.
+
+    The operator talked over Ranger, so "no, not that one" has to make sense
+    next turn: what was said stays. What cannot stay is a half-finished tool
+    round, because an assistant message holding a tool_use that never gets its
+    tool_result makes the API reject the whole conversation from then on.
+    """
+    import asyncio
+
+    from ranger.core import Ranger
+    from ranger.events import TextDelta
+    from ranger.provider import Completion, TextChunk
+
+    class Slow:
+        """Streams a few words, then hangs, the way a real reply does."""
+
+        async def stream(self, *, system, messages, tools=None):
+            yield TextChunk("Illes is quiet. ")
+            yield TextChunk("Rod has not ")
+            await asyncio.sleep(30)
+            yield Completion(stop_reason="end_turn", text="", content=[])
+
+    agent = Ranger(config=config, provider=Slow())
+
+    async def consume():
+        async for event in agent.turn("where are we on Illes"):
+            pass
+
+    task = asyncio.create_task(consume())
+    await asyncio.sleep(0.05)
+    task.cancel()  # exactly what the bridge does when a new turn arrives
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    roles = [message["role"] for message in agent.messages]
+    assert roles == ["user", "assistant"]
+    assert agent.messages[0]["content"] == "where are we on Illes"
+    assert agent.messages[1]["content"] == "Illes is quiet. Rod has not"
+    assert isinstance(agent.messages[1]["content"], str), "no dangling tool_use"
+    assert agent.state.value == "idle"
+
+
+async def test_interrupting_before_anything_was_said_leaves_only_the_question(config):
+    import asyncio
+
+    from ranger.core import Ranger
+    from ranger.events import StateChanged
+    from ranger.provider import Completion
+
+    class Hangs:
+        async def stream(self, *, system, messages, tools=None):
+            await asyncio.sleep(30)
+            yield Completion(stop_reason="end_turn", text="", content=[])
+
+    agent = Ranger(config=config, provider=Hangs())
+
+    async def consume():
+        async for event in agent.turn("stop"):
+            pass
+
+    task = asyncio.create_task(consume())
+    await asyncio.sleep(0.05)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert [m["role"] for m in agent.messages] == ["user"]
+
+
+async def test_a_caller_that_breaks_out_of_the_loop_leaves_it_just_as_clean(config):
+    """Not every abandoned turn is a cancellation. A break is the same damage."""
+    from ranger.core import Ranger
+    from ranger.events import TextDelta
+    from ranger.provider import Completion, TextChunk
+
+    class Talkative:
+        async def stream(self, *, system, messages, tools=None):
+            yield TextChunk("One. ")
+            yield TextChunk("Two. ")
+            yield TextChunk("Three.")
+            yield Completion(stop_reason="end_turn", text="", content=[])
+
+    agent = Ranger(config=config, provider=Talkative())
+    stream = agent.turn("go on")
+    async for event in stream:
+        if isinstance(event, TextDelta) and "Two" in event.text:
+            break
+    # Breaking alone leaves finalisation to the event loop, so a caller that
+    # means to stop closes the stream. That is the GeneratorExit path.
+    await stream.aclose()
+
+    assert [m["role"] for m in agent.messages] == ["user", "assistant"]
+    assert agent.messages[1]["content"] == "One. Two."
+
+
+async def test_a_second_turn_after_an_interruption_still_works(config):
+    """The proof that the transcript is not poisoned."""
+    import asyncio
+
+    from ranger.core import Ranger
+    from ranger.events import StateChanged
+    from ranger.testing import ScriptedProvider
+    from ranger.provider import Completion, TextChunk
+
+    class Interruptible:
+        def __init__(self):
+            self.calls = 0
+
+        async def stream(self, *, system, messages, tools=None):
+            self.calls += 1
+            if self.calls == 1:
+                yield TextChunk("Half a sen")
+                await asyncio.sleep(30)
+            self.seen = [dict(m) for m in messages]
+            yield TextChunk("The other one.")
+            yield Completion(
+                stop_reason="end_turn",
+                text="The other one.",
+                content=[{"type": "text", "text": "The other one."}],
+            )
+
+    provider = Interruptible()
+    agent = Ranger(config=config, provider=provider)
+
+    async def consume():
+        async for event in agent.turn("tell me about Illes"):
+            pass
+
+    task = asyncio.create_task(consume())
+    await asyncio.sleep(0.05)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    replies = [e async for e in agent.turn("no, the other one")]
+    assert any("The other one." in getattr(e, "text", "") for e in replies)
+    # The model can see what it was saying when it got cut off.
+    assert any("Half a sen" in str(m.get("content")) for m in provider.seen)
