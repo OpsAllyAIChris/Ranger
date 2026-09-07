@@ -89,7 +89,8 @@ TOOL_GUIDANCE = """\
   Preferences, standing decisions, how they work, what their words mean. Never
   a fact about a company: those live in the account note, which their CRM
   export owns and overwrites. Never the play-by-play of a conversation.
-- forget: remove a stored fact that is wrong. Needs their yes every time.
+- forget: remove a stored fact that is wrong. Call it and let the gate ask;
+  the asking is not yours to do.
 - what_went_quiet: what is slipping, what has gone quiet, who they have not
   spoken to. Accounts that never had any activity come back as a separate
   group; keep them separate when you say it out loud, because a lapsed account
@@ -97,6 +98,20 @@ TOOL_GUIDANCE = """\
 
 If a tool says more than one account matches, ask the operator which one they
 mean. Never pick one yourself. If a tool finds nothing, say so plainly.
+"""
+
+GATE_GUIDANCE = """\
+Some of your tools stop and ask the operator before they run: {names}.
+
+Call them anyway. You do not run that confirmation yourself. The code holds the
+call, puts the action in front of the operator in plain words, and records what
+they answered. Asking in prose instead, "shall I remove that?", skips all of
+that. Nothing reaches the log and nothing waits in their inbox, so the most
+polite sounding sentence you can say is the one that loses the record. Ask
+first only when you genuinely do not know which thing they meant.
+
+If a call comes back held, the operator is not at a keyboard. It is waiting in
+their inbox now. Say that in one line and leave it there.
 """
 
 VAULT_POSTURE = """\
@@ -182,6 +197,15 @@ def _stable_sections(
             )
         else:
             sections.append(TOOL_GUIDANCE)
+            gated = sorted(tool.name for tool in registry if tool.confirm)
+            if gated:
+                # Built from the confirm flag rather than a list of names, for
+                # the same reason the gate itself is: a tool added later is
+                # covered without anyone remembering to edit this file.
+                sections.append(
+                    "## Tools that ask first\n"
+                    + GATE_GUIDANCE.format(names=", ".join(f"`{name}`" for name in gated))
+                )
 
     if knowledge is not None and not knowledge.docs:
         sections.append(

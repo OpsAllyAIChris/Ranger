@@ -6,8 +6,8 @@ writes, quotes, proposals, transcript ingestion) is another entry in this
 registry and nothing else. That is the whole point of the registry existing
 before there is anything in it.
 
-Any tool declared with confirm=True routes through the Tier 6 gate. The gate
-is not implemented yet; the core refuses to run such a tool until it is, so
+Any tool declared with confirm=True routes through the gate in gate.py. The
+core consults it before the handler runs, and there is no path around it, so
 the flag cannot be quietly ignored.
 """
 

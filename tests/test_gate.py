@@ -432,3 +432,80 @@ async def test_a_turn_that_said_nothing_says_so(seeded, vault):
     log = AuditLog(vault, seeded.vault.log)
     await collect(agent_with(seeded, ScriptedGate([]), [{"text": ""}], audit=log), "hello")
     assert "(said nothing)" in log.read()
+
+
+def test_the_prompt_tells_the_model_the_asking_is_not_its_job(seeded):
+    """Politeness must not be able to route around the record.
+
+    Two voice turns produced no tool row, no confirmation row and no inbox
+    notice: the model heard "forget that I prefer morning meetings", decided
+    the polite thing was to ask out loud first, and so the gate was never
+    reached. Nothing unsafe happened, which is the trap. The confirmation is
+    the only thing that writes to the log and the inbox, so a question asked
+    in prose instead is a confirmation that leaves no trace.
+    """
+    from ranger.prompts import build_system_prompt
+    from ranger.vault import Vault
+
+    registry = build_registry(seeded, Vault(seeded.vault))
+    prompt = build_system_prompt(seeded, registry=registry)
+
+    assert "Tools that ask first" in prompt
+    assert "You do not run that confirmation yourself" in prompt
+    assert "held" in prompt
+
+
+def test_the_prompt_names_the_gated_tools_from_the_confirm_flag(seeded):
+    """Derived from the registry, never from a list of names in this file.
+
+    Same rule the gate itself follows: a tool added later with confirm=True is
+    covered without anyone remembering to edit prompts.py.
+    """
+    from ranger.prompts import build_system_prompt
+    from ranger.tools import Tool, ToolResult
+    from ranger.vault import Vault
+
+    registry = build_registry(seeded, Vault(seeded.vault))
+    expected = [tool.name for tool in registry if tool.confirm]
+    assert expected, "the registry has no gated tool, so this test proves nothing"
+
+    prompt = build_system_prompt(seeded, registry=registry)
+    for name in expected:
+        assert f"`{name}`" in prompt
+    for tool in registry:
+        if not tool.confirm:
+            assert f"`{tool.name}`" not in prompt.split("Tools that ask first")[1]
+
+    async def handler(payload):
+        return ToolResult(ok=True, content="")
+
+    registry.register(
+        Tool(
+            name="send_email",
+            description="a tool that does not exist yet",
+            input_schema={"type": "object", "properties": {}},
+            handler=handler,
+            confirm=True,
+        )
+    )
+    assert "`send_email`" in build_system_prompt(seeded, registry=registry)
+
+
+def test_a_registry_with_nothing_gated_says_nothing_about_the_gate(seeded):
+    from ranger.prompts import build_system_prompt
+    from ranger.tools import Tool, ToolRegistry, ToolResult
+
+    async def handler(payload):
+        return ToolResult(ok=True, content="")
+
+    registry = ToolRegistry(
+        [
+            Tool(
+                name="look_something_up",
+                description="reads and nothing else",
+                input_schema={"type": "object", "properties": {}},
+                handler=handler,
+            )
+        ]
+    )
+    assert "Tools that ask first" not in build_system_prompt(seeded, registry=registry)
