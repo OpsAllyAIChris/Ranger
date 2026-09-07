@@ -86,6 +86,30 @@ alphabetically.
 An empty Knowledge folder is fine and silent. The system prompt says once that
 Ranger does not know the business, rather than warning on every startup.
 
+## Memory
+
+`Ranger/memory/facts.md`, one fact per bullet:
+
+```markdown
+## Operator
+- 2026-09-07 | Chris covers Texas and Oklahoma.
+
+## Vocabulary
+- The film program means the Q4 retort conversion at Illes.
+```
+
+A date prefix is what Ranger writes; a bare bullet is what you write by hand,
+and both are read. The file is read fresh every turn, so an edit takes effect
+immediately and a deleted line stays deleted.
+
+**What goes here and what does not.** If a CRM export could overwrite it, it
+belongs in the account note. `scripts/build_vault.py` regenerates account notes,
+so a fact stored there is destroyed on the next refresh. Memory is for facts
+about you: preferences, standing decisions, what your words mean. `remember`
+refuses account-shaped facts and says so.
+
+Where memory and an account note disagree about an account, the note is right.
+
 ## Ranger's own folders
 
 Not seeded by hand. Ranger creates these files and they stay readable and

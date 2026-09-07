@@ -21,6 +21,7 @@ from .accounts import (
 )
 from .config import Config
 from .drafts import DraftRejected, hold_draft
+from .memory import append_fact, find_fact, load_memory
 from .tools import Tool, ToolRegistry, ToolResult
 from .untrusted import fence, scan
 from .vault import Vault, VaultError
@@ -275,15 +276,143 @@ def _what_went_quiet(config: Config, vault: Vault, today: Callable[[], date]) ->
     )
 
 
+# -- 4. remember -----------------------------------------------------------
+
+#: Phrases that mean this belongs in the account note, which the CRM export
+#: owns and overwrites. Memory is for facts about the operator.
+_ACCOUNT_SHAPED = (
+    "annual packaging spend", "revenue tier", "decision structure",
+    "is the decision maker", "opportunity", "stage is", "close date",
+)
+
+
+def _remember(config: Config, vault: Vault) -> Tool:
+    async def handler(payload: dict[str, Any]) -> ToolResult:
+        fact = " ".join(str(payload.get("fact", "")).split()).strip()
+        if not fact:
+            return ToolResult(False, "There is no fact there to remember.", "empty")
+        if len(fact) > 300:
+            return ToolResult(
+                False,
+                "That is too long for one fact. Memory holds one plain statement per "
+                "entry; split it up or shorten it.",
+                "too long",
+            )
+
+        lowered = fact.lower()
+        for phrase in _ACCOUNT_SHAPED:
+            if phrase in lowered:
+                return ToolResult(
+                    False,
+                    f"That reads like an account fact ({phrase!r}), and account facts live "
+                    "in the account note, which the CRM export owns. Storing it here would "
+                    "duplicate the note and drift from it. Tell the operator it belongs in "
+                    "the note instead.",
+                    "belongs in the account note",
+                )
+
+        try:
+            written = append_fact(
+                vault,
+                config.vault.memory,
+                fact,
+                topic=str(payload.get("topic", "")).strip(),
+                filename=config.memory.file,
+            )
+        except (ValueError, VaultError) as exc:
+            return ToolResult(False, str(exc), "refused")
+
+        return ToolResult(
+            ok=True,
+            content=(
+                f"Remembered, in {written.name}. It will be there next time Ranger starts, "
+                "and the operator can correct or delete the line in Obsidian."
+            ),
+            summary=fact[:60],
+        )
+
+    return Tool(
+        name="remember",
+        description=(
+            "Store one durable fact about the operator so it survives a restart. Use it for "
+            "preferences, standing decisions, how they work, what their words mean, and "
+            "anything they ask you to remember. One plain statement per call. Do NOT use it "
+            "for facts about a company: those belong in the account note, which their CRM "
+            "export owns. Do not store the play-by-play of a conversation."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "fact": {
+                    "type": "string",
+                    "description": "One plain statement, as it should read a year from now.",
+                },
+                "topic": {
+                    "type": "string",
+                    "description": "Optional grouping, such as Preferences or Vocabulary.",
+                },
+            },
+            "required": ["fact"],
+        },
+        handler=handler,
+        writes=True,
+    )
+
+
+# -- 5. forget -------------------------------------------------------------
+
+
+def _forget(config: Config, vault: Vault) -> Tool:
+    async def handler(payload: dict[str, Any]) -> ToolResult:
+        # Not reachable until the Tier 6 gate exists: the core refuses a tool
+        # flagged confirm before the handler runs. Written so the gate has
+        # something real to gate.
+        query = str(payload.get("fact", "")).strip()
+        context = load_memory(vault, config.vault.memory, config.memory.reserve_chars)
+        matches = find_fact(list(context.facts), query)
+        if not matches:
+            return ToolResult(False, f"Nothing in memory matches {query!r}.", "no match")
+        listing = chr(10).join(f"- {f.render()}" for f in matches)
+        return ToolResult(
+            ok=False,
+            content=(
+                "Removing a fact rewrites a file, which needs the operator's yes. "
+                f"These would go:{chr(10)}{listing}"
+            ),
+            summary=f"{len(matches)} facts",
+        )
+
+    return Tool(
+        name="forget",
+        description=(
+            "Remove a stored fact that is wrong or out of date. Needs the operator's "
+            "explicit yes every time, because it rewrites a file. They can also just "
+            "delete the line themselves in Obsidian, which is usually quicker."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "fact": {"type": "string", "description": "A phrase from the fact to remove."}
+            },
+            "required": ["fact"],
+        },
+        handler=handler,
+        writes=True,
+        confirm=True,
+    )
+
+
 def build_registry(
     config: Config, vault: Vault, today: Callable[[], date] | None = None
 ) -> ToolRegistry:
-    """Three tools. Adding a fourth is a Tier 2 scope decision, not a detail."""
+    """Tier 2's three, plus Tier 4's two. Adding one is a scope decision."""
     today = today or date.today
     return ToolRegistry(
         [
             _account_recall(config, vault),
             _draft_and_hold(config, vault),
             _what_went_quiet(config, vault, today),
+            _remember(config, vault),
+            _forget(config, vault),
         ]
     )

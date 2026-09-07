@@ -107,7 +107,7 @@ quiet" tool.
 | 1 | The brain. Config, provider seam, agent core as a library, event stream, vault guard, terminal REPL | done |
 | 2 | The hands. Three tools: account recall, draft and hold, what went quiet | done |
 | 3 | The ears and mouth. Push to talk, transcript shown, barge-in, speech starts on the first sentence | done |
-| 4 | The memory. Durable facts in `Ranger/memory`, one fact per entry, hand-editable | later |
+| 4 | The memory. Durable facts in `Ranger/memory`, one fact per entry, hand-editable | done |
 | 5 | The heartbeat. Morning surface, quiet hours, held notices, a schedule that survives restarts | later |
 | 6 | The rails. Confirmation gate, audit trail, cost tally, kill switch, everything tunable in config | later |
 | 7 | The face. Browser front end: orb, glass shell, mic bar | after 6 |
@@ -233,6 +233,40 @@ Rules that hold across all four:
   whole process open for a minute after the command had finished, while the
   suite cheerfully reported passing in 1.6 seconds.
 
+## Memory against account notes, and the context budget
+
+**The line.** Could a CRM export overwrite it? Then it belongs in the account
+note. `scripts/build_vault.py` regenerates every account note from the exports,
+so anything written into one is destroyed on the next refresh. Account notes
+hold facts about companies. Memory holds facts about the operator and how they
+work, which no export records and which would otherwise be lost.
+
+Three things stop them drifting:
+
+- **Account notes win on account facts.** Stated in the system prompt as an
+  ordering rule, so a memory that contradicts a note is treated as stale.
+- **`remember` refuses account-shaped facts** outright, naming the phrase that
+  gave it away, and tells the operator it belongs in the note.
+- **Every fact is dated,** so a stale one is visibly stale.
+
+**The budget.** Account recall never competed: it is a tool result in the
+messages, capped by `[recall]`. Only memory and knowledge share standing space,
+and `[context] budget_chars` is the total. **Memory is loaded first** up to
+`memory.reserve_chars`; knowledge gets the remainder. When they collide,
+knowledge loses, because memory is small, is about the operator, is
+unrecoverable, and a dropped knowledge file announces itself.
+
+The real constraint is not the context window, which is far larger than this
+budget. It is that the system prompt is resent every turn. Prompt caching makes
+a stable prefix nearly free after the first turn and would let the knowledge
+budget rise a long way; the clock is already last in the prompt so the prefix
+is byte-stable. That is Tier 6.
+
+**Deleting is gated.** `remember` appends, so nothing already written can be
+lost. `forget` rewrites a file, which is on the never-without-asking list, so it
+is `confirm=True` and the core refuses it until the Tier 6 gate exists. The
+operator deleting the line in Obsidian is the immediate path and always will be.
+
 ## Misheard account names: which layer fixes it
 
 A real decision, recorded because the obvious answer is wrong.
@@ -347,6 +381,7 @@ ranger/
   stt.py         Tier 3b: Deepgram behind a seam, plain HTTP, no SDK
   compare.py     what you said against what it heard, with a word error rate
   keyterms.py    the hint list, derived from account filenames and ranked
+  memory.py      Tier 4: durable facts, plain markdown, read fresh every turn
   tts.py         Tier 3c: ElevenLabs behind a seam, streaming, plain HTTP
   speech.py      splitting a streaming reply into speakable sentences
   voiceloop.py   Tier 3d: push to talk wrapped around the core, no agent logic

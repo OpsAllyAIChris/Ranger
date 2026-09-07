@@ -36,6 +36,13 @@ inbox = "Ranger/inbox"
 drafts = "Ranger/drafts"
 log = "Ranger/log"
 
+[context]
+budget_chars = {budget}
+
+[memory]
+reserve_chars = {memory_reserve}
+file = "facts.md"
+
 [knowledge]
 budget_chars = {budget}
 priority = ["company.md", "icp.md"]
@@ -81,6 +88,7 @@ port = 8765
 
 DEFAULTS: dict[str, object] = {
     "budget": 60000,
+    "memory_reserve": 8000,
     "morning_hour": 7,
     "quiet_start": 18,
     "quiet_end": 6,

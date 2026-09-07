@@ -330,14 +330,21 @@ async def test_silence_is_reported_rather_than_transcribed(loop_parts):
         transcriber=transcriber,
     )
     await loop.run()
-    assert "nothing was recorded" in out.getvalue()
+    text = out.getvalue()
+    # The numbers have to be in the message: a missed key press, a mic that
+    # never opened and speaking too quietly are indistinguishable without them.
+    assert "1.0s captured, silent" in text
+    assert "Let desktop apps access your microphone" in text
     assert transcriber.calls == 0
 
 
 async def test_an_empty_transcript_is_reported(loop_parts):
     loop, out, _ = loop_parts([{"text": "x"}], transcriber=FakeTranscriber(text="   "))
     await loop.run()
-    assert "heard nothing in that" in out.getvalue()
+    text = out.getvalue()
+    assert "nothing usable in that" in text
+    assert "1.0s captured" in text and "dBFS peak" in text
+    assert "transcription finding no speech" in text
 
 
 async def test_a_speech_failure_does_not_end_the_loop(loop_parts):
@@ -431,3 +438,29 @@ async def test_an_interrupting_press_starts_the_next_turn(loop_parts):
     assert loop.turns == 2, "the interrupting press should have begun a second turn"
     assert trigger.used == 2, "it should not have needed a third press"
     assert "(cut off)" in out.getvalue()
+
+
+@pytest.mark.parametrize(
+    "pcm,seconds,marker",
+    [
+        (tone(0.1), 0.1, "the key press probably did not register"),
+        (b"\x00\x00" * 32000, 2.0, "Let desktop apps access your microphone"),
+        (
+            array.array("h", [int(60 * math.sin(i / 9)) for i in range(32000)]).tobytes(),
+            2.0,
+            "very faint",
+        ),
+        (tone(2.0), 2.0, "transcription finding no speech"),
+    ],
+    ids=["missed keypress", "mic never opened", "spoke too quietly", "audio fine"],
+)
+def test_the_four_kinds_of_nothing_are_distinguishable(pcm, seconds, marker):
+    """They all look identical to the operator without the numbers."""
+    from ranger.audio import levels
+    from ranger.voiceloop import diagnose
+
+    lines = diagnose(pcm, seconds, levels(pcm), heard_speech=False)
+    joined = " ".join(lines)
+    assert marker in joined
+    assert f"{seconds:.1f}s captured" in lines[0]
+    assert "dBFS peak" in lines[0] or "silent" in lines[0]

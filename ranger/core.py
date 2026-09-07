@@ -26,6 +26,7 @@ from .events import (
     TurnComplete,
 )
 from .knowledge import KnowledgeContext, KnowledgeLoader
+from .memory import MemoryContext, load_memory
 from .prompts import build_system_prompt
 from .provider import Completion, Provider, ProviderError, TextChunk
 from .tools import ToolRegistry
@@ -53,6 +54,7 @@ class Ranger:
         self.messages: list[dict[str, Any]] = []
         self._state = State.IDLE
         self._knowledge: KnowledgeContext | None = None
+        self._memory: MemoryContext | None = None
 
     # -- state ---------------------------------------------------------
 
@@ -71,6 +73,7 @@ class Ranger:
     def reset(self) -> None:
         self.messages.clear()
         self._knowledge = None
+        self._memory = None
         self._state = State.IDLE
 
     def _trim_history(self) -> None:
@@ -88,13 +91,31 @@ class Ranger:
             excess += 1
         self.messages = self.messages[excess:]
 
+    def memory(self, refresh: bool = False) -> MemoryContext:
+        """Read fresh, never cached across a restart, so an edit in Obsidian
+        takes effect on the next turn."""
+        if self._memory is None or refresh:
+            self._memory = load_memory(
+                self.vault, self.config.vault.memory, self.config.memory.reserve_chars
+            )
+        return self._memory
+
     def knowledge(self, refresh: bool = False) -> KnowledgeContext:
+        """Whatever standing budget memory did not use.
+
+        Memory is loaded first and keeps its reserve. When the two collide,
+        knowledge is the one that loses: it is larger, it is recoverable, and
+        it says which files it dropped.
+        """
         if self._knowledge is None or refresh:
-            self._knowledge = self.knowledge_loader.load()
+            remaining = max(0, self.config.context.budget_chars - self.memory(refresh).total_chars)
+            self._knowledge = self.knowledge_loader.load(budget=remaining)
         return self._knowledge
 
     def system_prompt(self, now: datetime | None = None) -> str:
-        return build_system_prompt(self.config, self.knowledge(), self.registry, now)
+        return build_system_prompt(
+            self.config, self.knowledge(), self.registry, now, memory=self.memory()
+        )
 
     # -- the entry point -----------------------------------------------
 
@@ -108,8 +129,9 @@ class Ranger:
             yield Notice("info", "empty input, nothing to do")
             return
 
+        memory = self.memory()
         knowledge = self.knowledge()
-        for warning in knowledge.warnings:
+        for warning in (*memory.warnings, *knowledge.warnings):
             yield Notice("warn", warning)
 
         # If the model is unreachable this turn never happened, so keep a

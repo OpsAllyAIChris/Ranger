@@ -63,6 +63,44 @@ class TurnTiming:
         )
 
 
+def diagnose(pcm: bytes, seconds: float, measured: Any, heard_speech: bool | None) -> list[str]:
+    """Say which kind of nothing this was.
+
+    A missed key press, a microphone that never opened, and speaking too
+    quietly all produce no transcript and are indistinguishable without the
+    numbers. This is the silence-reads-as-broken case, so the numbers go in the
+    message rather than in a separate command.
+    """
+    peak = "silent" if measured.silent else f"{measured.peak_dbfs:.0f} dBFS peak"
+    header = f"nothing usable in that: {seconds:.1f}s captured, {peak}"
+
+    if seconds < 0.25:
+        return [
+            header,
+            "that is shorter than a word, so the key press probably did not register.",
+            "hold the key down while you speak, and release when you finish.",
+        ]
+    if measured.silent:
+        return [
+            header,
+            "every sample was zero, which is no signal rather than a quiet room.",
+            "on Windows: Settings, Privacy and security, Microphone, and turn on",
+            "'Let desktop apps access your microphone'. If that is already on, the",
+            "wrong input device is selected. Run 'ranger audio devices'.",
+        ]
+    if measured.very_quiet:
+        return [
+            header,
+            "the microphone is working but that was very faint. Speech should peak",
+            "around -20 to -6 dBFS. Move closer, or raise the input level in Windows.",
+        ]
+    return [
+        header,
+        "the audio was fine, so this was transcription finding no speech in it.",
+        "background noise, or the words did not land. Just say it again.",
+    ]
+
+
 class VoiceLoop:
     def __init__(
         self,
@@ -160,8 +198,9 @@ class VoiceLoop:
         )
 
         measured = levels(pcm)
-        if measured.silent:
-            self.say(self.paint("  nothing was recorded. Run 'ranger audio check'.", YELLOW))
+        if measured.silent or timing.recorded_seconds < 0.25:
+            for line in diagnose(pcm, timing.recorded_seconds, measured, heard_speech=None):
+                self.say(self.paint(f"  {line}", YELLOW))
             return True
 
         heard_at = time.monotonic()
@@ -173,7 +212,8 @@ class VoiceLoop:
         timing.heard_ms = int((time.monotonic() - heard_at) * 1000)
 
         if transcript.empty:
-            self.say(self.paint("  heard nothing in that.", YELLOW))
+            for line in diagnose(pcm, timing.recorded_seconds, measured, heard_speech=False):
+                self.say(self.paint(f"  {line}", YELLOW))
             return True
 
         # Requirement 3: what it heard, always, right next to what it says.

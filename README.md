@@ -120,6 +120,16 @@ to cut in; that same press starts your next turn.
 
 `ranger` with no flags is still the typed REPL, and always will be.
 
+## Memory (Tier 4)
+
+```powershell
+ranger memory      # what is remembered, and the budget split
+```
+
+Plain markdown in `Ranger/memory/facts.md`. Edit or delete a line in Obsidian
+and Ranger reads the change on the next turn. Facts about companies belong in
+the account note, not here.
+
 ## Test
 
 ```bash

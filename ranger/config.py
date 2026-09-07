@@ -122,6 +122,28 @@ class VoiceConfig:
 
 
 @dataclass(frozen=True)
+class MemoryConfig:
+    """Tier 4. Durable facts about the operator, in plain markdown."""
+
+    #: Memory's guaranteed slice of the standing context. Taken before
+    #: knowledge, because losing a memory fact makes Ranger forget the operator
+    #: while losing a knowledge file only makes it less well briefed.
+    reserve_chars: int = 8000
+    file: str = "facts.md"
+
+
+@dataclass(frozen=True)
+class ContextConfig:
+    """The whole standing allowance: memory plus knowledge.
+
+    Account recall does not compete for this. It is a tool result living in the
+    messages, capped separately by [recall].
+    """
+
+    budget_chars: int = 60000
+
+
+@dataclass(frozen=True)
 class SttConfig:
     """Speech to text. Deepgram, pre-recorded endpoint."""
 
@@ -171,6 +193,8 @@ class Config:
     model: ModelConfig
     vault: VaultConfig
     knowledge: KnowledgeConfig
+    memory: MemoryConfig
+    context: ContextConfig
     schedule: ScheduleConfig
     accounts: AccountsConfig
     recall: RecallConfig
@@ -254,6 +278,8 @@ KNOWN_KEYS: dict[str, frozenset[str]] = {
         "root", "accounts", "knowledge", "ranger", "memory", "inbox", "drafts", "log",
     }),
     "knowledge": frozenset({"budget_chars", "priority"}),
+    "memory": frozenset({"reserve_chars", "file"}),
+    "context": frozenset({"budget_chars"}),
     "schedule": frozenset({"morning_hour", "quiet_start_hour", "quiet_end_hour"}),
     "accounts": frozenset({"quiet_after_days", "exclude_files", "skip_statuses"}),
     "recall": frozenset({
@@ -467,6 +493,23 @@ def load_config(path: str | Path | None = None, *, load_env: bool = True) -> Con
         priority=tuple(str(name) for name in knowledge_section.get("priority", ())),
     )
 
+    memory_section = table.get("memory", {})
+    memory = MemoryConfig(
+        reserve_chars=int(memory_section.get("reserve_chars", 8000)),
+        file=str(memory_section.get("file", "facts.md")),
+    )
+    context = ContextConfig(
+        budget_chars=int(table.get("context", {}).get("budget_chars", 60000))
+    )
+    if memory.reserve_chars < 0:
+        raise ConfigError("memory.reserve_chars cannot be negative")
+    if memory.reserve_chars > context.budget_chars:
+        raise ConfigError(
+            f"memory.reserve_chars ({memory.reserve_chars}) is larger than "
+            f"context.budget_chars ({context.budget_chars}), which would leave knowledge "
+            "nothing at all."
+        )
+
     schedule = ScheduleConfig(
         morning_hour=_hour(_require(table, "schedule", "morning_hour"), "schedule.morning_hour"),
         quiet_start_hour=_hour(
@@ -580,6 +623,8 @@ def load_config(path: str | Path | None = None, *, load_env: bool = True) -> Con
         model=model,
         vault=vault,
         knowledge=knowledge,
+        memory=memory,
+        context=context,
         schedule=schedule,
         accounts=accounts,
         recall=recall,

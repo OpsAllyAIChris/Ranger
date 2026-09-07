@@ -34,9 +34,15 @@ async def run(registry, name, **payload):
     return await registry.run(name, payload)
 
 
-def test_exactly_three_tools_are_registered(registry):
-    """Tier 2 is three tools. A fourth is a scope decision, not a detail."""
-    assert registry.names() == ["account_recall", "draft_and_hold", "what_went_quiet"]
+def test_the_registry_holds_exactly_the_intended_tools(registry):
+    """Tier 2's three plus Tier 4's two. A sixth is a scope decision."""
+    assert registry.names() == [
+        "account_recall",
+        "draft_and_hold",
+        "forget",
+        "remember",
+        "what_went_quiet",
+    ]
 
 
 def test_every_tool_has_a_description_a_model_can_act_on(registry):
@@ -45,10 +51,15 @@ def test_every_tool_has_a_description_a_model_can_act_on(registry):
         assert tool.input_schema["type"] == "object"
 
 
-def test_no_tool_is_flagged_for_confirmation_yet(registry):
-    """None of the three sends, spends, or changes an outside system."""
-    assert not any(tool.confirm for tool in registry)
-    assert [t.name for t in registry if t.writes] == ["draft_and_hold"]
+def test_only_forget_needs_the_confirmation_gate(registry):
+    """Nothing here sends or spends. forget rewrites a file, which does not
+    happen without the operator's yes."""
+    assert [t.name for t in registry if t.confirm] == ["forget"]
+    assert sorted(t.name for t in registry if t.writes) == [
+        "draft_and_hold",
+        "forget",
+        "remember",
+    ]
 
 
 # -- account recall --------------------------------------------------------

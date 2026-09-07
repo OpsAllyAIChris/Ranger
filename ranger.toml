@@ -55,6 +55,25 @@ inbox = "Ranger/inbox"      # Tier 5, read + write
 drafts = "Ranger/drafts"    # Tier 2, read + write
 log = "Ranger/log"          # Tier 6, append only
 
+[context]
+# The whole standing allowance: memory plus knowledge, resent every turn.
+# Account recall does not compete for this; it is a tool result, capped by
+# [recall] instead.
+#
+# The real constraint is not the context window, which is far larger than this.
+# It is that the system prompt is resent on every turn, so this costs latency
+# and money each time. Prompt caching makes a stable prefix nearly free after
+# the first turn, at which point this can rise a long way. That is Tier 6.
+budget_chars = 60000
+
+[memory]
+# Memory's guaranteed slice, taken before knowledge. When the two collide,
+# knowledge loses: memory is small, it is about you, and nothing else records
+# it, while a dropped knowledge file is recoverable and Ranger says which one
+# it dropped.
+reserve_chars = 8000
+file = "facts.md"
+
 [knowledge]
 # Amendment C: company, products, ICP, competitive landscape, playbook are
 # loaded whole as context. When they outgrow this budget Ranger says so at

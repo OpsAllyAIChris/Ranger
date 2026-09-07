@@ -38,7 +38,7 @@ def test_budget_overflow_is_reported_not_silent(config, vault_root):
     context = loader(config, budget_chars=250).load()
     assert len(context.docs) == 1
     assert context.omitted == ("Knowledge/playbook.md",)
-    assert any("budget" in w for w in context.warnings)
+    assert any("character share" in w for w in context.warnings)
     assert "Not loaded this turn" in context.render()
 
 

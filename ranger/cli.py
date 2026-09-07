@@ -436,6 +436,49 @@ def _keyterm_plan(config: Config):
     )
 
 
+def cmd_memory(config: Config, args) -> int:
+    """Tier 4. What is remembered, and how much of the budget it is using."""
+    from .memory import load_memory
+    from .vault import Vault
+
+    paint = _colour(sys.stdout.isatty())
+    vault = Vault(config.vault)
+    context = load_memory(vault, config.vault.memory, config.memory.reserve_chars)
+
+    target = config.vault.memory / config.memory.file
+    print(f"  {target}")
+    print()
+    if context.empty:
+        print("  nothing remembered yet.")
+        print("  Ranger writes here when you tell it something worth keeping, and you")
+        print("  can add lines by hand in the same format.")
+        return 0
+
+    by_topic: dict[str, list] = {}
+    for fact in context.facts:
+        by_topic.setdefault(fact.topic or "General", []).append(fact)
+    for topic in sorted(by_topic):
+        print(f"  {paint(topic, BOLD)}")
+        for fact in by_topic[topic]:
+            when = fact.learned.isoformat() if fact.learned else "  by hand "
+            print(f"    {paint(when, DIM)}  {fact.text}")
+        print()
+
+    used = context.total_chars
+    knowledge_left = max(0, config.context.budget_chars - used)
+    print(paint(
+        f"  {len(context.facts)} facts, {used} of {config.memory.reserve_chars} reserved chars.",
+        DIM,
+    ))
+    print(paint(
+        f"  knowledge gets the remaining {knowledge_left} of "
+        f"{config.context.budget_chars}.", DIM,
+    ))
+    for warning in context.warnings:
+        print(paint(f"  {warning}", YELLOW))
+    return 0
+
+
 def cmd_keyterms(config: Config, args) -> int:
     """Show exactly which vocabulary hints would be sent, and why."""
     paint = _colour(sys.stdout.isatty())
@@ -719,6 +762,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     transcribe.add_argument("--model", help="override stt.model for this run")
 
+    sub.add_parser("memory", help="Tier 4: show what Ranger remembers")
     keyterms = sub.add_parser("keyterms", help="show the vocabulary hints that would be sent")
     keyterms.add_argument("--all", action="store_true", help="show every hint, not the top 25")
 
@@ -750,6 +794,8 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     if args.command == "transcribe":
         return cmd_transcribe(config, args)
+    if args.command == "memory":
+        return cmd_memory(config, args)
     if args.command == "keyterms":
         return cmd_keyterms(config, args)
     if args.command == "voices":
