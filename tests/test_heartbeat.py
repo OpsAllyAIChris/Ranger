@@ -26,8 +26,8 @@ FIXTURES = Path(__file__).parent / "fixtures" / "vault"
 
 
 @pytest.fixture
-def inbox(config):
-    return Inbox(Vault(config.vault), config.vault.inbox)
+def inbox(vault, config):
+    return Inbox(vault, config.vault.inbox)
 
 
 @pytest.fixture

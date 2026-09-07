@@ -26,6 +26,22 @@ max_tool_rounds = 6
 timeout_seconds = 60.0
 max_retries = 3
 retry_backoff_seconds = 1.0
+# Cache the stable half of the system prompt: persona, rules, tools, memory and
+# the whole Knowledge folder. The clock sits in a second, uncached block after
+# it, which is why it has been last in the prompt since Tier 1.
+#
+# Cached input is charged at about a tenth of the normal rate, so this is what
+# makes the knowledge budget stop mattering. Watch cache_read_input_tokens in
+# the turn timings: if it stays zero, something is changing the prefix.
+cache_prompt = true
+# Dollars per million tokens, for the running cost tally. Zero means show token
+# counts and no money. Deliberately not hardcoded anywhere: prices change, and
+# a stale number in the source would be worse than none. Copy them off the
+# pricing page for whichever model is set above.
+price_input = 0.0
+price_output = 0.0
+price_cache_write = 0.0
+price_cache_read = 0.0
 # How many past turns stay in the working transcript. Tier 4 replaces the
 # spillover with durable memory.
 history_turns = 24

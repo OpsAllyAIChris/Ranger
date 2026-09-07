@@ -108,6 +108,34 @@ The vault is the operator's Obsidian vault and it is the shared memory.
 """
 
 
+def build_system_blocks(
+    config: Config,
+    knowledge: KnowledgeContext | None = None,
+    registry: ToolRegistry | None = None,
+    now: datetime | None = None,
+    memory: MemoryContext | None = None,
+    cache: bool = True,
+) -> list[dict]:
+    """The system prompt as two blocks, so the big half can be cached.
+
+    Caching is a prefix match, so a single byte that changes every turn makes
+    the whole thing a miss. The clock has been last in this prompt since Tier 1
+    for exactly this moment: everything above it is stable for hours, so it goes
+    in its own block with the cache breakpoint on it, and the clock follows in a
+    second, uncached block.
+
+    Editing a memory fact or a knowledge file changes the stable block and
+    costs one cache write. That is correct: the content really did change.
+    """
+    stable = _stable_sections(config, knowledge, registry, memory)
+    volatile = _clock_section(now or datetime.now())
+
+    head: dict = {"type": "text", "text": stable}
+    if cache:
+        head["cache_control"] = {"type": "ephemeral"}
+    return [head, {"type": "text", "text": volatile}]
+
+
 def build_system_prompt(
     config: Config,
     knowledge: KnowledgeContext | None = None,
@@ -115,9 +143,22 @@ def build_system_prompt(
     now: datetime | None = None,
     memory: "MemoryContext | None" = None,
 ) -> str:
-    now = now or datetime.now()
-    vault = config.vault
+    blocks = build_system_blocks(config, knowledge, registry, now, memory, cache=False)
+    return "\n\n".join(block["text"] for block in blocks)
 
+
+def _clock_section(now: datetime) -> str:
+    return f"## Now\nLocal date and time: {prompt_datetime(now)}"
+
+
+def _stable_sections(
+    config: Config,
+    knowledge: KnowledgeContext | None,
+    registry: ToolRegistry | None,
+    memory: MemoryContext | None,
+) -> str:
+    """Everything that does not change from one turn to the next."""
+    vault = config.vault
     sections: list[str] = [PERSONA, WRITING_RULES, SAFETY, VAULT_POSTURE]
 
     sections.append(
@@ -158,10 +199,5 @@ def build_system_prompt(
     rendered = knowledge.render() if knowledge else ""
     if rendered:
         sections.append("## What you know about the business\n" + rendered)
-
-    # The clock changes every turn and everything above it does not. Keeping it
-    # last means the stable prefix stays byte-identical, which is what prompt
-    # caching needs when we turn it on.
-    sections.append(f"## Now\nLocal date and time: {prompt_datetime(now)}")
 
     return "\n\n".join(section.strip() for section in sections if section.strip())

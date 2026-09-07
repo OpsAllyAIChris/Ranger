@@ -31,6 +31,7 @@ from typing import Any, Callable
 from .audio import AudioError, duration_seconds, levels, write_wav
 from .config import Config
 from .core import Ranger
+from .cost import TurnCost
 from .events import Notice, State, StateChanged, TextDelta, ToolCalled, ToolFinished, TurnComplete
 from .speech import SentenceStream
 from .stt import TranscriptionError
@@ -131,6 +132,7 @@ class VoiceLoop:
         #: the same press that begins the next recording.
         self._press: asyncio.Task | None = None
         self.turns = 0
+        self.session_cost = TurnCost()
 
     def say(self, text: str = "") -> None:
         print(text, file=self.out, flush=True)
@@ -251,6 +253,7 @@ class VoiceLoop:
             self._speak_queue(sentences, stop_speaking, first_audio, began)
         )
         stream = SentenceStream()
+        cost_line = ""
         thinking_at = time.monotonic()
         printed_prefix = False
         notices: list[str] = []
@@ -278,6 +281,10 @@ class VoiceLoop:
                     remainder = stream.flush()
                     if remainder:
                         await sentences.put(remainder)
+                    if event.usage:
+                        turn = TurnCost.from_usage(event.usage)
+                        self.session_cost = self.session_cost + turn
+                        cost_line = turn.render(self.config.model)
         finally:
             await sentences.put(None)
 
@@ -293,7 +300,8 @@ class VoiceLoop:
             self.say(self.paint("  (cut off)", DIM))
         for notice in notices:
             self.say(self.paint(f"  {notice}", YELLOW))
-        self.say(self.paint(f"  {timing.render()}", DIM))
+        suffix = f"  [{cost_line}]" if cost_line else ""
+        self.say(self.paint(f"  {timing.render()}{suffix}", DIM))
         self.say()
 
     async def _finish_speaking(self, speaking: asyncio.Task, stop: threading.Event) -> bool:

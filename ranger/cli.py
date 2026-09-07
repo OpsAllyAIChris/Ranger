@@ -16,6 +16,7 @@ from typing import Any
 from .audio import AudioError, resolve_device
 from .audiocheck import format_devices, run_check
 from .compare import compare
+from .cost import TurnCost
 from .dates import human_datetime
 from .config import Config, ConfigError, load_config, require_api_key
 from .core import Ranger
@@ -102,7 +103,11 @@ def _describe_vault(config: Config) -> str:
     )
 
 
+SESSION_COST = TurnCost()
+
+
 async def _run_turn(agent: Ranger, text: str, paint, show_state: bool) -> None:
+    global SESSION_COST
     printed_any = False
     for_stderr: list[str] = []
 
@@ -124,8 +129,13 @@ async def _run_turn(agent: Ranger, text: str, paint, show_state: bool) -> None:
         elif isinstance(event, TurnComplete):
             if printed_any:
                 print()
-            if show_state and event.usage:
-                print(paint(f"[tokens {event.usage}]", DIM), file=sys.stderr)
+            if event.usage:
+                turn = TurnCost.from_usage(event.usage)
+                SESSION_COST = SESSION_COST + turn
+                line = turn.render(agent.config.model)
+                if line:
+                    session = SESSION_COST.render(agent.config.model)
+                    print(paint(f"  [{line}]  session: {session}", DIM), file=sys.stderr)
 
     for line in for_stderr:
         print(line, file=sys.stderr)

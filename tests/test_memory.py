@@ -25,11 +25,6 @@ from ranger.vault import Vault, VaultWriteDenied
 FIXTURES = Path(__file__).parent / "fixtures" / "vault"
 
 
-@pytest.fixture
-def vault(config):
-    return Vault(config.vault)
-
-
 def write(config, text, name="facts.md"):
     (config.vault.memory / name).write_text(text, encoding="utf-8")
 

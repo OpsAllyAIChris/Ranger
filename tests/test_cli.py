@@ -169,3 +169,32 @@ def test_doctor_is_quiet_once_everything_is_seeded(config, vault_root):
     report = _describe_seeding(config, Vault(config.vault))
     assert "todo" not in report
     assert "vault-conventions" not in report
+
+
+async def test_the_turn_reports_whether_the_cache_was_used(config, capsys):
+    """cache_read_input_tokens is the only proof caching is on."""
+    from ranger.core import Ranger
+    from ranger.testing import ScriptedProvider
+
+    class Cached(ScriptedProvider):
+        async def stream(self, **kwargs):
+            async for event in super().stream(**kwargs):
+                from ranger.provider import Completion
+
+                if isinstance(event, Completion):
+                    yield Completion(
+                        stop_reason=event.stop_reason, text=event.text,
+                        content=event.content,
+                        usage={"input_tokens": 300, "output_tokens": 90,
+                               "cache_creation_input_tokens": 0,
+                               "cache_read_input_tokens": 14800},
+                    )
+                else:
+                    yield event
+
+    agent = Ranger(config=config, provider=Cached([{"text": "Rod owes you volumes."}]))
+    await _run_turn(agent, "where are we", plain, show_state=False)
+
+    err = capsys.readouterr().err
+    assert "98% cached" in err
+    assert "session:" in err

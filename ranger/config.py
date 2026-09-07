@@ -43,6 +43,17 @@ class ModelConfig:
     timeout_seconds: float = 60.0
     max_retries: int = 3
     retry_backoff_seconds: float = 1.0
+    #: Cache the stable half of the system prompt. The whole prompt is resent
+    #: every turn, so this is what stops the knowledge budget costing money on
+    #: each one.
+    cache_prompt: bool = True
+    #: Dollars per million tokens, for the running tally. Set to 0 to show
+    #: token counts and no money. These are not looked up anywhere: the numbers
+    #: change, and a stale guess in code would be worse than nothing.
+    price_input: float = 0.0
+    price_output: float = 0.0
+    price_cache_write: float = 0.0
+    price_cache_read: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -324,6 +335,8 @@ KNOWN_KEYS: dict[str, frozenset[str]] = {
     "model": frozenset({
         "provider", "name", "max_tokens", "effort", "max_tool_rounds",
         "history_turns", "timeout_seconds", "max_retries", "retry_backoff_seconds",
+        "cache_prompt", "price_input", "price_output", "price_cache_write",
+        "price_cache_read",
     }),
     "vault": frozenset({
         "root", "accounts", "knowledge", "ranger", "memory", "inbox", "drafts", "log",
@@ -534,6 +547,11 @@ def load_config(path: str | Path | None = None, *, load_env: bool = True) -> Con
         timeout_seconds=float(table["model"].get("timeout_seconds", 60.0)),
         max_retries=int(table["model"].get("max_retries", 3)),
         retry_backoff_seconds=float(table["model"].get("retry_backoff_seconds", 1.0)),
+        cache_prompt=bool(table["model"].get("cache_prompt", True)),
+        price_input=float(table["model"].get("price_input", 0.0)),
+        price_output=float(table["model"].get("price_output", 0.0)),
+        price_cache_write=float(table["model"].get("price_cache_write", 0.0)),
+        price_cache_read=float(table["model"].get("price_cache_read", 0.0)),
     )
     if model.max_tool_rounds < 1:
         raise ConfigError("model.max_tool_rounds must be at least 1")

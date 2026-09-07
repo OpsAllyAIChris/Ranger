@@ -27,7 +27,7 @@ from .events import (
 )
 from .knowledge import KnowledgeContext, KnowledgeLoader
 from .memory import MemoryContext, load_memory
-from .prompts import build_system_prompt
+from .prompts import build_system_blocks, build_system_prompt
 from .provider import Completion, Provider, ProviderError, TextChunk
 from .tools import ToolRegistry
 from .vault import Vault
@@ -117,6 +117,17 @@ class Ranger:
             self.config, self.knowledge(), self.registry, now, memory=self.memory()
         )
 
+    def system_blocks(self, now: datetime | None = None) -> list[dict]:
+        """What actually goes on the wire: two blocks, the big one cached."""
+        return build_system_blocks(
+            self.config,
+            self.knowledge(),
+            self.registry,
+            now,
+            memory=self.memory(),
+            cache=self.config.model.cache_prompt,
+        )
+
     # -- the entry point -----------------------------------------------
 
     async def turn(self, user_input: str) -> AsyncIterator[Event]:
@@ -141,7 +152,7 @@ class Ranger:
         self.messages.append({"role": "user", "content": text})
         self._trim_history()
 
-        system = self.system_prompt()
+        system = self.system_blocks()
         tools = self.registry.api_specs()
         tools_used: list[str] = []
         reply_parts: list[str] = []

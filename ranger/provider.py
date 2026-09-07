@@ -51,6 +51,10 @@ class Completion:
     text: str
     tool_requests: tuple[ToolRequest, ...] = ()
     content: list[dict[str, Any]] = field(default_factory=list)
+    #: input_tokens, output_tokens, cache_creation_input_tokens and
+    #: cache_read_input_tokens. The last one is the only proof caching is
+    #: working: if it stays zero across turns, something is invalidating the
+    #: prefix.
     usage: dict[str, int] = field(default_factory=dict)
 
 
@@ -64,7 +68,7 @@ class Provider(Protocol):
     async def stream(
         self,
         *,
-        system: str,
+        system: str | list[dict[str, Any]],
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]] | None = None,
     ) -> AsyncIterator[ProviderEvent]:
@@ -142,7 +146,7 @@ class AnthropicProvider:
     async def stream(
         self,
         *,
-        system: str,
+        system: str | list[dict[str, Any]],
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]] | None = None,
     ) -> AsyncIterator[ProviderEvent]:
@@ -218,8 +222,12 @@ class AnthropicProvider:
             tool_requests=tuple(tool_requests),
             content=content,
             usage={
-                "input_tokens": getattr(final.usage, "input_tokens", 0),
-                "output_tokens": getattr(final.usage, "output_tokens", 0),
+                "input_tokens": getattr(final.usage, "input_tokens", 0) or 0,
+                "output_tokens": getattr(final.usage, "output_tokens", 0) or 0,
+                "cache_creation_input_tokens":
+                    getattr(final.usage, "cache_creation_input_tokens", 0) or 0,
+                "cache_read_input_tokens":
+                    getattr(final.usage, "cache_read_input_tokens", 0) or 0,
             },
         )
 

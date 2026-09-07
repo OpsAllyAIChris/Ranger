@@ -69,7 +69,12 @@ async def test_streams_text_then_completes(config):
     completion = events[-1]
     assert isinstance(completion, Completion)
     assert completion.text == "Rod is waiting."
-    assert completion.usage == {"input_tokens": 11, "output_tokens": 4}
+    assert completion.usage == {
+        "input_tokens": 11,
+        "output_tokens": 4,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+    }
     assert messages.kwargs["model"] == config.model.name
     assert "tools" not in messages.kwargs
 
@@ -249,3 +254,87 @@ async def test_thinking_blocks_are_passed_back_unchanged(config):
     # Dropping the thinking block would break the next round of the turn.
     assert completion.content[0] == thinking
     assert completion.content[1]["type"] == "tool_use"
+
+
+# -- prompt caching --------------------------------------------------------
+
+
+async def test_the_stable_block_carries_the_cache_breakpoint(config):
+    """The clock is in its own block after it, so it cannot spoil the prefix."""
+    from datetime import datetime
+
+    from ranger.prompts import build_system_blocks
+
+    blocks = build_system_blocks(config, None, None, datetime(2026, 9, 7, 9, 0))
+    assert len(blocks) == 2
+    assert blocks[0]["cache_control"] == {"type": "ephemeral"}
+    assert "cache_control" not in blocks[1]
+    assert "Local date and time" in blocks[1]["text"]
+    assert "Local date and time" not in blocks[0]["text"]
+
+
+def test_the_stable_block_does_not_change_as_the_clock_does(config):
+    from datetime import datetime
+
+    from ranger.prompts import build_system_blocks
+
+    morning = build_system_blocks(config, None, None, datetime(2026, 9, 7, 7, 0))
+    evening = build_system_blocks(config, None, None, datetime(2026, 9, 7, 23, 59))
+    assert morning[0]["text"] == evening[0]["text"]
+    assert morning[1]["text"] != evening[1]["text"]
+
+
+def test_editing_memory_does_change_the_stable_block(config, vault):
+    """A cache miss then is correct: the content really did change."""
+    from datetime import date, datetime
+
+    from ranger.memory import append_fact, load_memory
+    from ranger.prompts import build_system_blocks
+
+    before = build_system_blocks(config, None, None, datetime(2026, 9, 7, 9, 0))
+    append_fact(vault, config.vault.memory, "Chris covers Texas.", today=date(2026, 9, 7))
+    after = build_system_blocks(
+        config, None, None, datetime(2026, 9, 7, 9, 0),
+        memory=load_memory(vault, config.vault.memory, 8000),
+    )
+    assert before[0]["text"] != after[0]["text"]
+
+
+async def test_caching_can_be_turned_off(config):
+    from datetime import datetime
+
+    from ranger.prompts import build_system_blocks
+
+    blocks = build_system_blocks(config, None, None, datetime(2026, 9, 7, 9, 0), cache=False)
+    assert all("cache_control" not in block for block in blocks)
+
+
+async def test_the_cache_counters_are_reported(config):
+    """cache_read_input_tokens is the only proof caching is working."""
+    final = SimpleNamespace(
+        stop_reason="end_turn",
+        content=[SimpleNamespace(type="text", text="ok")],
+        usage=SimpleNamespace(
+            input_tokens=12, output_tokens=4,
+            cache_creation_input_tokens=0, cache_read_input_tokens=14820,
+        ),
+    )
+    messages = FakeMessages(FakeStream([delta("ok")], final))
+    provider = AnthropicProvider(config.model, "key", client=SimpleNamespace(messages=messages))
+
+    completion = [e async for e in provider.stream(system="s", messages=[], tools=None)][-1]
+    assert completion.usage["cache_read_input_tokens"] == 14820
+
+
+async def test_the_core_sends_the_system_as_blocks(config):
+    """Not a string: a string cannot carry a cache breakpoint."""
+    from ranger.core import Ranger
+    from ranger.testing import ScriptedProvider
+
+    provider = ScriptedProvider([{"text": "ok"}])
+    agent = Ranger(config=config, provider=provider)
+    [e async for e in agent.turn("hello")]
+
+    system = provider.calls[0]["system"]
+    assert isinstance(system, list) and len(system) == 2
+    assert system[0]["cache_control"] == {"type": "ephemeral"}

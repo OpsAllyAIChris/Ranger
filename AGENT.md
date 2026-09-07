@@ -161,11 +161,20 @@ already handled in `provider.py`:
   through every block it does not itself interpret. Dropping one breaks the
   turn. Thinking tokens also count against `max_tokens`, so leave headroom.
 
-Not done yet, deliberately: prompt caching. Ranger sends the whole Knowledge
-folder in the system prompt on every turn, which is exactly what caching is
-for. The clock is already last in the system prompt so the prefix above it
-stays byte-identical, which is the prerequisite. Adding the breakpoint belongs
-with the cost tally in Tier 6.
+**Prompt caching is on** (`model.cache_prompt`). The system prompt goes out as
+two blocks: everything stable, carrying the cache breakpoint, then the clock in
+its own uncached block after it. The clock has been last in this prompt since
+Tier 1 for exactly this, because caching is a prefix match and one byte that
+changes every turn makes the whole thing a miss.
+
+Editing a memory fact or a knowledge file changes the stable block and costs one
+cache write. That is correct: the content really did change.
+
+`cache_read_input_tokens` is the only proof it is working, so it is printed after
+every turn rather than buried. If it stays zero across consecutive turns,
+something is changing the stable half. Prices live in config and are zero by
+default: they change, and a stale number in the source would be worse than
+none.
 
 ### Hours and resilience
 

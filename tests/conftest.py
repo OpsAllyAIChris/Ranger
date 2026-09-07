@@ -149,3 +149,11 @@ def make_config(config_file, monkeypatch):
 @pytest.fixture
 def config(make_config) -> Config:
     return make_config()
+
+
+@pytest.fixture
+def vault(config):
+    """The vault wrapper for the temp config. Used by most suites."""
+    from ranger.vault import Vault
+
+    return Vault(config.vault)
