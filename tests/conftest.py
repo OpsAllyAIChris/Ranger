@@ -54,7 +54,6 @@ filename_format = "{{date}}-{{slug}}.md"
 [voice]
 push_to_talk = true
 wake_word = false
-stt_provider = "deepgram"
 tts_provider = "elevenlabs"
 voice_id = ""
 trigger = "hold"
@@ -64,6 +63,12 @@ output_device = ""
 sample_rate = 16000
 channels = 1
 max_seconds = 60
+
+[stt]
+provider = "deepgram"
+model = "nova-3"
+language = "en"
+keyterms = ["Wexxar", "Illes", "corrugated"]
 
 [server]
 host = "127.0.0.1"

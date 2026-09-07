@@ -15,6 +15,7 @@ from typing import Any
 
 from .audio import AudioError, resolve_device
 from .audiocheck import format_devices, run_check
+from .compare import compare
 from .config import Config, ConfigError, load_config, require_api_key
 from .core import Ranger
 from .events import Notice, State, StateChanged, TextDelta, ToolCalled, ToolFinished, TurnComplete
@@ -353,6 +354,94 @@ def cmd_audio_check(config: Config, args) -> int:
     )
 
 
+def cmd_transcribe(config: Config, args) -> int:
+    """Tier 3b. A WAV in, a transcript out. No microphone involved."""
+    import asyncio
+
+    from .audio import AudioError, read_wav
+    from .stt import TranscriptionError, build_transcriber
+
+    paint = _colour(sys.stdout.isatty())
+    path = Path(args.file).expanduser().resolve()
+    if not path.is_file():
+        print(f"  no such file: {path}", file=sys.stderr)
+        return 1
+
+    try:
+        pcm, rate, channels = read_wav(path)
+    except AudioError as exc:
+        print(f"  {exc}", file=sys.stderr)
+        return 1
+
+    stt = config.stt
+    if args.model:
+        from dataclasses import replace
+
+        stt = replace(stt, model=args.model)
+
+    try:
+        api_key = require_api_key("DEEPGRAM_API_KEY")
+    except ConfigError as exc:
+        print(f"  {exc}", file=sys.stderr)
+        return 1
+
+    seconds = len(pcm) / (2 * max(1, channels) * rate) if rate else 0
+    hints = not args.no_hints
+    print(f"  {path.name}, {seconds:.1f}s, {rate} Hz, {channels} channel")
+    print(f"  model {stt.model}, hinting {'on' if hints and stt.keyterms else 'off'}")
+    print()
+
+    transcriber = build_transcriber(stt, api_key)
+    try:
+        transcript = asyncio.run(transcriber.transcribe(pcm_wav_bytes(path), hints=hints))
+    except TranscriptionError as exc:
+        print(f"  {exc}", file=sys.stderr)
+        return 1
+
+    if transcript.empty:
+        print(paint("  Deepgram heard nothing at all.", YELLOW))
+        print("  The audio may be silent. Run 'ranger audio check' to measure it.")
+        return 1
+
+    print(paint("  heard:", BOLD), transcript.text)
+    print()
+    print(
+        f"  confidence {transcript.confidence:.0%}, {transcript.latency_ms} ms"
+        + (f", {len(transcript.hinted)} hints sent" if transcript.hinted else "")
+    )
+
+    shaky = transcript.shaky_words
+    if shaky:
+        listing = ", ".join(f"{w.text} ({w.confidence:.0%})" for w in shaky[:8])
+        print(paint(f"  least certain: {listing}", DIM))
+
+    if args.expect:
+        result = compare(args.expect, transcript.text)
+        print()
+        print(paint("  said: ", BOLD), args.expect)
+        if result.perfect:
+            print(paint("  every word matched.", TEAL))
+        else:
+            print(
+                paint(
+                    f"  {result.errors} of {len(result.expected)} words differ "
+                    f"({result.word_error_rate:.0%} word error rate)",
+                    YELLOW,
+                )
+            )
+            print(result.render())
+            print()
+            print(paint("  If a named account is wrong, add it to stt.keyterms and", DIM))
+            print(paint("  run this again with the same file to see whether it helped.", DIM))
+        return 0 if result.perfect else 0
+    return 0
+
+
+def pcm_wav_bytes(path: Path) -> bytes:
+    """Deepgram wants the container, not the raw frames."""
+    return path.read_bytes()
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="ranger", description="Ranger, a voice-first assistant.")
     parser.add_argument("-c", "--config", help="path to ranger.toml")
@@ -381,6 +470,18 @@ def main(argv: list[str] | None = None) -> int:
     )
     check.add_argument("--keep", help="write the recording to this path")
 
+    transcribe = sub.add_parser(
+        "transcribe", help="Tier 3b: transcribe a WAV file with Deepgram"
+    )
+    transcribe.add_argument("file", help="path to a 16 bit WAV, e.g. from 'ranger audio check --keep'")
+    transcribe.add_argument(
+        "--expect", help="what you actually said, to see exactly which words came back wrong"
+    )
+    transcribe.add_argument(
+        "--no-hints", action="store_true", help="send no vocabulary hints, to A/B whether they help"
+    )
+    transcribe.add_argument("--model", help="override stt.model for this run")
+
     args = parser.parse_args(argv)
 
     try:
@@ -400,6 +501,8 @@ def main(argv: list[str] | None = None) -> int:
             return cmd_audio_check(config, args)
         print("usage: ranger audio devices | ranger audio check", file=sys.stderr)
         return 2
+    if args.command == "transcribe":
+        return cmd_transcribe(config, args)
 
     try:
         return asyncio.run(repl(config, show_state=not args.quiet_state))

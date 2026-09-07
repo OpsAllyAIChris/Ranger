@@ -106,7 +106,7 @@ quiet" tool.
 | ---- | ---- | ----- |
 | 1 | The brain. Config, provider seam, agent core as a library, event stream, vault guard, terminal REPL | done |
 | 2 | The hands. Three tools: account recall, draft and hold, what went quiet | done |
-| 3 | The ears and mouth. 3a loopback done. 3b transcribe, 3c speak, 3d full loop still to come | 3a done |
+| 3 | The ears and mouth. 3a loopback and 3b transcription done. 3c speak, 3d full loop to come | 3a, 3b done |
 | 4 | The memory. Durable facts in `Ranger/memory`, one fact per entry, hand-editable | later |
 | 5 | The heartbeat. Morning surface, quiet hours, held notices, a schedule that survives restarts | later |
 | 6 | The rails. Confirmation gate, audit trail, cost tally, kill switch, everything tunable in config | later |
@@ -201,7 +201,7 @@ failure can be:
 | Step | Command | Needs |
 | ---- | ------- | ----- |
 | 3a | `ranger audio devices`, `ranger audio check` | nothing. No keys, no network |
-| 3b | `ranger audio transcribe file.wav` | Deepgram key, no microphone |
+| 3b | `ranger transcribe file.wav` | Deepgram key, no microphone |
 | 3c | `ranger say "..."` | ElevenLabs key, no microphone |
 | 3d | `ranger --voice` | everything |
 
@@ -225,6 +225,35 @@ Rules that hold across all four:
   whole process open for a minute after the command had finished, while the
   suite cheerfully reported passing in 1.6 seconds.
 
+## Misheard account names: which layer fixes it
+
+A real decision, recorded because the obvious answer is wrong.
+
+Account names are what transcription gets wrong most, and `resolve_account`
+already matches fuzzily. So the temptation is to loosen the matcher. **Do not.**
+
+- **Hinting fixes the string. Fuzzy matching only fixes the lookup.** If the
+  transcript says "Ellis Foods", fuzzy matching finds the right note, but the
+  reply and any draft still say Ellis. Only hinting corrects the text that
+  flows onward.
+- **Loosening the matcher trades a visible failure for an invisible one.**
+  Today an ambiguous name is a question to the operator. Drop the cutoff and
+  more queries resolve to a single confident answer, some of them the wrong
+  account, said out loud with no signal that anything was guessed. Reading out
+  the wrong account's status is worse than asking which one.
+- **There is no data yet.** Tuning a matcher before seeing which words Deepgram
+  actually gets wrong is guessing. `ranger transcribe --expect` exists to
+  produce that data.
+
+So: hinting only, at the transcription layer. `resolve_account` is unchanged.
+
+The next move, once there is evidence, is **not** a looser cutoff but deriving
+`keyterms` from the account filenames in the vault, so the hint list is exactly
+the 69 names that matter and stays current as accounts are added. That is still
+the transcription layer. Only if hinting demonstrably fails on a name should the
+recall layer change, and then by adding a spoken-form alias to the note rather
+than by loosening the matcher for all 69.
+
 ## Layout
 
 ```
@@ -243,6 +272,8 @@ ranger/
   audio.py       devices, levels, wav, and the PortAudio backend behind a seam
   trigger.py     push to talk: hold via pynput, toggle via stdlib, fixed for tests
   audiocheck.py  Tier 3a: 'ranger audio devices' and 'ranger audio check'
+  stt.py         Tier 3b: Deepgram behind a seam, plain HTTP, no SDK
+  compare.py     what you said against what it heard, with a word error rate
   core.py        the agent. one entry point. all the logic
   cli.py         the terminal. first caller of the core, permanent debug path
   testing.py     ScriptedProvider, so the core is verifiable with no API key

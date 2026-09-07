@@ -119,12 +119,35 @@ channels = 1
 # Hard ceiling on one recording, so a stuck key cannot record all afternoon.
 max_seconds = 60
 
-# Tier 3b and 3c, unused until then.
-stt_provider = "deepgram"
+# Tier 3c, unused until then.
 tts_provider = "elevenlabs"
 voice_id = ""            # from 'ranger voices' in 3c
 # Flash or Turbo. Latency is the whole experience, so the fastest model wins.
 model_id = "eleven_flash_v2_5"
+
+[stt]
+# Speech to text. Deepgram's pre-recorded endpoint, one POST per utterance.
+provider = "deepgram"
+# nova-3 takes keyterm prompting; nova-2 and earlier take keyword boosting.
+# The code picks the right parameter from this name, so change only this.
+# nova-3 costs more per minute than nova-2. Check the Deepgram pricing page
+# before leaving it here; this was not verified when it was written.
+model = "nova-3"
+language = "en"
+smart_format = true
+punctuate = true
+timeout_seconds = 30.0
+
+# Vocabulary hints. These are the words a general model gets wrong: named
+# accounts and packaging terms. Empty this list to turn hinting off entirely,
+# which is also how to A/B whether it is earning its keep.
+keyterms = [
+  "Wexxar", "Pregis", "Illes", "Pegasus", "CaptiveAire", "Amcor", "Vytalogy",
+  "corrugated", "case erector", "stretch wrapper", "Texoma",
+]
+# Intensifier, keyword boosting only. Keyterm prompting ignores it.
+boost = 2.0
+max_hints = 100
 
 [server]
 # Tier 7. The browser talks to the same core the terminal does.

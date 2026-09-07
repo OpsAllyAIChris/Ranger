@@ -74,6 +74,25 @@ On Windows, if the recording comes back as pure silence, the cause is almost
 always Settings, Privacy and security, Microphone, "Let desktop apps access
 your microphone".
 
+## Transcription (Tier 3b)
+
+```powershell
+ranger audio check --keep out.wav
+ranger transcribe out.wav
+ranger transcribe out.wav --expect "where are we on Illes Foods"
+ranger transcribe out.wav --no-hints --expect "where are we on Illes Foods"
+```
+
+`--expect` prints exactly which words came back wrong and a word error rate, so
+mishearing is visible rather than inferred. Running the same file with and
+without `--no-hints` is how you find out whether `stt.keyterms` is earning its
+keep.
+
+Vocabulary hints live in `ranger.toml` under `[stt] keyterms`. The parameter
+Deepgram wants depends on the model, and the code picks it: `keyterm` for
+nova-3, `keywords` for nova-2 and earlier. Change `stt.model`, not the
+parameter.
+
 ## Test
 
 ```bash

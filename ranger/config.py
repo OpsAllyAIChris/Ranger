@@ -110,7 +110,6 @@ class DraftsConfig:
 class VoiceConfig:
     push_to_talk: bool
     wake_word: bool
-    stt_provider: str
     tts_provider: str
     voice_id: str
     model_id: str = "eleven_flash_v2_5"
@@ -121,6 +120,24 @@ class VoiceConfig:
     sample_rate: int = 16000
     channels: int = 1
     max_seconds: int = 60
+
+
+@dataclass(frozen=True)
+class SttConfig:
+    """Speech to text. Deepgram, pre-recorded endpoint."""
+
+    provider: str = "deepgram"
+    model: str = "nova-3"
+    language: str = "en"
+    smart_format: bool = True
+    punctuate: bool = True
+    timeout_seconds: float = 30.0
+    #: Vocabulary hints. The parameter Deepgram wants depends on the model, so
+    #: the model picks it: keyterm for nova-3, keywords for nova-2 and earlier.
+    keyterms: tuple[str, ...] = ()
+    #: Intensifier for keyword boosting only. Ignored by keyterm prompting.
+    boost: float = 2.0
+    max_hints: int = 100
 
 
 @dataclass(frozen=True)
@@ -139,6 +156,7 @@ class Config:
     recall: RecallConfig
     drafts: DraftsConfig
     voice: VoiceConfig
+    stt: SttConfig
     server: ServerConfig
     source_path: Path | None = None
     warnings: tuple[str, ...] = field(default_factory=tuple)
@@ -404,7 +422,6 @@ def load_config(path: str | Path | None = None, *, load_env: bool = True) -> Con
     voice = VoiceConfig(
         push_to_talk=bool(voice_section.get("push_to_talk", True)),
         wake_word=bool(voice_section.get("wake_word", False)),
-        stt_provider=str(voice_section.get("stt_provider", "deepgram")),
         tts_provider=str(voice_section.get("tts_provider", "elevenlabs")),
         voice_id=str(voice_section.get("voice_id", "")),
         model_id=str(voice_section.get("model_id", "eleven_flash_v2_5")),
@@ -426,6 +443,21 @@ def load_config(path: str | Path | None = None, *, load_env: bool = True) -> Con
         raise ConfigError("voice.max_seconds must be at least 1")
     if voice.wake_word:
         raise ConfigError("voice.wake_word is not built. Push to talk only.")
+
+    stt_section = table.get("stt", {})
+    stt = SttConfig(
+        provider=str(stt_section.get("provider", "deepgram")),
+        model=str(stt_section.get("model", "nova-3")),
+        language=str(stt_section.get("language", "en")),
+        smart_format=bool(stt_section.get("smart_format", True)),
+        punctuate=bool(stt_section.get("punctuate", True)),
+        timeout_seconds=float(stt_section.get("timeout_seconds", 30.0)),
+        keyterms=tuple(str(t).strip() for t in stt_section.get("keyterms", ()) if str(t).strip()),
+        boost=float(stt_section.get("boost", 2.0)),
+        max_hints=int(stt_section.get("max_hints", 100)),
+    )
+    if stt.timeout_seconds <= 0:
+        raise ConfigError("stt.timeout_seconds must be greater than zero")
 
     server_section = table.get("server", {})
     server = ServerConfig(
@@ -454,6 +486,7 @@ def load_config(path: str | Path | None = None, *, load_env: bool = True) -> Con
         recall=recall,
         drafts=drafts,
         voice=voice,
+        stt=stt,
         server=server,
         source_path=config_path,
         warnings=tuple(warnings),
