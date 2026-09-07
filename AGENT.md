@@ -222,6 +222,16 @@ What actually helps, in order:
   console output, TOML literal strings for any path.
 - **Hand the operator a command, not a claim,** when a break is theirs to
   observe. Ask for the full traceback instead of guessing from a truncated one.
+- **Never let a simulation write into the repo.** A Windows-shaped path is
+  relative on POSIX, so `mkdir(parents=True)` builds it under the working
+  directory. A `C:\tmp\...` tree got committed that way, and git on Windows
+  then refused every checkout with `error: invalid path`, so the operator sat
+  three commits behind while reporting results from stale code. Two guards now
+  exist: `vault.root` must be absolute, and `tests/test_suite_hygiene.py` fails
+  on any tracked path Windows cannot represent.
+- **Audit the index, not the working tree,** before pushing. `git ls-files`
+  reads the index; a `git reset` can silently restore files you thought you had
+  removed.
 - `ranger doctor` checks config, vault and environment.
 - `ranger init` creates Ranger's own folders and nothing else, after asking.
 - `ranger` starts the terminal REPL.

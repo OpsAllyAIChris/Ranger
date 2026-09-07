@@ -40,3 +40,61 @@ def test_no_module_imports_from_conftest(module: Path):
 def test_tests_is_not_a_package():
     """An __init__.py here would make the bad import work and hide the problem."""
     assert not (TESTS / "__init__.py").exists()
+
+
+# --- nothing in the repo may be un-checkout-able on Windows ---------------
+#
+# A pytest simulation once wrote a literal "C:\tmp\..." tree into the repo and
+# it got committed. Git on Windows then refused the whole checkout with
+# "error: invalid path", so every pull failed and the operator silently stayed
+# three commits behind. A repo that cannot be cloned on the platform it is
+# developed on is broken, so this fails the suite instead.
+
+REPO = TESTS.parent
+
+# < > : " | ? * and backslash are illegal in a Windows filename, as are control
+# characters. Names cannot end in a dot or a space.
+ILLEGAL_CHARS = re.compile(r'[<>:"|?*\\\x00-\x1f]')
+RESERVED = frozenset(
+    ["CON", "PRN", "AUX", "NUL"]
+    + [f"COM{n}" for n in range(1, 10)]
+    + [f"LPT{n}" for n in range(1, 10)]
+)
+
+
+def _tracked_paths() -> list[str]:
+    import subprocess
+
+    out = subprocess.run(
+        ["git", "ls-files", "-z"], cwd=REPO, capture_output=True, text=True, check=True
+    ).stdout
+    return [p for p in out.split("\0") if p]
+
+
+def test_git_ls_files_returned_something():
+    assert len(_tracked_paths()) > 10, "the checks below would pass vacuously"
+
+
+def test_no_tracked_path_is_illegal_on_windows():
+    offenders: list[tuple[str, str]] = []
+    for path in _tracked_paths():
+        for segment in path.split("/"):
+            if ILLEGAL_CHARS.search(segment):
+                offenders.append((path, "illegal character"))
+            elif segment != segment.rstrip(". "):
+                offenders.append((path, "trailing dot or space"))
+            elif segment.split(".")[0].upper() in RESERVED:
+                offenders.append((path, "reserved device name"))
+    assert not offenders, (
+        "these cannot be checked out on Windows, so git aborts the entire pull:\n"
+        + "\n".join(f"  {why}: {path}" for path, why in offenders)
+    )
+
+
+def test_no_untracked_windows_shaped_junk_in_the_repo():
+    """Catch it before it is ever staged, not just after."""
+    strays = [p for p in REPO.iterdir() if ILLEGAL_CHARS.search(p.name)]
+    assert not strays, (
+        "something wrote paths into the repo root that Windows cannot represent: "
+        + ", ".join(repr(p.name) for p in strays)
+    )

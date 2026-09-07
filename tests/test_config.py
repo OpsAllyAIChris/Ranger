@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import re
 from pathlib import Path
 
@@ -68,78 +69,98 @@ def test_env_override_for_vault_root(tmp_path, config_file, monkeypatch):
 #
 # A backslash inside a double-quoted TOML string is an escape sequence, so a
 # pasted Windows path either fails to parse or, worse, parses into something
-# that is not a path. The loader normalises before parsing.
+# that is not a path. The loader normalises the text before parsing.
+#
+# These test the normaliser at the string level on purpose. Whether
+# C:\Users\Chris is a valid *path* depends on the platform; whether the TOML
+# reader mangles it does not. Keeping them string-level means they mean the
+# same thing on Windows and on Linux.
 
 
-def _write_root(tmp_path, config_file, raw_root_line):
-    path = config_file()
-    text = path.read_text(encoding="utf-8")
-    text = re.sub(r"^root = .*$", lambda _: raw_root_line, text, count=1, flags=re.M)
-    path.write_text(text, encoding="utf-8")
-    return path
+def repair(root_line: str) -> tuple[str, list[str]]:
+    from ranger.config import _repair_windows_paths
+
+    return _repair_windows_paths(f"[vault]\n{root_line}\n")
 
 
-def test_windows_path_with_backslashes_loads(tmp_path, config_file):
-    path = _write_root(tmp_path, config_file, r'root = "C:\Users\Chris\Vault"')
-    loaded = load_config(path, load_env=False)
+def value_of(text: str) -> str:
+    import tomllib
 
-    assert loaded.vault.root == Path(r"C:\Users\Chris\Vault").expanduser().resolve()
-    assert any("backslash" in w or "Windows path" in w for w in loaded.warnings)
+    return tomllib.loads(text)["vault"]["root"]
 
 
-def test_windows_path_whose_escapes_are_all_valid_is_not_mangled(tmp_path, config_file):
+def test_backslash_path_survives_the_toml_reader():
+    repaired, notes = repair(r'root = "C:\Users\Chris\Vault"')
+    assert value_of(repaired) == r"C:\Users\Chris\Vault"
+    assert notes and "single quotes" in notes[0]
+
+
+def test_path_whose_escapes_are_all_valid_is_not_silently_mangled():
     r"""C:\temp\notes parses with no error at all into C:<tab>emp<newline>otes.
 
-    This is the case a better error message could never catch.
+    This is the case no error message could ever catch, and the reason the
+    repair runs before the parse rather than after it.
     """
-    path = _write_root(tmp_path, config_file, r'root = "C:\temp\notes"')
-    loaded = load_config(path, load_env=False)
+    raw = r'root = "C:\temp\notes"'
+    assert "\t" in value_of(f"[vault]\n{raw}\n")  # what it would have been
 
-    # Asserted on the string, not on Path.name: backslash is a separator on
-    # Windows and an ordinary character on POSIX, and this test has to mean the
-    # same thing on both. The corruption being guarded against is at the string
-    # level anyway.
-    text = str(loaded.vault.root)
-    assert "\t" not in text and "\n" not in text
-    assert text.endswith(r"C:\temp\notes")
+    repaired, notes = repair(raw)
+    assert value_of(repaired) == r"C:\temp\notes"
+    assert notes
 
 
-def test_already_escaped_windows_path_is_left_alone(tmp_path, config_file):
+def test_already_escaped_path_is_left_alone():
     """Whoever wrote \\\\ meant it. Do not double it again."""
-    path = _write_root(tmp_path, config_file, r'root = "C:\\Users\\Chris\\Vault"')
-    loaded = load_config(path, load_env=False)
-
-    assert loaded.vault.root == Path(r"C:\Users\Chris\Vault").expanduser().resolve()
-    assert not loaded.warnings or all("backslash" not in w for w in loaded.warnings)
+    repaired, notes = repair(r'root = "C:\\Users\\Chris\\Vault"')
+    assert value_of(repaired) == r"C:\Users\Chris\Vault"
+    assert notes == []
 
 
-def test_literal_string_windows_path_needs_no_repair(tmp_path, config_file):
-    path = _write_root(tmp_path, config_file, r"root = 'C:\Users\Chris\Vault'")
-    loaded = load_config(path, load_env=False)
-
-    assert loaded.vault.root == Path(r"C:\Users\Chris\Vault").expanduser().resolve()
-    assert all("backslash" not in w for w in loaded.warnings)
+def test_literal_string_needs_no_repair():
+    repaired, notes = repair(r"root = 'C:\Users\Chris\Vault'")
+    assert value_of(repaired) == r"C:\Users\Chris\Vault"
+    assert notes == []
 
 
-def test_windows_path_containing_an_apostrophe(tmp_path, config_file):
-    """A literal string cannot hold an apostrophe, so that branch escapes instead."""
-    path = _write_root(tmp_path, config_file, r'root = "C:\Users\O\'Brien\Vault"'.replace("\\'", "'"))
-    loaded = load_config(path, load_env=False)
-
-    assert "O'Brien" in str(loaded.vault.root)
-    assert "\t" not in str(loaded.vault.root)
+def test_path_containing_an_apostrophe_takes_the_escaping_branch():
+    """A TOML literal string cannot hold an apostrophe."""
+    repaired, notes = repair('root = "C:\\Users\\O\'Brien\\Vault"')
+    assert value_of(repaired) == "C:\\Users\\O'Brien\\Vault"
+    assert notes
 
 
-def test_the_shipped_forward_slash_root_is_untouched(tmp_path, config_file):
-    """The value in the repo's ranger.toml. No backslashes, so nothing to repair."""
-    path = _write_root(tmp_path, config_file, 'root = "~/Obsidian/Ranger-Vault"')
-    loaded = load_config(path, load_env=False)
+def test_forward_slash_root_is_untouched():
+    """The value shipped in the repo's ranger.toml."""
+    raw = 'root = "~/Obsidian/Ranger-Vault"'
+    repaired, notes = repair(raw)
+    assert repaired == f"[vault]\n{raw}\n"
+    assert notes == []
 
+
+def test_repair_only_touches_the_vault_table():
+    from ranger.config import _repair_windows_paths
+
+    text = '[drafts]\nroot = "C:\\Users\\x"\n'
+    repaired, notes = _repair_windows_paths(text)
+    assert repaired == text and notes == []
+
+
+def test_repair_preserves_a_trailing_newline():
+    from ranger.config import _repair_windows_paths
+
+    assert _repair_windows_paths("[vault]\n")[0] == "[vault]\n"
+    assert _repair_windows_paths("[vault]")[0] == "[vault]"
+
+
+def test_the_shipped_config_file_loads(tmp_path, monkeypatch):
+    """ranger.toml as committed, with its ~ root, parses and validates."""
+    monkeypatch.delenv("RANGER_VAULT_ROOT", raising=False)
+    loaded = load_config(Path(__file__).resolve().parent.parent / "ranger.toml", load_env=False)
     assert loaded.vault.root == (Path.home() / "Obsidian" / "Ranger-Vault").resolve()
     assert all("backslash" not in w for w in loaded.warnings)
 
 
-def test_genuinely_broken_toml_still_raises_with_the_backslash_hint(tmp_path, config_file):
+def test_broken_toml_raises_with_a_backslash_hint(config_file):
     path = config_file()
     path.write_text('[model]\nname = "x\\q"\n', encoding="utf-8")
 
@@ -149,11 +170,41 @@ def test_genuinely_broken_toml_still_raises_with_the_backslash_hint(tmp_path, co
     assert "backslash" in str(caught.value)
 
 
-def test_repair_only_touches_the_vault_table(tmp_path, config_file):
-    """A backslash in some other table is none of this function's business."""
-    from ranger.config import _repair_windows_paths
+# --- the vault root must be absolute --------------------------------------
 
-    text = '[drafts]\nroot = "C:\\Users\\x"\n'
-    repaired, notes = _repair_windows_paths(text)
-    assert repaired == text
-    assert notes == []
+
+def test_relative_vault_root_is_rejected(tmp_path, config_file):
+    """A relative root resolves against the working directory.
+
+    That is how a stray 'C:\\tmp\\...' tree once got written into this
+    repository: a Windows-shaped root is relative on POSIX, so mkdir built it
+    under the current directory.
+    """
+    path = config_file()
+    text = path.read_text(encoding="utf-8")
+    path.write_text(
+        re.sub(r"^root = .*$", lambda _: "root = 'Obsidian/Vault'", text, count=1, flags=re.M),
+        encoding="utf-8",
+    )
+    with pytest.raises(ConfigError, match="absolute path"):
+        load_config(path, load_env=False)
+
+
+def test_windows_root_on_posix_is_rejected_by_name(tmp_path, config_file):
+    path = config_file()
+    text = path.read_text(encoding="utf-8")
+    path.write_text(
+        re.sub(r"^root = .*$", lambda _: r"root = 'C:\tmp\Vault'", text, count=1, flags=re.M),
+        encoding="utf-8",
+    )
+    if os.name == "nt":
+        load_config(path, load_env=False)  # absolute on Windows, nothing to reject
+    else:
+        with pytest.raises(ConfigError, match="not Windows"):
+            load_config(path, load_env=False)
+
+
+def test_relative_env_override_is_rejected_too(config_file, monkeypatch):
+    monkeypatch.setenv("RANGER_VAULT_ROOT", "some/relative/vault")
+    with pytest.raises(ConfigError, match="RANGER_VAULT_ROOT"):
+        load_config(config_file(), load_env=False)

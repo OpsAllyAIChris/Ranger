@@ -20,5 +20,12 @@ venv/
 .ranger/
 *.log
 
+# Anything Windows cannot check out. A test simulation once wrote a literal
+# C:\tmp\... tree into the repo root; once committed, git on Windows refused
+# the entire pull with "error: invalid path" and every later push was invisible
+# to the operator. tests/test_suite_hygiene.py fails on these too.
+/[A-Za-z]:*
+/pytest-of-*
+
 # os
 .DS_Store

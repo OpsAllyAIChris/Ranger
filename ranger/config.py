@@ -205,12 +205,38 @@ def _resolve_under(root: Path, relative: str, label: str) -> Path:
     return candidate
 
 
+# A drive-letter or UNC path, which is absolute on Windows and just a relative
+# filename on POSIX. Recognised so the error message can say which it is.
+_WINDOWS_ABSOLUTE = re.compile(r"^(?:[A-Za-z]:[\\/]|\\\\)")
+
+
 def _vault_root(raw: str) -> Path:
+    """Resolve the vault root, which must be absolute.
+
+    A relative root would resolve against the current working directory, so
+    Ranger would quietly build a vault inside whatever folder it was launched
+    from. That is never what anyone means, and it is how a stray 'C:\\tmp\\...'
+    once got written into this repository on Linux.
+    """
     override = os.environ.get("RANGER_VAULT_ROOT")
+    source = "RANGER_VAULT_ROOT" if override else "vault.root"
     value = override or raw
     root = Path(value).expanduser()
+
     if not root.is_absolute():
-        root = root.resolve()
+        if _WINDOWS_ABSOLUTE.match(str(root)):
+            raise ConfigError(
+                f"{source} is {value!r}, a Windows path, but this is not Windows. "
+                "It would be treated as a relative name and the vault would be built "
+                "inside the current directory. Use a path for the platform you are on."
+            )
+        raise ConfigError(
+            f"{source} must be an absolute path, got {value!r}. A relative path "
+            "resolves against whatever directory Ranger was started in, so the vault "
+            "would move depending on where you launched it. Use a full path or one "
+            "starting with ~."
+        )
+
     return root.resolve()
 
 
