@@ -106,7 +106,7 @@ quiet" tool.
 | ---- | ---- | ----- |
 | 1 | The brain. Config, provider seam, agent core as a library, event stream, vault guard, terminal REPL | done |
 | 2 | The hands. Three tools: account recall, draft and hold, what went quiet | done |
-| 3 | The ears and mouth. 3a loopback, 3b transcription, 3c speech done. 3d full loop to come | 3a, 3b, 3c done |
+| 3 | The ears and mouth. Push to talk, transcript shown, barge-in, speech starts on the first sentence | done |
 | 4 | The memory. Durable facts in `Ranger/memory`, one fact per entry, hand-editable | later |
 | 5 | The heartbeat. Morning surface, quiet hours, held notices, a schedule that survives restarts | later |
 | 6 | The rails. Confirmation gate, audit trail, cost tally, kill switch, everything tunable in config | later |
@@ -123,6 +123,14 @@ touches nothing else and may be built early. It is a preview, not a
 dependency.
 
 ## Configuration
+
+Every table's keys are checked against `KNOWN_KEYS` at startup and an unknown
+one is refused, with a pointer to the right table when the name exists
+elsewhere. This is not tidiness: a dead `voice_id` sat in `[voice]` while the
+code read `tts.voice_id`, so setting it looked like configuring the voice and
+did nothing. `tomllib` already rejects a true duplicate within one table, so
+duplicate detection would not have caught it. A setting nothing reads is worse
+than a missing one.
 
 Everything tunable lives in `ranger.toml`. No model name, vault path, hour or
 threshold is hardcoded anywhere in the source. Secrets live in `.env`, which
@@ -269,6 +277,32 @@ the transcription layer. Only if hinting demonstrably fails on a name should the
 recall layer change, and then by adding a spoken-form alias to the note rather
 than by loosening the matcher for all 69.
 
+## Tier 3d, the full loop
+
+`ranger/voiceloop.py` holds no agent logic. A spoken turn is a typed turn with
+different ends: the transcript goes into the same `Ranger.turn()`. `ranger`
+with no flags is still the typed REPL and always will be.
+
+Four things it exists to get right, all about how the wait feels:
+
+- **Something is printed the instant the key comes up,** before transcription.
+  That gap is most of a second and silence in it reads as broken.
+- **The transcript is shown next to the reply, every turn,** so a wrong answer
+  can be blamed on the ears or the brain without guessing. Words Deepgram was
+  unsure about are listed under it.
+- **Speech starts on the first sentence,** not the finished reply.
+  `ranger/speech.py` splits the stream, holding back on abbreviations,
+  decimals and initials, with a lower length bar for the first sentence
+  because that is the one being waited on.
+- **A press interrupts, and is the same press that starts the next turn.**
+  Cutting in and speaking is one action. Quitting is deliberately not the same
+  event as interrupting: both stop the speech, only a press is a barge-in and
+  carries forward.
+
+Recording never overlaps playback, because recording only begins after the
+speech has been stopped. There is a test asserting that from the backend's own
+event order rather than from the code's intent.
+
 ## Where the hint list comes from
 
 `ranger/keyterms.py` builds it from the account filenames, so it cannot go
@@ -314,6 +348,8 @@ ranger/
   compare.py     what you said against what it heard, with a word error rate
   keyterms.py    the hint list, derived from account filenames and ranked
   tts.py         Tier 3c: ElevenLabs behind a seam, streaming, plain HTTP
+  speech.py      splitting a streaming reply into speakable sentences
+  voiceloop.py   Tier 3d: push to talk wrapped around the core, no agent logic
   core.py        the agent. one entry point. all the logic
   cli.py         the terminal. first caller of the core, permanent debug path
   testing.py     ScriptedProvider, so the core is verifiable with no API key

@@ -108,6 +108,18 @@ ranked, with whatever did not fit the cap.
 Ranger touches exactly two ElevenLabs endpoints, so a key scoped to Text to
 Speech plus Voices read only is enough.
 
+## The full loop (Tier 3d)
+
+```powershell
+ranger --voice
+```
+
+Hold the key, talk, release. It shows what it heard, answers, and speaks while
+the rest of the reply is still being written. Press again while it is talking
+to cut in; that same press starts your next turn.
+
+`ranger` with no flags is still the typed REPL, and always will be.
+
 ## Test
 
 ```bash

@@ -119,9 +119,7 @@ channels = 1
 # Hard ceiling on one recording, so a stuck key cannot record all afternoon.
 max_seconds = 60
 
-voice_id = ""            # from 'ranger voices' in 3c
-# Flash or Turbo. Latency is the whole experience, so the fastest model wins.
-model_id = "eleven_flash_v2_5"
+# The voice itself lives in [tts], not here.
 
 [stt]
 # Speech to text. Deepgram's pre-recorded endpoint, one POST per utterance.

@@ -241,6 +241,66 @@ def _repair_windows_paths(text: str) -> tuple[str, list[str]]:
     return result, notes
 
 
+#: Every key each table is allowed to carry. A setting the code does not read
+#: is worse than a missing one: it looks configured and does nothing. This is
+#: how a dead voice_id sat in [voice] while the code read tts.voice_id, so
+#: setting it silently had no effect.
+KNOWN_KEYS: dict[str, frozenset[str]] = {
+    "model": frozenset({
+        "provider", "name", "max_tokens", "effort", "max_tool_rounds",
+        "history_turns", "timeout_seconds", "max_retries", "retry_backoff_seconds",
+    }),
+    "vault": frozenset({
+        "root", "accounts", "knowledge", "ranger", "memory", "inbox", "drafts", "log",
+    }),
+    "knowledge": frozenset({"budget_chars", "priority"}),
+    "schedule": frozenset({"morning_hour", "quiet_start_hour", "quiet_end_hour"}),
+    "accounts": frozenset({"quiet_after_days", "exclude_files", "skip_statuses"}),
+    "recall": frozenset({
+        "activities", "detail_activities", "section_chars", "body_chars", "max_chars",
+    }),
+    "drafts": frozenset({"filename_format"}),
+    "voice": frozenset({
+        "push_to_talk", "wake_word", "trigger", "key", "input_device", "output_device",
+        "sample_rate", "channels", "max_seconds",
+    }),
+    "stt": frozenset({
+        "provider", "model", "language", "smart_format", "punctuate", "timeout_seconds",
+        "keyterms", "boost", "max_hints", "keyterms_from_accounts",
+    }),
+    "tts": frozenset({
+        "provider", "voice_id", "model_id", "output_format", "stability",
+        "similarity_boost", "speed", "timeout_seconds",
+    }),
+    "server": frozenset({"host", "port"}),
+}
+
+
+def _check_known_keys(table: dict[str, Any]) -> None:
+    """Fail on a setting nothing reads, and say where it should have gone."""
+    for section, allowed in KNOWN_KEYS.items():
+        values = table.get(section)
+        if not isinstance(values, dict):
+            continue
+        for key in values:
+            if key in allowed:
+                continue
+            elsewhere = [s for s, keys in KNOWN_KEYS.items() if key in keys]
+            hint = (
+                f" Did you mean {elsewhere[0]}.{key}?"
+                if elsewhere
+                else " Remove it, or check the spelling."
+            )
+            raise ConfigError(f"{section}.{key} is not a setting Ranger reads.{hint}")
+
+    for section in table:
+        if section not in KNOWN_KEYS:
+            raise ConfigError(
+                f"[{section}] is not a section Ranger reads. Known sections: "
+                + ", ".join(sorted(KNOWN_KEYS))
+            )
+
+
 def _require(table: dict[str, Any], section: str, key: str) -> Any:
     if section not in table:
         raise ConfigError(f"config is missing the [{section}] section")
@@ -372,6 +432,8 @@ def load_config(path: str | Path | None = None, *, load_env: bool = True) -> Con
                 "forward slashes, which work fine on Windows."
             )
         raise ConfigError(f"{config_path} is not valid TOML: {exc}{hint}") from exc
+
+    _check_known_keys(table)
 
     model = ModelConfig(
         provider=str(_require(table, "model", "provider")),

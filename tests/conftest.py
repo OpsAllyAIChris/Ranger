@@ -54,7 +54,6 @@ filename_format = "{{date}}-{{slug}}.md"
 [voice]
 push_to_talk = true
 wake_word = false
-voice_id = ""
 trigger = "hold"
 key = "space"
 input_device = ""

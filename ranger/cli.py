@@ -122,6 +122,64 @@ async def _run_turn(agent: Ranger, text: str, paint, show_state: bool) -> None:
         print(line, file=sys.stderr)
 
 
+async def voice_loop(config: Config, show_state: bool) -> int:
+    """Tier 3d. The same core the typed REPL uses, with ears and a mouth."""
+    from .audio import AudioError, SoundDeviceBackend
+    from .stt import build_transcriber
+    from .trigger import TriggerError, build_trigger
+    from .tts import build_speaker
+    from .voiceloop import VoiceLoop
+
+    paint = _colour(sys.stdout.isatty())
+    try:
+        agent = _build_agent(config)
+        deepgram = require_api_key("DEEPGRAM_API_KEY")
+        elevenlabs = require_api_key("ELEVENLABS_API_KEY")
+    except ConfigError as exc:
+        print(paint(f"  cannot start: {exc}", RED), file=sys.stderr)
+        return 1
+
+    if not config.tts.voice_id:
+        print(paint("  tts.voice_id is not set. Run 'ranger voices' and pick one.", RED), file=sys.stderr)
+        return 1
+
+    try:
+        backend = SoundDeviceBackend()
+        devices = backend.devices()
+        input_device = resolve_device(config.voice.input_device, devices, kind="input")
+        output_device = resolve_device(config.voice.output_device, devices, kind="output")
+        trigger = build_trigger(config.voice.trigger, config.voice.key)
+    except (AudioError, TriggerError) as exc:
+        print(paint(f"  {exc}", RED), file=sys.stderr)
+        return 1
+
+    plan = _keyterm_plan(config)
+    stt = config.stt
+    if plan.terms:
+        from dataclasses import replace
+
+        stt = replace(stt, keyterms=plan.terms)
+
+    print(paint("Ranger", BOLD + TEAL) + paint(f"  {config.model.name}, voice {config.tts.voice_id}", DIM))
+    print(paint(f"  {len(plan.terms)} vocabulary hints, {config.stt.model}", DIM))
+    print(paint("  the typed interface is still there: run 'ranger' with no flags", DIM))
+    print()
+
+    loop = VoiceLoop(
+        agent=agent,
+        config=config,
+        trigger=trigger,
+        backend=backend,
+        transcriber=build_transcriber(stt, deepgram),
+        speaker=build_speaker(config.tts, elevenlabs),
+        out=sys.stdout,
+        input_device=input_device,
+        output_device=output_device,
+        paint=paint,
+    )
+    return await loop.run()
+
+
 async def repl(config: Config, show_state: bool) -> int:
     paint = _colour(sys.stdout.isatty())
 
@@ -624,6 +682,11 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="hide the state stream the core emits",
     )
+    parser.add_argument(
+        "--voice",
+        action="store_true",
+        help="Tier 3d: push to talk instead of typing. The typed path stays available.",
+    )
     sub = parser.add_subparsers(dest="command")
     sub.add_parser("chat", help="talk to Ranger in the terminal (default)")
     sub.add_parser("doctor", help="check the config, the vault and the environment")
@@ -695,6 +758,8 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_say(config, args)
 
     try:
+        if args.voice:
+            return asyncio.run(voice_loop(config, show_state=not args.quiet_state))
         return asyncio.run(repl(config, show_state=not args.quiet_state))
     except KeyboardInterrupt:
         return 0
