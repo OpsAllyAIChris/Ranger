@@ -397,3 +397,38 @@ def test_the_switch_is_readable_and_editable_by_hand(config, vault):
     path.write_text(path.read_text(encoding="utf-8").replace("paused: true", "paused: false"),
                     encoding="utf-8")
     assert not switch.engaged()
+
+
+async def test_the_log_records_what_ranger_said_not_only_what_it_did(seeded, vault):
+    """A turn that chose not to act must not look like a turn that broke.
+
+    The operator's voice turns logged "turn" and then nothing at all, and there
+    was no way to tell whether the model had declined to call a tool or
+    something had failed.
+    """
+    log = AuditLog(vault, seeded.vault.log)
+    agent = agent_with(
+        seeded, ScriptedGate([]), [{"text": "You have already told me that."}], audit=log
+    )
+    await collect(agent, "remember I prefer morning meetings")
+
+    text = log.read()
+    assert "You have already told me that." in text
+    assert "[no tools]" in text
+
+
+async def test_the_log_names_the_tools_a_turn_actually_used(seeded, vault):
+    log = AuditLog(vault, seeded.vault.log)
+    agent = agent_with(
+        seeded, ScriptedGate([]),
+        [{"tools": [{"name": "account_recall", "input": {"account": "Illes"}}]}, {"text": "Rod owes you volumes."}],
+        audit=log,
+    )
+    await collect(agent, "where are we on Illes")
+    assert "[used account_recall]" in log.read()
+
+
+async def test_a_turn_that_said_nothing_says_so(seeded, vault):
+    log = AuditLog(vault, seeded.vault.log)
+    await collect(agent_with(seeded, ScriptedGate([]), [{"text": ""}], audit=log), "hello")
+    assert "(said nothing)" in log.read()

@@ -204,6 +204,7 @@ class Ranger:
                 changed = self._set_state(State.IDLE)
                 if changed:
                     yield changed
+                self._log("error", str(error))
                 yield Notice("alert", str(error))
                 yield TurnComplete(
                     reply="".join(reply_parts),
@@ -306,8 +307,17 @@ class Ranger:
         if changed:
             yield changed
 
+        reply = "".join(reply_parts)
+        # What Ranger said, not only what it did. Without this a turn where the
+        # model chose not to act looks exactly like a turn that broke: the log
+        # showed "turn" and then nothing, and there was no way to tell which.
+        self._log(
+            "reply",
+            (reply.strip() or "(said nothing)")[:200]
+            + (f"  [used {', '.join(tools_used)}]" if tools_used else "  [no tools]"),
+        )
         yield TurnComplete(
-            reply="".join(reply_parts),
+            reply=reply,
             tools_used=tuple(tools_used),
             stop_reason=stop_reason,
             usage=usage,
