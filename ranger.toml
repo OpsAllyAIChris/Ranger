@@ -34,6 +34,14 @@ history_turns = 24
 # Point this at the Obsidian vault. Ranger reads the whole vault and writes
 # only under <root>/<ranger>. Override at runtime with RANGER_VAULT_ROOT.
 # The 2TB external drive is a valid location; nothing assumes $HOME.
+#
+# Windows: forward slashes work, and so does ~. If you paste a path with
+# backslashes, prefer single quotes, which stop TOML treating a backslash as an
+# escape:
+#     root = 'C:\Users\you\Obsidian\Ranger-Vault'
+# Double quotes with single backslashes are accepted and normalised, with a
+# warning at startup, because that form either fails to parse or silently
+# mangles the path.
 root = "~/Obsidian/Ranger-Vault"
 
 # Read only. Ranger never writes to these.

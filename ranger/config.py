@@ -8,6 +8,7 @@ Secrets never appear here; they come from the environment via .env.
 from __future__ import annotations
 
 import os
+import re
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -121,6 +122,64 @@ class Config:
     warnings: tuple[str, ...] = field(default_factory=tuple)
 
 
+# Keys under [vault] whose values are paths. A Windows user pasting one of
+# these naturally writes backslashes, which TOML reads as escape sequences.
+_PATH_KEYS = frozenset(
+    {"root", "accounts", "knowledge", "ranger", "memory", "inbox", "drafts", "log"}
+)
+_TABLE = re.compile(r"^\s*\[([^\]]+)\]\s*$")
+_ASSIGN = re.compile(r'^(\s*)([A-Za-z_][A-Za-z0-9_-]*)(\s*=\s*)"([^"]*)"(\s*(?:#.*)?)$')
+
+
+def _repair_windows_paths(text: str) -> tuple[str, list[str]]:
+    """Let a Windows path survive a TOML basic string.
+
+    `root = "C:\\Users\\Chris\\Vault"` is not a path to TOML, it is a string with
+    escape sequences in it. Two ways that bites:
+
+      C:\\Users\\Chris   -> TOMLDecodeError, because \\U starts a unicode escape
+      C:\\temp\\notes    -> parses silently into "C:<tab>emp<newline>otes"
+
+    The second is the reason this rewrites the text before parsing rather than
+    just improving the error. A value that is already correctly escaped
+    (contains \\\\) is left alone, because whoever wrote it meant it.
+    """
+    out: list[str] = []
+    notes: list[str] = []
+    table = ""
+
+    for line in text.splitlines():
+        header = _TABLE.match(line)
+        if header:
+            table = header.group(1).strip()
+            out.append(line)
+            continue
+
+        assign = _ASSIGN.match(line)
+        if assign and table == "vault" and assign.group(2) in _PATH_KEYS:
+            indent, key, equals, value, tail = assign.groups()
+            if "\\" in value and "\\\\" not in value:
+                if "'" in value:
+                    # A literal string cannot hold an apostrophe, so escape instead.
+                    fixed = value.replace("\\", "\\\\")
+                    out.append(f'{indent}{key}{equals}"{fixed}"{tail}')
+                else:
+                    out.append(f"{indent}{key}{equals}'{value}'{tail}")
+                notes.append(
+                    f"vault.{key} is a Windows path in a double-quoted string, where "
+                    "a backslash means an escape sequence. Ranger read it as a literal "
+                    f"path. To silence this, use single quotes: {key} = '{value}'"
+                )
+                continue
+
+        out.append(line)
+
+    result = "\n".join(out)
+    if text.endswith("\n"):
+        result += "\n"
+    return result, notes
+
+
 def _require(table: dict[str, Any], section: str, key: str) -> Any:
     if section not in table:
         raise ConfigError(f"config is missing the [{section}] section")
@@ -212,10 +271,20 @@ def load_config(path: str | Path | None = None, *, load_env: bool = True) -> Con
             "or set RANGER_CONFIG."
         )
 
+    raw = config_path.read_text(encoding="utf-8")
+    repaired, path_notes = _repair_windows_paths(raw)
     try:
-        table = tomllib.loads(config_path.read_text(encoding="utf-8"))
+        table = tomllib.loads(repaired)
     except tomllib.TOMLDecodeError as exc:
-        raise ConfigError(f"{config_path} is not valid TOML: {exc}") from exc
+        hint = ""
+        if "\\" in raw:
+            hint = (
+                "\n\nThere are backslashes in this file. Inside a double-quoted TOML "
+                "string a backslash starts an escape sequence, so a Windows path has to "
+                "be written with single quotes (root = 'C:\\Users\\you\\Vault') or with "
+                "forward slashes, which work fine on Windows."
+            )
+        raise ConfigError(f"{config_path} is not valid TOML: {exc}{hint}") from exc
 
     model = ModelConfig(
         provider=str(_require(table, "model", "provider")),
@@ -284,7 +353,7 @@ def load_config(path: str | Path | None = None, *, load_env: bool = True) -> Con
         port=int(server_section.get("port", 8765)),
     )
 
-    warnings: list[str] = []
+    warnings: list[str] = list(path_notes)
     if not vault.root.is_dir():
         warnings.append(f"vault root does not exist yet: {vault.root}")
     else:

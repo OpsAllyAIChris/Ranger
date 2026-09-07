@@ -187,6 +187,41 @@ ranger/
   import ...` that broke collection for anyone running it normally.
   `tests/test_suite_hygiene.py` now fails on that pattern. Shared test helpers
   are fixtures, never imports.
+
+## Windows cannot be verified from here
+
+The operator develops on Windows. Every agent session for this project runs in
+a Linux sandbox, so **a green suite here is not evidence that the suite is
+green for them.** The operator is the only one who can confirm that. Say so
+rather than implying otherwise, and do not call a change verified on the
+strength of a Linux run alone.
+
+This is not hypothetical caution. Three Windows breaks got through in a row:
+
+1. `VaultFile.relative` built with `str(Path.relative_to(...))`, so backslashes
+   leaked into the system prompt and two tests asserted the POSIX form.
+2. `from tests.conftest import ...`, which resolves under `python -m pytest`
+   and not under a bare `pytest`, so collection died on their machine while
+   looking green here.
+3. The test config template interpolated a Windows `tmp_path` into a
+   double-quoted TOML string, where a backslash is an escape. 6 failed, 54
+   errors, and none of it reproducible here without deliberate simulation.
+
+What actually helps, in order:
+
+- **Write platform-neutral assertions.** `Path.name` splits on backslash under
+  Windows and not under POSIX, so an assertion using it can mean two different
+  things. Assert on strings when the property under test is a string.
+- **Simulate deliberately.** Patching a fixture to emit a Windows-shaped path
+  reproduced break 3 exactly (6 failed, 12 passed, 54 errors) before any fix
+  was written. A simulation stops being faithful once it depends on the
+  filesystem, though: after the fix, the same simulation fails 16 tests on
+  Linux for reasons that do not exist on Windows.
+- **Prefer things that cannot differ.** POSIX separators in strings that reach
+  the prompt, `encoding="utf-8"` pinned on every read and write, ASCII-only
+  console output, TOML literal strings for any path.
+- **Hand the operator a command, not a claim,** when a break is theirs to
+  observe. Ask for the full traceback instead of guessing from a truncated one.
 - `ranger doctor` checks config, vault and environment.
 - `ranger init` creates Ranger's own folders and nothing else, after asking.
 - `ranger` starts the terminal REPL.

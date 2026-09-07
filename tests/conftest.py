@@ -15,6 +15,8 @@ import pytest
 
 from ranger.config import Config, load_config
 
+# vault.root is a TOML *literal* string (single quotes) so a Windows tmp_path
+# with backslashes survives verbatim. A basic string would read them as escapes.
 CONFIG_TEMPLATE = """
 [model]
 provider = "anthropic"
@@ -25,7 +27,7 @@ max_tool_rounds = {max_tool_rounds}
 history_turns = {history_turns}
 
 [vault]
-root = "{root}"
+root = '{root}'
 accounts = "Accounts"
 knowledge = "Knowledge"
 ranger = "Ranger"
