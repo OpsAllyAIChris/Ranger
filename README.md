@@ -19,10 +19,14 @@ $EDITOR ranger.toml           # set vault.root, check the hours
 ## Run
 
 ```bash
-ranger doctor    # check config, vault, environment
-ranger init      # create Ranger's four folders in the vault, after asking
+ranger doctor    # check config, vault, environment, and what is still unseeded
+ranger init      # create the vault layout, after asking
 ranger           # talk to it
 ```
+
+`Accounts/` and `Knowledge/` are yours to fill in. See
+[docs/vault-conventions.md](docs/vault-conventions.md) for the note shapes, and
+run `ranger doctor` to see what is still missing.
 
 Inside the REPL: `/help`, `/config`, `/vault`, `/tools`, `/state`, `/reset`,
 `/quit`.

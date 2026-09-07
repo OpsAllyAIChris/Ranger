@@ -204,31 +204,79 @@ def cmd_doctor(config: Config) -> int:
     else:
         print("  ok       vault root exists")
 
-    missing = Vault(config.vault).missing_dirs()
+    vault = Vault(config.vault)
+    missing = vault.missing_dirs()
     if missing:
         print(f"  todo     {len(missing)} of Ranger's folders are missing. Run 'ranger init'.")
     else:
         print("  ok       Ranger's folders exist")
 
+    print("\nseeding")
+    print(_describe_seeding(config, vault))
+
     return 1 if problems else 0
+
+
+def _describe_seeding(config: Config, vault: Vault) -> str:
+    """What is still missing before Tier 2 has anything to read."""
+    lines: list[str] = []
+
+    accounts = vault.list_markdown(config.vault.accounts) if config.vault.accounts.is_dir() else []
+    if accounts:
+        lines.append(f"  ok       {len(accounts)} account note(s)")
+    else:
+        lines.append("  todo     Accounts is empty. Account recall has nothing to read.")
+
+    if not config.vault.knowledge.is_dir():
+        lines.append("  todo     Knowledge does not exist. Run 'ranger init'.")
+        return "\n".join(lines)
+
+    present = {f.path.name.lower() for f in vault.list_markdown(config.vault.knowledge)}
+    wanted = [name for name in config.knowledge.priority]
+    absent = [name for name in wanted if name.lower() not in present]
+    extra = len(present) - (len(wanted) - len(absent))
+
+    if not present:
+        lines.append("  todo     Knowledge is empty. Ranger has no business context.")
+    elif absent:
+        lines.append(f"  partial  Knowledge has {len(present)} file(s); still missing:")
+        for name in absent:
+            lines.append(f"             {name}")
+    else:
+        found = f"{len(wanted)} expected file(s)"
+        if extra > 0:
+            found += f" plus {extra} more"
+        lines.append(f"  ok       Knowledge has {found}")
+
+    if absent or not present:
+        lines.append("  note     see docs/vault-conventions.md for the shapes Tier 2 reads")
+    return "\n".join(lines)
 
 
 def cmd_init(config: Config, assume_yes: bool) -> int:
     vault = Vault(config.vault)
-    if not config.vault.root.is_dir():
-        print(f"vault root does not exist: {config.vault.root}")
-        print("Fix vault.root in the config first. Ranger will not create your vault.")
-        return 1
+    fresh = not config.vault.root.is_dir()
+    missing = vault.missing_layout_dirs() if fresh else vault.missing_dirs()
 
-    missing = vault.missing_dirs()
     if not missing:
-        print("Ranger's folders already exist. Nothing to do.")
+        print("The layout already exists. Nothing to do.")
         return 0
 
-    print("About to create these folders and nothing else:")
+    if fresh:
+        print(f"No vault at {config.vault.root} yet, so this creates the whole layout:")
+    else:
+        print("About to create these folders and nothing else:")
+
     for path in missing:
-        print(f"  {path}")
-    print("Nothing outside these is ever written to.")
+        note = ""
+        if path == config.vault.accounts or path == config.vault.knowledge:
+            note = "  (yours, read only, seed it by hand)"
+        elif path in config.vault.writable_roots:
+            note = "  (Ranger's)"
+        print(f"  {path}{note}")
+
+    print("Empty folders only. No notes are written, and nothing outside")
+    print("Ranger's own folders is ever written to afterwards.")
 
     if not assume_yes:
         answer = input("Create them? [y/N] ").strip().lower()
@@ -236,8 +284,13 @@ def cmd_init(config: Config, assume_yes: bool) -> int:
             print("Nothing created.")
             return 1
 
-    for path in vault.ensure_ranger_dirs():
+    for path in (vault.ensure_layout() if fresh else vault.ensure_ranger_dirs()):
         print(f"  created {path}")
+
+    if vault.is_empty(config.vault.knowledge):
+        print()
+        print("Knowledge is empty, so Ranger knows nothing about the business yet.")
+        print("See docs/vault-conventions.md for what to put there.")
     return 0
 
 

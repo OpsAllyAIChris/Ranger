@@ -73,3 +73,80 @@ def test_doctor_reports_missing_api_key(config, monkeypatch, capsys):
 def test_main_rejects_a_bad_config_path(capsys):
     assert main(["-c", "/nonexistent/ranger.toml", "doctor"]) == 2
     assert "config error" in capsys.readouterr().err
+
+
+def test_init_stands_up_a_brand_new_vault(config, vault_root, capsys):
+    import shutil
+
+    shutil.rmtree(vault_root)
+    assert not vault_root.exists()
+
+    assert cmd_init(config, assume_yes=True) == 0
+
+    for folder in ("Accounts", "Knowledge", "Ranger/memory", "Ranger/drafts", "Ranger/log"):
+        assert (vault_root / folder).is_dir(), folder
+
+    out = capsys.readouterr().out
+    assert "creates the whole layout" in out
+    assert "seed it by hand" in out
+    # An empty Knowledge folder is a thing worth saying out loud.
+    assert "Ranger knows nothing about the business yet" in out
+
+
+def test_init_on_an_existing_vault_only_touches_rangers_folders(config, vault_root, capsys):
+    import shutil
+
+    shutil.rmtree(vault_root / "Ranger")
+    (vault_root / "Accounts" / "Illes Foods.md").write_text("notes", encoding="utf-8")
+
+    assert cmd_init(config, assume_yes=True) == 0
+    out = capsys.readouterr().out
+    assert "creates the whole layout" not in out
+    assert (vault_root / "Accounts" / "Illes Foods.md").read_text(encoding="utf-8") == "notes"
+
+
+def test_init_declines_without_a_yes(config, vault_root, monkeypatch, capsys):
+    import shutil
+
+    shutil.rmtree(vault_root / "Ranger")
+    monkeypatch.setattr("builtins.input", lambda *a: "n")
+
+    assert cmd_init(config, assume_yes=False) == 1
+    assert not (vault_root / "Ranger").exists()
+    assert "Nothing created" in capsys.readouterr().out
+
+
+def test_doctor_names_the_unseeded_folders(config, capsys):
+    from ranger.cli import _describe_seeding
+    from ranger.vault import Vault
+
+    report = _describe_seeding(config, Vault(config.vault))
+    assert "Accounts is empty" in report
+    assert "Knowledge is empty" in report
+    assert "vault-conventions" in report
+
+
+def test_doctor_lists_which_knowledge_files_are_still_missing(config, vault_root):
+    from ranger.cli import _describe_seeding
+    from ranger.vault import Vault
+
+    (vault_root / "Accounts" / "Illes Foods.md").write_text("notes", encoding="utf-8")
+    (vault_root / "Knowledge" / "company.md").write_text("OpsAlly", encoding="utf-8")
+
+    report = _describe_seeding(config, Vault(config.vault))
+    assert "1 account note(s)" in report
+    assert "company.md" not in report
+    assert "icp.md" in report
+
+
+def test_doctor_is_quiet_once_everything_is_seeded(config, vault_root):
+    from ranger.cli import _describe_seeding
+    from ranger.vault import Vault
+
+    (vault_root / "Accounts" / "Illes Foods.md").write_text("notes", encoding="utf-8")
+    for name in config.knowledge.priority:
+        (vault_root / "Knowledge" / name).write_text("context", encoding="utf-8")
+
+    report = _describe_seeding(config, Vault(config.vault))
+    assert "todo" not in report
+    assert "vault-conventions" not in report

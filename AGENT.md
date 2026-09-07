@@ -88,7 +88,17 @@ warm and direct.
 ```
 
 The vault root lives in config and may be on an external drive. Nothing
-assumes `$HOME`.
+assumes `$HOME`. It is a vault created for Ranger, not a pre-existing one, so
+`ranger init` stands up the whole layout when the root does not exist yet.
+Accounts and Knowledge are seeded by hand; `ranger doctor` reports what is
+still empty.
+
+`docs/vault-conventions.md` holds the note shapes. The one Tier 2 actually
+parses is the `## Activity` section in an account note: newest ISO date in that
+section is the last contact, future dates are plans not activity, and file
+modification time is never used. Optional front matter `last_contact:` and
+`status:` override and exclude. Read that file before writing the "what went
+quiet" tool.
 
 ## Tiers
 

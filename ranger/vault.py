@@ -13,6 +13,7 @@ import os
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+from typing import Iterable
 
 from .config import VaultConfig
 
@@ -158,13 +159,43 @@ class Vault:
 
     # -- setup ---------------------------------------------------------
 
+    def layout_dirs(self) -> list[Path]:
+        """Every folder in the layout, read-only ones included.
+
+        Used by 'ranger init' to stand up a brand new vault. Creating an empty
+        Accounts or Knowledge folder is not the same act as writing a note into
+        one: this makes directories and never touches a file, and the write
+        methods above still refuse everything outside Ranger's own folders.
+        """
+        return [
+            self.config.root,
+            self.config.accounts,
+            self.config.knowledge,
+            *self.config.writable_roots,
+        ]
+
     def missing_dirs(self) -> list[Path]:
+        """Ranger's own folders that do not exist yet."""
         return [p for p in self.config.writable_roots if not p.is_dir()]
+
+    def missing_layout_dirs(self) -> list[Path]:
+        return [p for p in self.layout_dirs() if not p.is_dir()]
+
+    def is_empty(self, folder: str | Path) -> bool:
+        path = self.resolve_read(folder)
+        return not path.is_dir() or not any(path.iterdir())
 
     def ensure_ranger_dirs(self) -> list[Path]:
         """Create Ranger's own folders. Only ever called by 'ranger init'."""
+        return self._make(self.config.writable_roots)
+
+    def ensure_layout(self) -> list[Path]:
+        """Create the whole layout. Only ever called by 'ranger init'."""
+        return self._make(self.layout_dirs())
+
+    def _make(self, paths: Iterable[Path]) -> list[Path]:
         created: list[Path] = []
-        for path in self.config.writable_roots:
+        for path in paths:
             if not path.is_dir():
                 path.mkdir(parents=True, exist_ok=True)
                 created.append(path)
