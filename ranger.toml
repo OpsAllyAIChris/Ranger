@@ -1,0 +1,73 @@
+# Ranger configuration.
+#
+# Secrets never live here. They live in .env, which is git-ignored.
+# Paths, model names, hours and thresholds live here and nowhere else in the code.
+
+[model]
+# The provider seam. "anthropic" is the only implementation today.
+provider = "anthropic"
+# Never hardcoded anywhere in the source. Change it here.
+name = "claude-opus-5"
+max_tokens = 2048
+temperature = 0.3
+# Hard ceiling on tool-call rounds inside a single turn, so a confused
+# model cannot loop forever.
+max_tool_rounds = 6
+# How many past turns stay in the working transcript. Tier 4 replaces the
+# spillover with durable memory.
+history_turns = 24
+
+[vault]
+# Point this at the Obsidian vault. Ranger reads the whole vault and writes
+# only under <root>/<ranger>. Override at runtime with RANGER_VAULT_ROOT.
+# The 2TB external drive is a valid location; nothing assumes $HOME.
+root = "~/Obsidian/Vault"
+
+# Read only. Ranger never writes to these.
+accounts = "Accounts"
+knowledge = "Knowledge"
+
+# Ranger's own folder. Everything it persists lives under here.
+ranger = "Ranger"
+memory = "Ranger/memory"    # Tier 4, read + write
+inbox = "Ranger/inbox"      # Tier 5, read + write
+drafts = "Ranger/drafts"    # Tier 2, read + write
+log = "Ranger/log"          # Tier 6, append only
+
+[knowledge]
+# Amendment C: company, products, ICP, competitive landscape, playbook are
+# loaded whole as context. When they outgrow this budget Ranger says so at
+# startup instead of silently truncating mid-sentence.
+budget_chars = 60000
+# Load order preference. Files not listed load alphabetically after these.
+priority = ["company.md", "products.md", "icp.md", "competitors.md", "playbook.md"]
+
+[schedule]
+# One morning surface, everything else accumulates quietly.
+# Local 24h clock. Validated at startup: morning_hour must sit outside the
+# quiet window, and the quiet window must not be empty.
+morning_hour = 7
+quiet_start_hour = 18   # inclusive
+quiet_end_hour = 6      # exclusive
+
+[accounts]
+# Tier 2 "what went quiet": accounts with no logged activity in more than
+# this many days get surfaced.
+quiet_after_days = 21
+
+[drafts]
+# Tier 2 "draft and hold". Ranger writes here and never sends.
+filename_format = "{date}-{slug}.md"
+
+[voice]
+# Tier 3. Listed now so the shape is settled; unused until then.
+push_to_talk = true
+wake_word = false
+stt_provider = "deepgram"
+tts_provider = "elevenlabs"
+voice_id = ""           # chosen before Tier 3 starts
+
+[server]
+# Tier 7. The browser talks to the same core the terminal does.
+host = "127.0.0.1"
+port = 8765

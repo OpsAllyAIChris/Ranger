@@ -1,0 +1,24 @@
+# secrets
+.env
+.env.*
+!.env.example
+
+# local config overrides
+ranger.local.toml
+
+# python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# runtime scratch
+.ranger/
+*.log
+
+# os
+.DS_Store

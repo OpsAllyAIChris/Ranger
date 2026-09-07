@@ -1,0 +1,300 @@
+"""Configuration. One file, loaded once, validated at startup.
+
+Nothing in the source hardcodes a model name, a vault path, an hour, or a
+threshold. If a value could reasonably change, it lives in ranger.toml.
+Secrets never appear here; they come from the environment via .env.
+"""
+
+from __future__ import annotations
+
+import os
+import tomllib
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
+
+from dotenv import load_dotenv
+
+DEFAULT_CONFIG_FILENAME = "ranger.toml"
+
+
+class ConfigError(Exception):
+    """Raised at startup when the config cannot be trusted."""
+
+
+@dataclass(frozen=True)
+class ModelConfig:
+    provider: str
+    name: str
+    max_tokens: int
+    temperature: float
+    max_tool_rounds: int
+    history_turns: int
+
+
+@dataclass(frozen=True)
+class VaultConfig:
+    """Absolute, resolved paths. Amendment D is enforced in vault.py."""
+
+    root: Path
+    accounts: Path
+    knowledge: Path
+    ranger: Path
+    memory: Path
+    inbox: Path
+    drafts: Path
+    log: Path
+
+    @property
+    def writable_roots(self) -> tuple[Path, ...]:
+        return (self.memory, self.inbox, self.drafts, self.log)
+
+    @property
+    def append_only_roots(self) -> tuple[Path, ...]:
+        return (self.log,)
+
+
+@dataclass(frozen=True)
+class KnowledgeConfig:
+    budget_chars: int
+    priority: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class ScheduleConfig:
+    morning_hour: int
+    quiet_start_hour: int
+    quiet_end_hour: int
+
+    def in_quiet_hours(self, hour: int) -> bool:
+        """Quiet windows wrap midnight, so 18 to 6 is a single window."""
+        start, end = self.quiet_start_hour, self.quiet_end_hour
+        if start == end:
+            return False
+        if start < end:
+            return start <= hour < end
+        return hour >= start or hour < end
+
+
+@dataclass(frozen=True)
+class AccountsConfig:
+    quiet_after_days: int
+
+
+@dataclass(frozen=True)
+class DraftsConfig:
+    filename_format: str
+
+
+@dataclass(frozen=True)
+class VoiceConfig:
+    push_to_talk: bool
+    wake_word: bool
+    stt_provider: str
+    tts_provider: str
+    voice_id: str
+
+
+@dataclass(frozen=True)
+class ServerConfig:
+    host: str
+    port: int
+
+
+@dataclass(frozen=True)
+class Config:
+    model: ModelConfig
+    vault: VaultConfig
+    knowledge: KnowledgeConfig
+    schedule: ScheduleConfig
+    accounts: AccountsConfig
+    drafts: DraftsConfig
+    voice: VoiceConfig
+    server: ServerConfig
+    source_path: Path | None = None
+    warnings: tuple[str, ...] = field(default_factory=tuple)
+
+
+def _require(table: dict[str, Any], section: str, key: str) -> Any:
+    if section not in table:
+        raise ConfigError(f"config is missing the [{section}] section")
+    if key not in table[section]:
+        raise ConfigError(f"config is missing {section}.{key}")
+    return table[section][key]
+
+
+def _hour(value: Any, label: str) -> int:
+    if not isinstance(value, int) or not 0 <= value <= 23:
+        raise ConfigError(f"{label} must be a whole number from 0 to 23, got {value!r}")
+    return value
+
+
+def _resolve_under(root: Path, relative: str, label: str) -> Path:
+    """Keep every configured subfolder inside the vault root.
+
+    A config typo should not become a path that writes outside the vault.
+    """
+    candidate = (root / relative).resolve()
+    if candidate != root and root not in candidate.parents:
+        raise ConfigError(f"vault.{label} ({relative!r}) resolves outside the vault root")
+    return candidate
+
+
+def _vault_root(raw: str) -> Path:
+    override = os.environ.get("RANGER_VAULT_ROOT")
+    value = override or raw
+    root = Path(value).expanduser()
+    if not root.is_absolute():
+        root = root.resolve()
+    return root.resolve()
+
+
+def _build_vault(table: dict[str, Any]) -> VaultConfig:
+    section = table.get("vault")
+    if not isinstance(section, dict):
+        raise ConfigError("config is missing the [vault] section")
+
+    root = _vault_root(str(_require(table, "vault", "root")))
+    names = ("accounts", "knowledge", "ranger", "memory", "inbox", "drafts", "log")
+    paths = {name: _resolve_under(root, str(_require(table, "vault", name)), name) for name in names}
+
+    ranger_root = paths["ranger"]
+    for name in ("memory", "inbox", "drafts", "log"):
+        path = paths[name]
+        if path != ranger_root and ranger_root not in path.parents:
+            raise ConfigError(
+                f"vault.{name} must sit under vault.ranger; Ranger writes nowhere else"
+            )
+    for name in ("accounts", "knowledge"):
+        path = paths[name]
+        if path == ranger_root or ranger_root in path.parents:
+            raise ConfigError(
+                f"vault.{name} is read only and must not sit under vault.ranger"
+            )
+
+    return VaultConfig(root=root, **paths)
+
+
+def _validate_schedule(schedule: ScheduleConfig) -> None:
+    if schedule.quiet_start_hour == schedule.quiet_end_hour:
+        raise ConfigError(
+            "schedule.quiet_start_hour and schedule.quiet_end_hour are equal, "
+            "which leaves no quiet window at all"
+        )
+    if schedule.in_quiet_hours(schedule.morning_hour):
+        raise ConfigError(
+            f"schedule.morning_hour ({schedule.morning_hour:02d}:00) falls inside the quiet "
+            f"window ({schedule.quiet_start_hour:02d}:00 to {schedule.quiet_end_hour:02d}:00). "
+            "The morning surface would never fire. Move one of them."
+        )
+
+
+def load_config(path: str | Path | None = None, *, load_env: bool = True) -> Config:
+    """Read, validate and freeze the configuration.
+
+    Fails loudly at startup rather than quietly at the first bad turn.
+    """
+    if load_env:
+        load_dotenv(override=False)
+
+    if path is None:
+        path = os.environ.get("RANGER_CONFIG", DEFAULT_CONFIG_FILENAME)
+    config_path = Path(path).expanduser().resolve()
+    if not config_path.is_file():
+        raise ConfigError(
+            f"no config file at {config_path}. Copy ranger.toml from the repo root "
+            "or set RANGER_CONFIG."
+        )
+
+    try:
+        table = tomllib.loads(config_path.read_text(encoding="utf-8"))
+    except tomllib.TOMLDecodeError as exc:
+        raise ConfigError(f"{config_path} is not valid TOML: {exc}") from exc
+
+    model = ModelConfig(
+        provider=str(_require(table, "model", "provider")),
+        name=str(_require(table, "model", "name")),
+        max_tokens=int(_require(table, "model", "max_tokens")),
+        temperature=float(_require(table, "model", "temperature")),
+        max_tool_rounds=int(_require(table, "model", "max_tool_rounds")),
+        history_turns=int(_require(table, "model", "history_turns")),
+    )
+    if model.max_tool_rounds < 1:
+        raise ConfigError("model.max_tool_rounds must be at least 1")
+
+    vault = _build_vault(table)
+
+    knowledge_section = table.get("knowledge", {})
+    knowledge = KnowledgeConfig(
+        budget_chars=int(knowledge_section.get("budget_chars", 60000)),
+        priority=tuple(str(name) for name in knowledge_section.get("priority", ())),
+    )
+
+    schedule = ScheduleConfig(
+        morning_hour=_hour(_require(table, "schedule", "morning_hour"), "schedule.morning_hour"),
+        quiet_start_hour=_hour(
+            _require(table, "schedule", "quiet_start_hour"), "schedule.quiet_start_hour"
+        ),
+        quiet_end_hour=_hour(
+            _require(table, "schedule", "quiet_end_hour"), "schedule.quiet_end_hour"
+        ),
+    )
+    _validate_schedule(schedule)
+
+    accounts = AccountsConfig(
+        quiet_after_days=int(table.get("accounts", {}).get("quiet_after_days", 21))
+    )
+    drafts = DraftsConfig(
+        filename_format=str(
+            table.get("drafts", {}).get("filename_format", "{date}-{slug}.md")
+        )
+    )
+
+    voice_section = table.get("voice", {})
+    voice = VoiceConfig(
+        push_to_talk=bool(voice_section.get("push_to_talk", True)),
+        wake_word=bool(voice_section.get("wake_word", False)),
+        stt_provider=str(voice_section.get("stt_provider", "deepgram")),
+        tts_provider=str(voice_section.get("tts_provider", "elevenlabs")),
+        voice_id=str(voice_section.get("voice_id", "")),
+    )
+
+    server_section = table.get("server", {})
+    server = ServerConfig(
+        host=str(server_section.get("host", "127.0.0.1")),
+        port=int(server_section.get("port", 8765)),
+    )
+
+    warnings: list[str] = []
+    if not vault.root.is_dir():
+        warnings.append(f"vault root does not exist yet: {vault.root}")
+    else:
+        for label, path in (("accounts", vault.accounts), ("knowledge", vault.knowledge)):
+            if not path.is_dir():
+                warnings.append(f"vault.{label} does not exist yet: {path}")
+        if not vault.ranger.is_dir():
+            warnings.append(
+                f"Ranger's own folder does not exist yet: {vault.ranger}. Run 'ranger init'."
+            )
+
+    return Config(
+        model=model,
+        vault=vault,
+        knowledge=knowledge,
+        schedule=schedule,
+        accounts=accounts,
+        drafts=drafts,
+        voice=voice,
+        server=server,
+        source_path=config_path,
+        warnings=tuple(warnings),
+    )
+
+
+def require_api_key(env_var: str = "ANTHROPIC_API_KEY") -> str:
+    key = os.environ.get(env_var, "").strip()
+    if not key:
+        raise ConfigError(
+            f"{env_var} is not set. Copy .env.example to .env and fill it in."
+        )
+    return key
