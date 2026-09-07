@@ -796,9 +796,14 @@ Tier 3's rule, enforced by the interface rather than by hoping the operator
 does not try it.
 
 Three smoothing presets, because the right values cannot be chosen without
-hearing a real voice through them: `quick` (20/120ms), `natural` (45/220ms,
-the default) and `slow` (90/400ms). Switchable live with
-`rangerOrb.smoothing('quick')`.
+hearing a real voice through them: `quick` (20/120ms), `natural` (45/220ms) and
+`slow` (90/400ms), switchable live with `rangerOrb.smoothing('quick')`.
+
+**`natural` is the default because the operator chose it**, not because it was
+in the middle. Judged mid-sentence against real playback: `quick` was busier
+than wanted, `slow` was the dimmer they complained about when they first saw
+the orb in 7a. This is settled and does not need revisiting; the presets stay
+because the switching is cheap and a voice or a room may change.
 
 **The audio carries its own format.** `tts.output_format` is `pcm_24000`,
 which is 16 bit little endian samples and nothing else: no header, no

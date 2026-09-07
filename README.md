@@ -198,12 +198,13 @@ while it speaks. Three presets, switchable live in the browser console:
 
 ```js
 rangerOrb.smoothing('quick')     // 20ms attack, 120ms release. Follows syllables
-rangerOrb.smoothing('natural')   // 45 / 220. The default
+rangerOrb.smoothing('natural')   // 45 / 220. The default, chosen against a real voice
 rangerOrb.smoothing('slow')      // 90 / 400. Follows phrases
 rangerOrb.smoothing()            // what it is set to now
 ```
 
-Whichever one wins goes in `ranger.local.toml`.
+`natural` won and is the default. The others are kept because switching is
+cheap and a different voice or a noisier room might want them.
 
 Voice needs `DEEPGRAM_API_KEY`, and speech needs `ELEVENLABS_API_KEY` with
 `tts.voice_id` set. Without them the interface still opens and still types; the
