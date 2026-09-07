@@ -79,7 +79,10 @@ file = "facts.md"
 # loaded whole as context. When they outgrow this budget Ranger says so at
 # startup instead of silently truncating mid-sentence.
 budget_chars = 60000
-# Load order preference. Files not listed load alphabetically after these.
+# Load ORDER only. Every .md in the folder is loaded whatever it is called;
+# these just go first, so the most important survive when the budget bites.
+# Nothing here is required and nothing is missing if you do not have it.
+# Run 'ranger doctor' to see which files actually reach the model.
 priority = ["company.md", "products.md", "icp.md", "competitors.md", "playbook.md"]
 
 [schedule]

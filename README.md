@@ -143,7 +143,8 @@ the account note, not here.
 
 ```powershell
 ranger heartbeat            # the loop. Ctrl-C to stop
-ranger heartbeat --once     # one pass, then exit
+ranger heartbeat --once     # one pass, saying why each check did or did not run
+ranger heartbeat --once --force morning   # run it now, whatever the clock says
 ranger inbox                # what is waiting
 ranger inbox 1              # dismiss the first, cleared in the vault
 ranger inbox --all --full   # including dismissed, in full

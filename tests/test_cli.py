@@ -123,20 +123,39 @@ def test_doctor_names_the_unseeded_folders(config, capsys):
     report = _describe_seeding(config, Vault(config.vault))
     assert "Accounts is empty" in report
     assert "Knowledge is empty" in report
-    assert "vault-conventions" in report
+    # The priority names order the load; they are not files you must create.
+    assert "not required" in report
 
 
-def test_doctor_lists_which_knowledge_files_are_still_missing(config, vault_root):
+def test_doctor_names_the_knowledge_files_that_reach_the_model(config, vault_root):
+    """Which of the business context is actually in the prompt, by name."""
     from ranger.cli import _describe_seeding
     from ranger.vault import Vault
 
     (vault_root / "Accounts" / "Illes Foods.md").write_text("notes", encoding="utf-8")
     (vault_root / "Knowledge" / "company.md").write_text("OpsAlly", encoding="utf-8")
+    (vault_root / "Knowledge" / "anything at all.md").write_text("also loaded", encoding="utf-8")
 
     report = _describe_seeding(config, Vault(config.vault))
     assert "1 account note(s)" in report
-    assert "company.md" not in report
-    assert "icp.md" in report
+    assert "loaded   Knowledge/company.md" in report
+    # A file named nothing like the priority list is loaded just the same.
+    assert "loaded   Knowledge/anything at all.md" in report
+
+
+def test_doctor_names_the_knowledge_files_that_were_dropped(config, vault_root):
+    from dataclasses import replace
+
+    from ranger.cli import _describe_seeding
+    from ranger.vault import Vault
+
+    (vault_root / "Knowledge" / "company.md").write_text("c" * 400, encoding="utf-8")
+    (vault_root / "Knowledge" / "playbook.md").write_text("p" * 400, encoding="utf-8")
+    tight = replace(config, context=replace(config.context, budget_chars=450))
+
+    report = _describe_seeding(tight, Vault(tight.vault))
+    assert "loaded   Knowledge/company.md" in report
+    assert "DROPPED  not sent  Knowledge/playbook.md" in report
 
 
 def test_doctor_is_quiet_once_everything_is_seeded(config, vault_root):

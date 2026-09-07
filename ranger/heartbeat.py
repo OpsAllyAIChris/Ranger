@@ -25,7 +25,7 @@ from __future__ import annotations
 import asyncio
 import re
 from dataclasses import dataclass, field
-from datetime import date, datetime, time
+from datetime import date, datetime, time, timedelta
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Protocol, runtime_checkable
 
@@ -160,13 +160,27 @@ class Inbox:
 # -- checks ----------------------------------------------------------------
 
 
+@dataclass(frozen=True)
+class Dueness:
+    """Whether a check should run, and in plain words why not.
+
+    A check that is not due yet and a check suppressed by quiet hours are
+    different situations with different fixes, and "nothing due" said both. In
+    the tier whose whole point is acting while nobody is watching, silence
+    reading as broken is the failure mode to design against.
+    """
+
+    due: bool
+    reason: str
+
+
 @runtime_checkable
 class Check(Protocol):
     name: str
     #: Whether this may run between quiet_start_hour and quiet_end_hour.
     runs_in_quiet_hours: bool
 
-    def due(self, now: datetime, inbox: Inbox) -> bool: ...
+    def status(self, now: datetime, inbox: Inbox) -> Dueness: ...
 
     async def run(self) -> Notice | None: ...
 
@@ -184,12 +198,17 @@ class MorningSurface:
     name: str = "morning"
     runs_in_quiet_hours: bool = False
 
-    def due(self, now: datetime, inbox: Inbox) -> bool:
-        if now.time() < time(hour=self.hour):
-            return False
+    def status(self, now: datetime, inbox: Inbox) -> Dueness:
         # Only today. Six missed mornings are not replayed on the seventh,
         # because a week-old list of what went quiet is not news.
-        return not inbox.has_kind_on(self.name, now.date())
+        if inbox.has_kind_on(self.name, now.date()):
+            return Dueness(False, f"already ran today, next at {self.hour:02d}:00 tomorrow")
+        if now.time() < time(hour=self.hour):
+            return Dueness(False, f"not due until {self.hour:02d}:00 today")
+        return Dueness(True, f"due since {self.hour:02d}:00")
+
+    def due(self, now: datetime, inbox: Inbox) -> bool:
+        return self.status(now, inbox).due
 
     async def run(self) -> Notice | None:
         result = await self.registry.run("what_went_quiet", {})
@@ -212,13 +231,55 @@ class MorningSurface:
 # -- the loop --------------------------------------------------------------
 
 
-@dataclass
+#: Every way a check can end a tick. The operator should never have to guess
+#: which one happened.
+SURFACED = "surfaced"
+NOTHING = "nothing"
+NOT_DUE = "not_due"
+HELD = "held"
+ALREADY_RUNNING = "already_running"
+TIMED_OUT = "timed_out"
+FAILED = "failed"
+
+_EXECUTED = frozenset({SURFACED, NOTHING, TIMED_OUT, FAILED})
+
+
+@dataclass(frozen=True)
+class CheckOutcome:
+    name: str
+    state: str
+    detail: str = ""
+
+    def render(self) -> str:
+        return f"{self.name}: {self.detail}" if self.detail else f"{self.name}: {self.state}"
+
+
+@dataclass(frozen=True)
 class TickReport:
-    ran: tuple[str, ...] = ()
-    surfaced: tuple[str, ...] = ()
-    skipped_quiet: tuple[str, ...] = ()
-    skipped_running: tuple[str, ...] = ()
-    timed_out: tuple[str, ...] = ()
+    outcomes: tuple[CheckOutcome, ...] = ()
+
+    def _named(self, *states: str) -> tuple[str, ...]:
+        return tuple(o.name for o in self.outcomes if o.state in states)
+
+    @property
+    def ran(self) -> tuple[str, ...]:
+        return self._named(*_EXECUTED)
+
+    @property
+    def surfaced(self) -> tuple[str, ...]:
+        return self._named(SURFACED)
+
+    @property
+    def skipped_quiet(self) -> tuple[str, ...]:
+        return self._named(HELD)
+
+    @property
+    def skipped_running(self) -> tuple[str, ...]:
+        return self._named(ALREADY_RUNNING)
+
+    @property
+    def timed_out(self) -> tuple[str, ...]:
+        return self._named(TIMED_OUT)
 
 
 class Heartbeat:
@@ -241,45 +302,70 @@ class Heartbeat:
     def in_quiet_hours(self, when: datetime) -> bool:
         return self.config.schedule.in_quiet_hours(when.hour)
 
-    async def tick(self) -> TickReport:
+    def quiet_ends_at(self, now: datetime) -> datetime:
+        """When the quiet window the operator is currently inside will end."""
+        end = self.config.schedule.quiet_end_hour
+        candidate = now.replace(hour=end, minute=0, second=0, microsecond=0)
+        if candidate <= now:
+            candidate += timedelta(days=1)
+        return candidate
+
+    async def tick(self, force: tuple[str, ...] = ()) -> TickReport:
+        """One pass. Every check ends with a stated outcome, never silence."""
         now = self.now()
         quiet = self.in_quiet_hours(now)
-        ran: list[str] = []
-        surfaced: list[str] = []
-        skipped_quiet: list[str] = []
-        skipped_running: list[str] = []
-        timed_out: list[str] = []
+        forced = {name.strip().lower() for name in force}
+        force_all = "all" in forced
+        outcomes: list[CheckOutcome] = []
 
         for check in self.checks:
+            compelled = force_all or check.name.lower() in forced
+
             if check.name in self._running:
-                skipped_running.append(check.name)
+                outcomes.append(
+                    CheckOutcome(check.name, ALREADY_RUNNING,
+                                 "still running from the last pass, skipped rather than stacked")
+                )
                 continue
-            if not check.due(now, self.inbox):
+
+            dueness = check.status(now, self.inbox)
+            if not dueness.due and not compelled:
+                outcomes.append(CheckOutcome(check.name, NOT_DUE, dueness.reason))
                 continue
-            if quiet and not check.runs_in_quiet_hours:
+
+            if quiet and not check.runs_in_quiet_hours and not compelled:
                 # Not dropped, just not now. It stays due, so it fires when the
                 # quiet window ends.
-                skipped_quiet.append(check.name)
+                until = self.quiet_ends_at(now)
+                outcomes.append(
+                    CheckOutcome(check.name, HELD,
+                                 f"held by quiet hours, will run after {until:%H:%M}")
+                )
                 continue
 
             self._running.add(check.name)
+            state = SURFACED
+            detail = ""
             try:
                 notice = await asyncio.wait_for(
                     check.run(), timeout=self.config.heartbeat.check_timeout_seconds
                 )
             except asyncio.TimeoutError:
-                timed_out.append(check.name)
+                state = TIMED_OUT
+                seconds = self.config.heartbeat.check_timeout_seconds
+                detail = f"ran longer than {seconds}s and was stopped, nothing was changed"
                 notice = Notice(
                     kind=check.name,
                     title=f"The {check.name} check timed out",
                     body=(
-                        f"It ran for longer than "
-                        f"{self.config.heartbeat.check_timeout_seconds} seconds and was "
-                        "stopped. Nothing was changed. The loop is still running."
+                        f"It ran for longer than {seconds} seconds and was stopped. "
+                        "Nothing was changed. The loop is still running."
                     ),
                     created=now,
                 )
             except Exception as exc:
+                state = FAILED
+                detail = f"{type(exc).__name__}: {exc}"
                 notice = Notice(
                     kind=check.name,
                     title=f"The {check.name} check failed",
@@ -289,21 +375,25 @@ class Heartbeat:
             finally:
                 self._running.discard(check.name)
 
-            ran.append(check.name)
-            if notice is not None:
-                try:
-                    self.inbox.write(notice)
-                    surfaced.append(check.name)
-                except VaultError:
-                    pass
+            if notice is None:
+                outcomes.append(
+                    CheckOutcome(check.name, NOTHING, "ran, nothing worth surfacing")
+                )
+                continue
 
-        return TickReport(
-            ran=tuple(ran),
-            surfaced=tuple(surfaced),
-            skipped_quiet=tuple(skipped_quiet),
-            skipped_running=tuple(skipped_running),
-            timed_out=tuple(timed_out),
-        )
+            try:
+                path = self.inbox.write(notice)
+            except VaultError as exc:
+                outcomes.append(CheckOutcome(check.name, FAILED, f"could not write the notice: {exc}"))
+                continue
+
+            if state == SURFACED:
+                detail = f"surfaced to {path.name}"
+            else:
+                detail = f"{detail}, noted in {path.name}"
+            outcomes.append(CheckOutcome(check.name, state, detail))
+
+        return TickReport(outcomes=tuple(outcomes))
 
     async def run(self, stop: Any = None) -> None:
         interval = self.config.heartbeat.interval_seconds

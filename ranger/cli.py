@@ -297,6 +297,43 @@ def cmd_doctor(config: Config) -> int:
     return 1 if problems else 0
 
 
+def _knowledge_report(config: Config, vault: Vault) -> list[str]:
+    """What actually reaches the model, by name.
+
+    Not what is expected to exist: any .md in the folder is loaded, whatever it
+    is called. knowledge.priority only decides the order they are loaded in, so
+    the most important survive when the budget bites.
+    """
+    from .knowledge import KnowledgeLoader
+    from .memory import load_memory
+
+    memory = load_memory(vault, config.vault.memory, config.memory.reserve_chars)
+    remaining = max(0, config.context.budget_chars - memory.total_chars)
+    context = KnowledgeLoader(vault, config.vault, config.knowledge).load(budget=remaining)
+
+    lines: list[str] = []
+    if not context.docs and not context.omitted:
+        lines.append("  todo     Knowledge is empty. Ranger has no business context.")
+        lines.append("  note     any .md in that folder is loaded. The names in")
+        lines.append("           knowledge.priority only set the order, they are not required.")
+        return lines
+
+    lines.append(
+        f"  ok       {len(context.docs)} knowledge file(s) reach the model, "
+        f"{context.total_chars} chars of {remaining} available:"
+    )
+    for doc in context.docs:
+        lines.append(f"             loaded   {doc.relative}")
+    for name in context.omitted:
+        lines.append(f"  DROPPED  not sent  {name}")
+    if context.omitted:
+        lines.append(
+            f"  note     {len(context.omitted)} file(s) did not fit. Raise "
+            "context.budget_chars, or split them up."
+        )
+    return lines
+
+
 def _describe_seeding(config: Config, vault: Vault) -> str:
     """What is still missing before Tier 2 has anything to read."""
     lines: list[str] = []
@@ -311,25 +348,9 @@ def _describe_seeding(config: Config, vault: Vault) -> str:
         lines.append("  todo     Knowledge does not exist. Run 'ranger init'.")
         return "\n".join(lines)
 
-    present = {f.path.name.lower() for f in vault.list_markdown(config.vault.knowledge)}
-    wanted = [name for name in config.knowledge.priority]
-    absent = [name for name in wanted if name.lower() not in present]
-    extra = len(present) - (len(wanted) - len(absent))
+    loaded = _knowledge_report(config, vault)
+    lines.extend(loaded)
 
-    if not present:
-        lines.append("  todo     Knowledge is empty. Ranger has no business context.")
-    elif absent:
-        lines.append(f"  partial  Knowledge has {len(present)} file(s); still missing:")
-        for name in absent:
-            lines.append(f"             {name}")
-    else:
-        found = f"{len(wanted)} expected file(s)"
-        if extra > 0:
-            found += f" plus {extra} more"
-        lines.append(f"  ok       Knowledge has {found}")
-
-    if absent or not present:
-        lines.append("  note     see docs/vault-conventions.md for the shapes Tier 2 reads")
     return "\n".join(lines)
 
 
@@ -531,24 +552,35 @@ def cmd_heartbeat(config: Config, args) -> int:
     from .vault import Vault
 
     paint = _colour(sys.stdout.isatty())
-    if not config.heartbeat.enabled and not args.once:
+    if not config.heartbeat.enabled and not args.once and not args.force:
         print("  heartbeat.enabled is false, so the loop will not start.")
         return 0
 
     vault = Vault(config.vault)
     beat = Heartbeat(config, _inbox(config), build_checks(config, build_registry(config, vault)))
 
+    known = {c.name for c in beat.checks}
+    forced = tuple(args.force or ())
+    unknown = [n for n in forced if n.lower() not in known and n.lower() != "all"]
+    if unknown:
+        print(f"  no such check: {', '.join(unknown)}", file=sys.stderr)
+        print(f"  there is {', '.join(sorted(known))}.", file=sys.stderr)
+        return 1
+
     async def once() -> int:
-        report = await beat.tick()
-        if report.surfaced:
-            print(f"  surfaced: {', '.join(report.surfaced)}")
-        if report.skipped_quiet:
-            print(paint(
-                f"  held until quiet hours end: {', '.join(report.skipped_quiet)}", DIM))
-        if report.timed_out:
-            print(paint(f"  timed out: {', '.join(report.timed_out)}", YELLOW))
-        if not (report.ran or report.skipped_quiet):
-            print(paint("  nothing due.", DIM))
+        report = await beat.tick(force=forced)
+        if not report.outcomes:
+            print("  no checks are registered.")
+            return 0
+        for outcome in report.outcomes:
+            colour = {
+                "surfaced": TEAL, "timed_out": YELLOW, "failed": RED,
+            }.get(outcome.state, DIM)
+            print(f"  {paint(outcome.render(), colour)}")
+        if not report.ran and not forced:
+            print()
+            print(paint("  Nothing ran. Use --force to run one now, ignoring both the", DIM))
+            print(paint("  schedule and quiet hours: ranger heartbeat --once --force morning", DIM))
         return 0
 
     if args.once:
@@ -909,6 +941,12 @@ def main(argv: list[str] | None = None) -> int:
 
     beat = sub.add_parser("heartbeat", help="Tier 5: run the background loop")
     beat.add_argument("--once", action="store_true", help="one pass, then exit")
+    beat.add_argument(
+        "--force",
+        nargs="+",
+        metavar="CHECK",
+        help="run these now whatever the schedule and quiet hours say, or 'all'",
+    )
     keyterms = sub.add_parser("keyterms", help="show the vocabulary hints that would be sent")
     keyterms.add_argument("--all", action="store_true", help="show every hint, not the top 25")
 

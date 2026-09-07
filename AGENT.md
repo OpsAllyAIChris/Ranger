@@ -273,12 +273,40 @@ Other rules that hold:
 - **Dismissal rewrites the file's front matter** to `status: dismissed`, at the
   operator's explicit command. Nothing is deleted: the vault has no delete path
   and is not getting one, so a dismissed notice stays readable as a record.
+- **Every outcome says which one it was.** Not due yet, held by quiet hours,
+  already ran today, ran with nothing to say, timed out, failed, or surfaced to
+  a named file. "Nothing due" meant all seven and the operator could not tell a
+  suppressed check from a broken one.
+- **`--force` runs a check now,** ignoring both the schedule and quiet hours, so
+  a daily check can be verified without waiting a day. It does not override the
+  no-stacking rule.
 - **The morning surface calls the existing `what_went_quiet` tool.** There is no
   second implementation of that logic, so the spoken answer and the morning file
   cannot disagree.
 - **Both front ends announce what is waiting** on startup. That is the
   catch-up-on-return half: the notice is held in the vault, and seen when the
   operator comes back.
+
+## Coming after Tier 6: a read-only email tool
+
+Not built, and not to be built before Tier 6. Recorded so Tier 6 does not paint
+it into a corner:
+
+- **Invoked by the operator, never polled.** It is not a heartbeat check and
+  must not become one. The heartbeat exists to surface what is slipping, not to
+  read mail.
+- **Read only.** Sending is on the never-without-asking list and stays there.
+- **The confirmation gate must stay tool-agnostic.** Gate on the `confirm` flag
+  and the action being taken, never on a hard-coded list of tool names, or
+  adding a tool later means editing the gate.
+- **The untrusted-content rule applies most sharply here.** Vault notes are at
+  least written by people the operator chose to work with. Inbound email is
+  written by anyone who knows their address, and an email is the one input where
+  someone may deliberately try to make Ranger act. Everything an email tool
+  returns goes through `untrusted.fence()`, is never treated as an instruction,
+  and a message that reads like one gets surfaced to the operator and stopped,
+  the same as any other content. Tier 6's fencing must therefore apply to any
+  tool result, not only to vault reads.
 
 ## Memory against account notes, and the context budget
 

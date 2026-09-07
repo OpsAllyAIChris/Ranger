@@ -53,8 +53,10 @@ class FakeCheck:
         self.runs = 0
         self.due_always = True
 
-    def due(self, now, inbox):
-        return self.due_always
+    def status(self, now, inbox):
+        from ranger.heartbeat import Dueness
+
+        return Dueness(self.due_always, "due" if self.due_always else "not due yet")
 
     async def run(self):
         self.runs += 1
@@ -271,3 +273,109 @@ def test_tier_five_registers_exactly_one_check(config):
     assert [c.name for c in checks] == ["morning"]
     assert not checks[0].runs_in_quiet_hours
     assert checks[0].hour == config.schedule.morning_hour
+
+
+# -- every outcome says which one it was -----------------------------------
+#
+# "nothing due" said the same thing whether a check was not due yet,
+# suppressed by quiet hours, or broken. In the tier whose point is acting while
+# nobody watches, that is the silence-reads-as-broken failure again.
+
+
+def test_before_its_hour_says_when_it_is_due(inbox):
+    dueness = MorningSurface(registry=None, hour=7).status(datetime(2026, 9, 7, 2, 40), inbox)
+    assert not dueness.due
+    assert dueness.reason == "not due until 07:00 today"
+
+
+def test_after_it_has_run_says_so_and_when_it_is_next(inbox):
+    inbox.write(note(kind="morning", when=datetime(2026, 9, 7, 7, 1)))
+    dueness = MorningSurface(registry=None, hour=7).status(datetime(2026, 9, 7, 9, 0), inbox)
+    assert not dueness.due
+    assert "already ran today" in dueness.reason and "tomorrow" in dueness.reason
+
+
+async def test_quiet_hours_says_when_the_window_ends(config):
+    check = FakeCheck(notice=note())
+    report = await beat(config, [check], when=datetime(2026, 9, 7, 19, 30)).tick()
+    outcome = report.outcomes[0]
+    assert outcome.state == "held"
+    assert "will run after 06:00" in outcome.detail
+
+
+async def test_a_surfaced_notice_names_the_file(config):
+    report = await beat(config, [FakeCheck(notice=note())]).tick()
+    assert report.outcomes[0].detail == "surfaced to 2026-09-07 morning.md"
+
+
+async def test_a_check_with_nothing_to_say_says_that_too(config):
+    report = await beat(config, [FakeCheck(notice=None)]).tick()
+    assert report.outcomes[0].state == "nothing"
+    assert "nothing worth surfacing" in report.outcomes[0].detail
+
+
+async def test_a_failure_carries_the_error_into_the_outcome(config):
+    report = await beat(config, [FakeCheck(boom="the vault vanished")]).tick()
+    assert report.outcomes[0].state == "failed"
+    assert "the vault vanished" in report.outcomes[0].detail
+
+
+async def test_a_timeout_says_nothing_was_changed(config):
+    tight = replace(config, heartbeat=replace(config.heartbeat, check_timeout_seconds=1))
+    report = await beat(tight, [FakeCheck(notice=note(), delay=30)]).tick()
+    assert report.outcomes[0].state == "timed_out"
+    assert "nothing was changed" in report.outcomes[0].detail
+
+
+# -- forcing ---------------------------------------------------------------
+
+
+async def test_force_runs_a_check_that_is_not_due(config):
+    """Verifying a daily check should not mean waiting until tomorrow."""
+    check = FakeCheck(notice=note())
+    check.due_always = False
+    report = await beat(config, [check]).tick(force=("fake",))
+    assert report.surfaced == ("fake",) and check.runs == 1
+
+
+async def test_force_ignores_quiet_hours(config):
+    check = FakeCheck(notice=note())
+    report = await beat(config, [check], when=datetime(2026, 9, 7, 2, 40)).tick(force=("fake",))
+    assert report.surfaced == ("fake",)
+
+
+async def test_force_runs_the_morning_check_that_already_ran_today(seeded):
+    """So the write, read and dismiss path can be exercised the same day."""
+    inbox = Inbox(Vault(seeded.vault), seeded.vault.inbox)
+    heart = Heartbeat(seeded, inbox, build_checks(seeded, build_registry(seeded, Vault(seeded.vault))),
+                      now=lambda: datetime(2026, 9, 7, 9, 0))
+
+    assert (await heart.tick()).surfaced == ("morning",)
+    assert (await heart.tick()).surfaced == ()          # already ran
+    assert (await heart.tick(force=("morning",))).surfaced == ("morning",)
+
+    notices = inbox.pending()
+    assert len(notices) == 2
+    assert {n.path.name for n in notices} == {
+        "2026-09-07 morning.md",
+        "2026-09-07 morning 2.md",
+    }
+
+
+async def test_force_all_runs_everything(config):
+    one, two = FakeCheck(name="one", notice=note(kind="one")), FakeCheck(name="two", notice=note(kind="two"))
+    for check in (one, two):
+        check.due_always = False
+    report = await beat(config, [one, two]).tick(force=("all",))
+    assert set(report.surfaced) == {"one", "two"}
+
+
+async def test_force_does_not_run_a_check_that_is_already_running(config):
+    """Forcing overrides the schedule, not the no-stacking rule."""
+    check = FakeCheck(notice=note(), delay=0.2)
+    heart = beat(config, [check])
+    first = asyncio.create_task(heart.tick())
+    await asyncio.sleep(0.05)
+    second = await heart.tick(force=("fake",))
+    await first
+    assert second.skipped_running == ("fake",) and check.runs == 1
