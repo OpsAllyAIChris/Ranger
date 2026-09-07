@@ -158,6 +158,22 @@ them.
 inbox is the schedule: today's notice is either there or it is not. Being away
 for a week does not replay six mornings.
 
+## The rails (Tier 6)
+
+```powershell
+ranger pause      # stop everything proactive. You can still talk to Ranger
+ranger resume
+ranger log        # the audit trail for today
+ranger log 2026-09-06
+```
+
+Anything consequential stops and asks, every time, stating plainly what it is
+about to do. Approving one action never pre-authorises the next.
+
+In voice mode a spoken yes is **not** taken as consent: the action is held, a
+notice goes to `Ranger/inbox/`, and you approve it at a keyboard. The same
+mechanism covers anything the heartbeat starts while you are not there.
+
 ## Test
 
 ```bash

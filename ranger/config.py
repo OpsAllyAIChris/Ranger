@@ -71,6 +71,17 @@ class VaultConfig:
 
     @property
     def writable_roots(self) -> tuple[Path, ...]:
+        """Amendment D: Ranger writes under Ranger/ and nowhere else.
+
+        The whole tree, not only the four named folders. Listing just those
+        four was a tightening beyond what Amendment D asks, and it refused the
+        kill switch, which belongs at the root of Ranger's own folder where it
+        is obvious rather than buried in the inbox.
+        """
+        return (self.ranger,)
+
+    @property
+    def named_roots(self) -> tuple[Path, ...]:
         return (self.memory, self.inbox, self.drafts, self.log)
 
     @property
@@ -80,6 +91,8 @@ class VaultConfig:
 
 @dataclass(frozen=True)
 class KnowledgeConfig:
+    #: Only a fallback for callers that do not pass a budget. The real ceiling
+    #: is context.budget_chars minus what memory took.
     budget_chars: int
     priority: tuple[str, ...]
 
@@ -200,6 +213,18 @@ class TtsConfig:
 
 
 @dataclass(frozen=True)
+class GateConfig:
+    """Tier 6. The hard confirmation gate."""
+
+    #: No gate may hang the caller. A heartbeat action nobody answers resolves
+    #: to held and the loop keeps running.
+    timeout_seconds: float = 120.0
+    #: A spoken yes is not consent: transcription is good, not perfect, and
+    #: "no, don't" is one mishearing away from "yes". Voice holds instead.
+    voice_holds: bool = True
+
+
+@dataclass(frozen=True)
 class HeartbeatConfig:
     """Tier 5. The loop that acts without being spoken to."""
 
@@ -259,6 +284,7 @@ class Config:
     voice: VoiceConfig
     stt: SttConfig
     tts: TtsConfig
+    gate: GateConfig
     heartbeat: HeartbeatConfig
     server: ServerConfig
     source_path: Path | None = None
@@ -341,7 +367,7 @@ KNOWN_KEYS: dict[str, frozenset[str]] = {
     "vault": frozenset({
         "root", "accounts", "knowledge", "ranger", "memory", "inbox", "drafts", "log",
     }),
-    "knowledge": frozenset({"budget_chars", "priority"}),
+    "knowledge": frozenset({"priority"}),
     "memory": frozenset({"reserve_chars", "file"}),
     "context": frozenset({"budget_chars"}),
     "schedule": frozenset({"morning_hour", "quiet_start_hour", "quiet_end_hour"}),
@@ -362,8 +388,19 @@ KNOWN_KEYS: dict[str, frozenset[str]] = {
         "provider", "voice_id", "model_id", "output_format", "stability",
         "similarity_boost", "speed", "timeout_seconds",
     }),
+    "gate": frozenset({"timeout_seconds", "voice_holds"}),
     "heartbeat": frozenset({"enabled", "interval_seconds", "check_timeout_seconds"}),
     "server": frozenset({"host", "port"}),
+}
+
+
+#: Settings that used to exist. A pointer beats "not a setting Ranger reads".
+RETIRED_KEYS: dict[str, str] = {
+    "knowledge.budget_chars": (
+        "Knowledge now takes whatever is left of context.budget_chars after memory's "
+        "reserve. There is no separate knowledge ceiling, because having both meant the "
+        "smaller one won silently. Delete this line and set context.budget_chars."
+    ),
 }
 
 
@@ -376,6 +413,9 @@ def _check_known_keys(table: dict[str, Any]) -> None:
         for key in values:
             if key in allowed:
                 continue
+            retired = RETIRED_KEYS.get(f"{section}.{key}")
+            if retired:
+                raise ConfigError(f"{section}.{key} was removed. {retired}")
             elsewhere = [s for s, keys in KNOWN_KEYS.items() if key in keys]
             hint = (
                 f" Did you mean {elsewhere[0]}.{key}?"
@@ -570,7 +610,7 @@ def load_config(path: str | Path | None = None, *, load_env: bool = True) -> Con
 
     knowledge_section = table.get("knowledge", {})
     knowledge = KnowledgeConfig(
-        budget_chars=int(knowledge_section.get("budget_chars", 60000)),
+        budget_chars=int(table.get("context", {}).get("budget_chars", 60000)),
         priority=tuple(str(name) for name in knowledge_section.get("priority", ())),
     )
 
@@ -682,6 +722,19 @@ def load_config(path: str | Path | None = None, *, load_env: bool = True) -> Con
     if not 0.0 <= tts.stability <= 1.0:
         raise ConfigError("tts.stability must be between 0 and 1")
 
+    gate_section = table.get("gate", {})
+    gate = GateConfig(
+        timeout_seconds=float(gate_section.get("timeout_seconds", 120.0)),
+        voice_holds=bool(gate_section.get("voice_holds", True)),
+    )
+    if gate.timeout_seconds <= 0:
+        raise ConfigError("gate.timeout_seconds must be greater than zero")
+    if not gate.voice_holds:
+        raise ConfigError(
+            "gate.voice_holds = false is not supported. A spoken yes is not consent: "
+            "transcription is good but not perfect, and a misheard no is a yes."
+        )
+
     heartbeat_section = table.get("heartbeat", {})
     heartbeat = HeartbeatConfig(
         enabled=bool(heartbeat_section.get("enabled", True)),
@@ -724,6 +777,7 @@ def load_config(path: str | Path | None = None, *, load_env: bool = True) -> Con
         voice=voice,
         stt=stt,
         tts=tts,
+        gate=gate,
         heartbeat=heartbeat,
         server=server,
         source_path=config_path,

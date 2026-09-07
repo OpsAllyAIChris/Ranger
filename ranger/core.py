@@ -15,7 +15,9 @@ from datetime import datetime
 from typing import Any, AsyncIterator
 
 from .config import Config
+from .gate import ConfirmationRequest, DenyingGate, Gate, ask_with_timeout
 from .events import (
+    ConfirmationRequested,
     Event,
     Notice,
     State,
@@ -43,6 +45,9 @@ class Ranger:
         registry: ToolRegistry | None = None,
         vault: Vault | None = None,
         knowledge_loader: KnowledgeLoader | None = None,
+        gate: Gate | None = None,
+        audit: Any = None,
+        origin: str = "conversation",
     ) -> None:
         self.config = config
         self.provider = provider
@@ -51,6 +56,11 @@ class Ranger:
         self.knowledge_loader = knowledge_loader or KnowledgeLoader(
             self.vault, config.vault, config.knowledge
         )
+        #: Refusing is the default. A caller that can actually ask the operator
+        #: passes a gate in; nothing consequential runs without one.
+        self.gate = gate or DenyingGate()
+        self.audit = audit
+        self.origin = origin
         self.messages: list[dict[str, Any]] = []
         self._state = State.IDLE
         self._knowledge: KnowledgeContext | None = None
@@ -75,6 +85,13 @@ class Ranger:
         self._knowledge = None
         self._memory = None
         self._state = State.IDLE
+
+    def _log(self, kind: str, detail: str) -> None:
+        if self.audit is not None:
+            try:
+                self.audit.write(kind, detail, origin=self.origin)
+            except Exception:
+                pass  # the log must never be able to stop a turn
 
     def _trim_history(self) -> None:
         """Keep the working transcript bounded. Tier 4 catches the spillover."""
@@ -149,6 +166,7 @@ class Ranger:
         # copy to roll back to. A half-written turn left in the transcript
         # would poison every turn after it.
         checkpoint = list(self.messages)
+        self._log("turn", text[:200])
         self.messages.append({"role": "user", "content": text})
         self._trim_history()
 
@@ -227,26 +245,44 @@ class Ranger:
                 tool = self.registry.get(request.name)
 
                 if tool is not None and tool.confirm:
-                    # Tier 6 owns this. Until the gate exists, refuse rather
-                    # than let a confirm-flagged tool run unguarded.
-                    message = (
-                        f"{request.name} needs the operator's confirmation and the "
-                        "confirmation gate is not built yet. Refused."
+                    action = tool.describe_action(request.input)
+                    ask = ConfirmationRequest(
+                        tool=request.name,
+                        action=action,
+                        payload=request.input,
+                        origin=self.origin,
                     )
-                    yield ToolFinished(request.name, False, "blocked, no gate yet")
-                    yield Notice("alert", message)
-                    results.append(
-                        {
-                            "type": "tool_result",
-                            "tool_use_id": request.id,
-                            "is_error": True,
-                            "content": message,
-                        }
+                    yield StateChanged(State.AWAITING_CONFIRMATION)
+                    yield ConfirmationRequested(action=action, detail=request.name, token=request.id)
+
+                    decision = await ask_with_timeout(
+                        self.gate, ask, self.config.gate.timeout_seconds
                     )
-                    continue
+                    self._log("confirmation", f"{decision.outcome}: {action} ({decision.reason})")
+
+                    if not decision.approved:
+                        message = (
+                            f"Not done. {decision.reason}. Tell the operator plainly that "
+                            "it is waiting on them and do not try another way round it."
+                        )
+                        yield ToolFinished(request.name, False, decision.outcome)
+                        yield Notice(
+                            "warn" if decision.held else "alert",
+                            f"{decision.outcome}: {action}",
+                        )
+                        results.append(
+                            {
+                                "type": "tool_result",
+                                "tool_use_id": request.id,
+                                "is_error": True,
+                                "content": message,
+                            }
+                        )
+                        continue
 
                 result = await self.registry.run(request.name, request.input)
                 tools_used.append(request.name)
+                self._log("tool", f"{request.name} {'ok' if result.ok else 'failed'}: {result.display()}")
                 yield ToolFinished(request.name, result.ok, result.display())
                 results.append(
                     {

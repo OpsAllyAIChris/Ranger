@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from ranger.vault import Vault, VaultPathDenied, VaultWriteDenied
+from ranger.vault import Vault, VaultError, VaultPathDenied, VaultWriteDenied
 
 
 @pytest.fixture
@@ -94,3 +94,25 @@ def test_relative_paths_use_forward_slashes(vault, vault_root):
     listed = vault.list_markdown(vault_root / "Accounts")
     assert [f.relative for f in listed] == ["Accounts/Food/Illes Foods.md"]
     assert "\\" not in listed[0].relative
+
+
+def test_the_ranger_root_itself_is_writable(vault, config):
+    """Amendment D permits the whole Ranger/ tree, not only the four folders.
+
+    The kill switch lives at Ranger/paused.md, where it is obvious rather than
+    buried inside the inbox.
+    """
+    path = vault.write_new(config.vault.ranger / "paused.md", "paused: true")
+    assert path.read_text(encoding="utf-8") == "paused: true"
+
+
+def test_widening_to_the_ranger_root_did_not_open_the_rest_of_the_vault(vault, vault_root):
+    for target in (
+        vault_root / "Accounts" / "new.md",
+        vault_root / "Knowledge" / "new.md",
+        vault_root / "new.md",
+        vault_root.parent / "escaped.md",
+    ):
+        with pytest.raises(VaultError):
+            vault.write_new(target, "should never land")
+        assert not target.exists()

@@ -41,6 +41,18 @@ class Tool:
     #: Reaches a human or an outside system. Hard gate, every time, no
     #: blanket approvals and no remembering a previous yes.
     confirm: bool = False
+    #: Turns a payload into the sentence the operator is asked to approve. The
+    #: gate keys on this and on `confirm`, never on the tool's name, so a tool
+    #: added later is covered without touching the gate.
+    describe: Callable[[dict[str, Any]], str] | None = None
+
+    def describe_action(self, payload: dict[str, Any]) -> str:
+        if self.describe is not None:
+            try:
+                return self.describe(payload)
+            except Exception:
+                pass
+        return f"run {self.name} with {payload}"
 
     def as_api_spec(self) -> dict[str, Any]:
         return {

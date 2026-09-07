@@ -174,12 +174,12 @@ class Vault:
             self.config.root,
             self.config.accounts,
             self.config.knowledge,
-            *self.config.writable_roots,
+            *self.config.named_roots,
         ]
 
     def missing_dirs(self) -> list[Path]:
         """Ranger's own folders that do not exist yet."""
-        return [p for p in self.config.writable_roots if not p.is_dir()]
+        return [p for p in self.config.named_roots if not p.is_dir()]
 
     def missing_layout_dirs(self) -> list[Path]:
         return [p for p in self.layout_dirs() if not p.is_dir()]
@@ -190,7 +190,7 @@ class Vault:
 
     def ensure_ranger_dirs(self) -> list[Path]:
         """Create Ranger's own folders. Only ever called by 'ranger init'."""
-        return self._make(self.config.writable_roots)
+        return self._make(self.config.named_roots)
 
     def ensure_layout(self) -> list[Path]:
         """Create the whole layout. Only ever called by 'ranger init'."""

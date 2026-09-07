@@ -33,6 +33,12 @@ from .config import Config
 from .dates import day_and_month
 from .vault import Vault, VaultError
 
+#: One obvious way to stop everything proactive at once. A file rather than a
+#: config edit, so it can be flipped from Obsidian on a phone, and so the
+#: reason is written down next to the switch. Conversation is unaffected: the
+#: operator can still talk to Ranger with it engaged.
+KILL_SWITCH_FILE = "paused.md"
+
 STATUS_NEW = "new"
 STATUS_DISMISSED = "dismissed"
 
@@ -282,6 +288,39 @@ class TickReport:
         return self._named(TIMED_OUT)
 
 
+@dataclass(frozen=True)
+class KillSwitch:
+    """Proactive behaviour, on or off, held in the vault."""
+
+    vault: Any
+    path: Path
+
+    def engaged(self) -> bool:
+        try:
+            text = self.vault.read_text(self.path)
+        except Exception:
+            return False
+        return "paused: true" in text.lower()
+
+    def set(self, paused: bool, note: str = "") -> Path:
+        body = (
+            "---\n"
+            f"paused: {'true' if paused else 'false'}\n"
+            f"changed: {datetime.now().isoformat(timespec='seconds')}\n"
+            "---\n\n"
+            "# Ranger, proactive behaviour\n\n"
+            + (
+                "Paused. The heartbeat will not run any checks and will surface nothing.\n"
+                "You can still talk to Ranger normally; only the background loop is off.\n\n"
+                "Resume with `ranger resume`, or change paused to false above.\n"
+                if paused
+                else "Running. The heartbeat is active.\n\nPause with `ranger pause`.\n"
+            )
+            + (f"\n{note}\n" if note else "")
+        )
+        return self.vault.overwrite(self.path, body, allow_overwrite=True)
+
+
 class Heartbeat:
     def __init__(
         self,
@@ -290,11 +329,15 @@ class Heartbeat:
         checks: list[Check],
         *,
         now: Callable[[], datetime] | None = None,
+        kill_switch: KillSwitch | None = None,
+        audit: Any = None,
     ) -> None:
         self.config = config
         self.inbox = inbox
         self.checks = checks
         self.now = now or datetime.now
+        self.kill_switch = kill_switch
+        self.audit = audit
         #: Checks currently in flight. A slow check must not stack up behind
         #: itself when its next turn comes round.
         self._running: set[str] = set()
@@ -313,6 +356,14 @@ class Heartbeat:
     async def tick(self, force: tuple[str, ...] = ()) -> TickReport:
         """One pass. Every check ends with a stated outcome, never silence."""
         now = self.now()
+        if self.kill_switch is not None and self.kill_switch.engaged():
+            # One switch, everything proactive off, nothing torn down.
+            return TickReport(
+                outcomes=tuple(
+                    CheckOutcome(c.name, NOT_DUE, "paused: the kill switch is engaged")
+                    for c in self.checks
+                )
+            )
         quiet = self.in_quiet_hours(now)
         forced = {name.strip().lower() for name in force}
         force_all = "all" in forced
@@ -392,6 +443,14 @@ class Heartbeat:
             else:
                 detail = f"{detail}, noted in {path.name}"
             outcomes.append(CheckOutcome(check.name, state, detail))
+
+        if self.audit is not None:
+            for outcome in outcomes:
+                if outcome.state in _EXECUTED:
+                    try:
+                        self.audit.write("heartbeat", outcome.render(), origin="heartbeat")
+                    except Exception:
+                        pass
 
         return TickReport(outcomes=tuple(outcomes))
 

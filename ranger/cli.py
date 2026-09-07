@@ -51,7 +51,10 @@ def _colour(enabled: bool):
     return paint
 
 
-def _build_agent(config: Config) -> Ranger:
+def _build_agent(config: Config, *, gate=None, origin: str = "conversation") -> Ranger:
+    from .audit import AuditLog
+    from .gate import TerminalGate
+
     api_key = require_api_key()
     vault = Vault(config.vault)
     return Ranger(
@@ -60,6 +63,9 @@ def _build_agent(config: Config) -> Ranger:
         registry=build_registry(config, vault),
         vault=vault,
         knowledge_loader=KnowledgeLoader(vault, config.vault, config.knowledge),
+        gate=gate or TerminalGate(out=sys.stdout),
+        audit=AuditLog(vault, config.vault.log),
+        origin=origin,
     )
 
 
@@ -81,7 +87,8 @@ def _describe_config(config: Config) -> str:
             f"  morning surface  {schedule.morning_hour:02d}:00",
             f"  quiet hours      {schedule.quiet_start_hour:02d}:00 to {schedule.quiet_end_hour:02d}:00",
             f"  quiet after      {config.accounts.quiet_after_days} days",
-            f"  knowledge budget {config.knowledge.budget_chars} chars",
+            f"  standing context  {config.context.budget_chars} chars total, "
+            f"memory reserves {config.memory.reserve_chars}",
             *(f"    {key}" for key in config.overrides),
         ]
     )
@@ -151,7 +158,12 @@ async def voice_loop(config: Config, show_state: bool) -> int:
 
     paint = _colour(sys.stdout.isatty())
     try:
-        agent = _build_agent(config)
+        # A spoken yes is not consent, so voice holds and the inbox carries it.
+        from .gate import HoldingGate
+
+        agent = _build_agent(
+            config, gate=HoldingGate(_inbox(config)), origin="voice"
+        )
         deepgram = require_api_key("DEEPGRAM_API_KEY")
         elevenlabs = require_api_key("ELEVENLABS_API_KEY")
     except ConfigError as exc:
@@ -382,7 +394,7 @@ def cmd_init(config: Config, assume_yes: bool) -> int:
         note = ""
         if path == config.vault.accounts or path == config.vault.knowledge:
             note = "  (yours, read only, seed it by hand)"
-        elif path in config.vault.writable_roots:
+        elif path in config.vault.named_roots:
             note = "  (Ranger's)"
         print(f"  {path}{note}")
 
@@ -553,6 +565,55 @@ def cmd_inbox(config: Config, args) -> int:
     return 0
 
 
+def _kill_switch(config: Config):
+    from .heartbeat import KILL_SWITCH_FILE, KillSwitch
+    from .vault import Vault
+
+    return KillSwitch(Vault(config.vault), config.vault.ranger / KILL_SWITCH_FILE)
+
+
+def cmd_pause(config: Config, args) -> int:
+    """The kill switch. Stops everything proactive, leaves conversation alone."""
+    switch = _kill_switch(config)
+    path = switch.set(paused=True)
+    print("  Proactive behaviour is paused. The heartbeat will surface nothing.")
+    print("  You can still talk to Ranger normally.")
+    print(f"  {path}")
+    print("  Resume with 'ranger resume'.")
+    return 0
+
+
+def cmd_resume(config: Config, args) -> int:
+    switch = _kill_switch(config)
+    path = switch.set(paused=False)
+    print(f"  Proactive behaviour is running again.  {path}")
+    return 0
+
+
+def cmd_log(config: Config, args) -> int:
+    """The audit trail. What ran, why, and what it cost."""
+    from .audit import AuditLog
+    from .vault import Vault
+
+    log = AuditLog(Vault(config.vault), config.vault.log)
+    days = log.days()
+    if not days:
+        print("  nothing logged yet.")
+        return 0
+    from datetime import date as _date
+
+    when = _date.fromisoformat(args.day) if args.day else days[0]
+    text = log.read(when)
+    if not text:
+        print(f"  nothing logged on {when}.")
+        return 1
+    print(text.rstrip())
+    if len(days) > 1:
+        print()
+        print(f"  other days: {', '.join(d.isoformat() for d in days[1:6])}")
+    return 0
+
+
 def cmd_heartbeat(config: Config, args) -> int:
     """Tier 5. The loop, or one pass of it."""
     import asyncio
@@ -566,8 +627,20 @@ def cmd_heartbeat(config: Config, args) -> int:
         print("  heartbeat.enabled is false, so the loop will not start.")
         return 0
 
+    from .audit import AuditLog
+
     vault = Vault(config.vault)
-    beat = Heartbeat(config, _inbox(config), build_checks(config, build_registry(config, vault)))
+    switch = _kill_switch(config)
+    if switch.engaged() and not args.force:
+        print("  paused: the kill switch is engaged. 'ranger resume' to start again.")
+        return 0
+    beat = Heartbeat(
+        config,
+        _inbox(config),
+        build_checks(config, build_registry(config, vault)),
+        kill_switch=switch,
+        audit=AuditLog(vault, config.vault.log),
+    )
 
     known = {c.name for c in beat.checks}
     forced = tuple(args.force or ())
@@ -949,6 +1022,11 @@ def main(argv: list[str] | None = None) -> int:
     inbox.add_argument("--all", action="store_true", help="include dismissed notices")
     inbox.add_argument("--full", action="store_true", help="print each notice in full")
 
+    sub.add_parser("pause", help="Tier 6: the kill switch. Stop all proactive behaviour")
+    sub.add_parser("resume", help="Tier 6: start proactive behaviour again")
+    log_cmd = sub.add_parser("log", help="Tier 6: the audit trail")
+    log_cmd.add_argument("day", nargs="?", help="a date, YYYY-MM-DD. Defaults to today")
+
     beat = sub.add_parser("heartbeat", help="Tier 5: run the background loop")
     beat.add_argument("--once", action="store_true", help="one pass, then exit")
     beat.add_argument(
@@ -994,6 +1072,12 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_inbox(config, args)
     if args.command == "heartbeat":
         return cmd_heartbeat(config, args)
+    if args.command == "pause":
+        return cmd_pause(config, args)
+    if args.command == "resume":
+        return cmd_resume(config, args)
+    if args.command == "log":
+        return cmd_log(config, args)
     if args.command == "keyterms":
         return cmd_keyterms(config, args)
     if args.command == "voices":

@@ -219,33 +219,6 @@ async def test_remember_refuses_nothing(registry):
     assert not (await registry.run("remember", {"fact": "  "})).ok
 
 
-async def test_forget_is_gated_and_does_not_delete(registry, config):
-    """Removing a fact rewrites a file, which needs a yes every time."""
-    await registry.run("remember", {"fact": "Chris prefers morning meetings."})
-    before = (config.vault.memory / "facts.md").read_text(encoding="utf-8")
-
-    result = await registry.run("forget", {"fact": "morning meetings"})
-    assert not result.ok
-    assert "needs the operator's yes" in result.content
-    assert (config.vault.memory / "facts.md").read_text(encoding="utf-8") == before
-
-
-async def test_the_core_refuses_forget_before_the_gate_exists(config, vault_root):
-    """confirm=True is not advisory: the core will not run it at all."""
-    from ranger.events import Notice
-
-    agent = Ranger(
-        config=config,
-        provider=ScriptedProvider(
-            [{"tools": [{"name": "forget", "input": {"fact": "anything"}}]}, {"text": "I did not."}]
-        ),
-        registry=build_registry(config, Vault(config.vault)),
-    )
-    events = [e async for e in agent.turn("forget that")]
-    alerts = [e for e in events if isinstance(e, Notice) and e.level == "alert"]
-    assert alerts and "confirmation gate is not built yet" in alerts[0].message
-
-
 def test_find_fact_matches_a_phrase():
     facts = [Fact("Chris prefers morning meetings."), Fact("Chris covers Texas.")]
     assert len(find_fact(facts, "morning")) == 1

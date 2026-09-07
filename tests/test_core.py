@@ -97,37 +97,6 @@ async def test_unknown_tool_is_reported_not_raised(config):
     assert finished and not finished[0].ok
 
 
-async def test_confirm_flagged_tool_is_blocked_until_tier_six(config):
-    ran = False
-
-    async def handler(payload):
-        nonlocal ran
-        ran = True
-        return ToolResult(ok=True, content="sent")
-
-    registry = ToolRegistry(
-        [
-            Tool(
-                name="send_email",
-                description="sends an email",
-                input_schema={"type": "object", "properties": {}},
-                handler=handler,
-                confirm=True,
-            )
-        ]
-    )
-    agent = make_agent(
-        config,
-        [{"tools": [{"name": "send_email", "input": {}}]}, {"text": "I did not send it."}],
-        registry,
-    )
-
-    events = await collect(agent, "send it")
-    assert ran is False
-    alerts = [e for e in events if isinstance(e, Notice) and e.level == "alert"]
-    assert alerts and "confirmation gate is not built yet" in alerts[0].message
-
-
 async def test_tool_rounds_are_bounded(config):
     async def handler(payload):
         return ToolResult(ok=True, content="again")

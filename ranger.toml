@@ -77,9 +77,9 @@ log = "Ranger/log"          # Tier 6, append only
 # [recall] instead.
 #
 # The real constraint is not the context window, which is far larger than this.
-# It is that the system prompt is resent on every turn, so this costs latency
-# and money each time. Prompt caching makes a stable prefix nearly free after
-# the first turn, at which point this can rise a long way. That is Tier 6.
+# It is that the system prompt is resent on every turn. Prompt caching is on
+# (model.cache_prompt), so the stable half costs about a tenth after the first
+# turn, which is what lets this be large. Raise it rather than splitting files.
 budget_chars = 60000
 
 [memory]
@@ -91,10 +91,11 @@ reserve_chars = 8000
 file = "facts.md"
 
 [knowledge]
-# Amendment C: company, products, ICP, competitive landscape, playbook are
-# loaded whole as context. When they outgrow this budget Ranger says so at
-# startup instead of silently truncating mid-sentence.
-budget_chars = 60000
+# Amendment C: company, products, ICP, competitive landscape and playbook are
+# loaded whole as context. There is deliberately no budget here. Knowledge
+# takes whatever is left of context.budget_chars once memory has its reserve,
+# so there is one number to change rather than two that can disagree. There
+# used to be two, and the smaller one won without saying so.
 # Load ORDER only. Every .md in the folder is loaded whatever it is called;
 # these just go first, so the most important survive when the budget bites.
 # Nothing here is required and nothing is missing if you do not have it.
@@ -212,6 +213,18 @@ stability = 0.5
 similarity_boost = 0.75
 speed = 1.0
 timeout_seconds = 30.0
+
+[gate]
+# The hard confirmation gate. Every consequential action stops here and waits
+# for an explicit yes, every time. Approving one never pre-authorises the next
+# and there is no blanket allow.
+#
+# Nothing may hang: an action nobody answers inside this resolves to held, a
+# notice goes to Ranger/inbox/, and the loop carries on.
+timeout_seconds = 120.0
+# A spoken yes is not consent. In voice mode the action is held for approval at
+# a keyboard. This cannot be turned off.
+voice_holds = true
 
 [heartbeat]
 # The loop that lets Ranger act without being spoken to. Quiet by default:

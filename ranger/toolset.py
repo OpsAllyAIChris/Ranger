@@ -364,22 +364,37 @@ def _remember(config: Config, vault: Vault) -> Tool:
 
 def _forget(config: Config, vault: Vault) -> Tool:
     async def handler(payload: dict[str, Any]) -> ToolResult:
-        # Not reachable until the Tier 6 gate exists: the core refuses a tool
-        # flagged confirm before the handler runs. Written so the gate has
-        # something real to gate.
+        # Only reached once the gate has been through and the operator said
+        # yes. The gate runs before this, in core.turn.
         query = str(payload.get("fact", "")).strip()
         context = load_memory(vault, config.vault.memory, config.memory.reserve_chars)
         matches = find_fact(list(context.facts), query)
         if not matches:
             return ToolResult(False, f"Nothing in memory matches {query!r}.", "no match")
-        listing = chr(10).join(f"- {f.render()}" for f in matches)
+
+        target = config.vault.memory / config.memory.file
+        try:
+            text = vault.read_text(target)
+        except VaultError as exc:
+            return ToolResult(False, str(exc), "could not read memory")
+
+        gone = {f.text for f in matches}
+        kept, removed = [], 0
+        for line in text.splitlines():
+            body = line.strip()
+            if body.startswith("-") and any(g in body for g in gone):
+                removed += 1
+                continue
+            kept.append(line)
+        if not removed:
+            return ToolResult(False, "Could not find those lines to remove.", "no lines matched")
+
+        vault.overwrite(target, chr(10).join(kept) + chr(10), allow_overwrite=True)
+        listing = chr(10).join(f"- {f.text}" for f in matches)
         return ToolResult(
-            ok=False,
-            content=(
-                "Removing a fact rewrites a file, which needs the operator's yes. "
-                f"These would go:{chr(10)}{listing}"
-            ),
-            summary=f"{len(matches)} facts",
+            ok=True,
+            content=f"Removed {removed} fact(s):{chr(10)}{listing}",
+            summary=f"removed {removed}",
         )
 
     return Tool(
@@ -399,6 +414,11 @@ def _forget(config: Config, vault: Vault) -> Tool:
         handler=handler,
         writes=True,
         confirm=True,
+        describe=lambda payload: (
+            "Permanently remove from memory every fact matching "
+            f"{str(payload.get('fact', '')).strip()!r}. This rewrites "
+            "Ranger/memory and cannot be undone from here."
+        ),
     )
 
 

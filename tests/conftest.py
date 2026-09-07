@@ -44,7 +44,6 @@ reserve_chars = {memory_reserve}
 file = "facts.md"
 
 [knowledge]
-budget_chars = {budget}
 priority = ["company.md", "icp.md"]
 
 [schedule]
@@ -80,6 +79,10 @@ provider = "elevenlabs"
 voice_id = "test-voice-id"
 model_id = "eleven_flash_v2_5"
 output_format = "pcm_24000"
+
+[gate]
+timeout_seconds = 5.0
+voice_holds = true
 
 [heartbeat]
 enabled = true

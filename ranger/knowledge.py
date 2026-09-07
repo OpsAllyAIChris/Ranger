@@ -84,14 +84,20 @@ class KnowledgeLoader:
         self.strategy = strategy or LoadEverything(config.priority)
 
     def load(self, query: str | None = None, budget: int | None = None) -> KnowledgeContext:
-        """budget overrides the configured ceiling, so memory can take its
-        reserve first and knowledge can have whatever is left."""
+        """budget is what is left of [context] after memory took its reserve.
+
+        There is deliberately no second knowledge-only ceiling. There used to
+        be, and it silently won: the operator raised context.budget_chars to
+        200000, doctor reported 199940 available, and the real limit was still
+        the forgotten 60000. Their file fit with 28 characters to spare.
+        """
         folder = self.vault_config.knowledge
         if not folder.is_dir():
             return KnowledgeContext(
                 warnings=(f"knowledge folder not found: {folder}",)
             )
 
+        ceiling = self.config.budget_chars if budget is None else budget
         files = self.strategy.select(self.vault.list_markdown(folder), query)
         docs: list[KnowledgeDoc] = []
         omitted: list[str] = []
@@ -113,7 +119,6 @@ class KnowledgeLoader:
                 )
             body = fence(item.relative, raw, findings=findings) if findings else raw
 
-            ceiling = self.config.budget_chars if budget is None else min(budget, self.config.budget_chars)
             if used + len(body) > ceiling:
                 omitted.append(item.relative)
                 continue
@@ -121,7 +126,6 @@ class KnowledgeLoader:
             docs.append(KnowledgeDoc(relative=item.relative, text=body))
 
         if omitted:
-            ceiling = self.config.budget_chars if budget is None else min(budget, self.config.budget_chars)
             warnings.append(
                 f"knowledge exceeded its {ceiling} character share; "
                 f"{len(omitted)} file(s) left out. Time for selective retrieval."
