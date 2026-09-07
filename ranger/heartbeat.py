@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import asyncio
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Protocol, runtime_checkable
@@ -56,6 +56,11 @@ class Notice:
     created: datetime
     status: str = STATUS_NEW
     path: Path | None = None
+    #: Written by --force. A forced run is a test, and a test must not consume
+    #: the day's real run: the operator forced the morning check at 02:51 to
+    #: exercise the inbox, and that silently cancelled the genuine 07:00
+    #: surface, because the scheduler only asks whether a notice exists.
+    forced: bool = False
 
     @property
     def dismissed(self) -> bool:
@@ -70,6 +75,8 @@ class Notice:
             f"kind: {self.kind}\n"
             f"created: {self.created.isoformat(timespec='seconds')}\n"
             f"status: {self.status}\n"
+            + (f"forced: true\n" if self.forced else "")
+            +
             "---\n\n"
             f"# {self.title}\n\n"
             f"{self.body.strip()}\n"
@@ -99,6 +106,7 @@ def parse_notice(text: str, path: Path) -> Notice | None:
         body=body.strip(),
         created=created,
         status=fields.get("status", STATUS_NEW),
+        forced=fields.get("forced", "").strip().lower() == "true",
         path=path,
     )
 
@@ -125,13 +133,21 @@ class Inbox:
     def pending(self) -> list[Notice]:
         return [n for n in self.all() if not n.dismissed]
 
-    def has_kind_on(self, kind: str, when: date) -> bool:
-        """Has this check already produced a notice for that day.
+    def has_kind_on(self, kind: str, when: date, *, count_forced: bool = False) -> bool:
+        """Has this check already had its real run for that day.
 
         This is the whole scheduler. It is answered from the vault, so it
         survives a restart without a state file to keep in step.
+
+        Forced runs do not count. Forcing is how a daily check gets verified
+        without waiting a day, and if that satisfied the scheduler then testing
+        the morning surface at 02:51 would cancel the 07:00 one, which is
+        exactly what happened.
         """
-        return any(n.kind == kind and n.created.date() == when for n in self.all())
+        return any(
+            n.kind == kind and n.created.date() == when and (count_forced or not n.forced)
+            for n in self.all()
+        )
 
     def write(self, notice: Notice) -> Path:
         target = self.folder / notice.filename()
@@ -432,6 +448,8 @@ class Heartbeat:
                 )
                 continue
 
+            if compelled:
+                notice = replace(notice, forced=True)
             try:
                 path = self.inbox.write(notice)
             except VaultError as exc:
@@ -440,6 +458,8 @@ class Heartbeat:
 
             if state == SURFACED:
                 detail = f"surfaced to {path.name}"
+                if compelled:
+                    detail += " (forced, so the scheduled run still stands)"
             else:
                 detail = f"{detail}, noted in {path.name}"
             outcomes.append(CheckOutcome(check.name, state, detail))

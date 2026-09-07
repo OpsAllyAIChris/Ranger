@@ -289,6 +289,13 @@ Other rules that hold:
 - **`--force` runs a check now,** ignoring both the schedule and quiet hours, so
   a daily check can be verified without waiting a day. It does not override the
   no-stacking rule.
+- **A forced run does not consume the scheduled one.** Forced notices carry
+  `forced: true` and the scheduler skips them when asking whether today's run
+  has happened. Without that, the operator forcing the morning check at 02:51
+  to exercise the inbox silently cancelled the genuine 07:00 surface, because
+  the scheduler only asked whether a notice existed. Verifying a check must
+  never cancel it. The notice is still a real notice in the inbox; it is only
+  the scheduler that ignores it.
 - **The morning surface calls the existing `what_went_quiet` tool.** There is no
   second implementation of that logic, so the spoken answer and the morning file
   cannot disagree.

@@ -379,3 +379,55 @@ async def test_force_does_not_run_a_check_that_is_already_running(config):
     second = await heart.tick(force=("fake",))
     await first
     assert second.skipped_running == ("fake",) and check.runs == 1
+
+
+# -- forcing a check must not consume the day's real run -------------------
+#
+# The operator forced the morning check at 02:51 to exercise the inbox. The
+# notice landed, the scheduler saw "a morning notice exists for today", and the
+# genuine 07:00 surface was silently cancelled. Verifying a check cannot be
+# allowed to cancel it.
+
+
+async def test_a_forced_run_does_not_cancel_the_scheduled_one(seeded):
+    inbox = Inbox(Vault(seeded.vault), seeded.vault.inbox)
+    checks = build_checks(seeded, build_registry(seeded, Vault(seeded.vault)))
+
+    # 02:51, inside quiet hours and before the hour: only --force gets through.
+    forced = Heartbeat(seeded, inbox, checks, now=lambda: datetime(2026, 9, 7, 2, 51))
+    report = await forced.tick(force=("morning",))
+    assert report.surfaced == ("morning",)
+    assert "the scheduled run still stands" in report.outcomes[0].detail
+
+    # 07:00 the same morning: the real one still fires.
+    scheduled = Heartbeat(seeded, inbox, checks, now=lambda: datetime(2026, 9, 7, 7, 0))
+    assert (await scheduled.tick()).surfaced == ("morning",)
+
+    # And now it is genuinely done for the day.
+    later = Heartbeat(seeded, inbox, checks, now=lambda: datetime(2026, 9, 7, 9, 0))
+    assert (await later.tick()).surfaced == ()
+
+
+def test_a_forced_notice_is_marked_in_the_file(inbox):
+    inbox.write(Notice("morning", "T", "B", datetime(2026, 9, 7, 2, 51), forced=True))
+    written = inbox.all()[0]
+    assert written.forced
+    assert "forced: true" in written.path.read_text(encoding="utf-8")
+
+
+def test_a_scheduled_notice_is_not_marked(inbox):
+    inbox.write(note(kind="morning"))
+    assert not inbox.all()[0].forced
+    assert "forced:" not in inbox.all()[0].path.read_text(encoding="utf-8")
+
+
+def test_the_scheduler_ignores_forced_notices(inbox):
+    inbox.write(Notice("morning", "T", "B", datetime(2026, 9, 7, 2, 51), forced=True))
+    assert not inbox.has_kind_on("morning", date(2026, 9, 7))
+    assert inbox.has_kind_on("morning", date(2026, 9, 7), count_forced=True)
+
+
+def test_a_forced_notice_is_still_a_real_notice_in_the_inbox(inbox):
+    """It is only the scheduler that ignores it. The operator still sees it."""
+    inbox.write(Notice("morning", "Forced", "B", datetime(2026, 9, 7, 2, 51), forced=True))
+    assert len(inbox.pending()) == 1
