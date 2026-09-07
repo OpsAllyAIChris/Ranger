@@ -10,8 +10,11 @@ from __future__ import annotations
 import argparse
 import asyncio
 import sys
+from pathlib import Path
 from typing import Any
 
+from .audio import AudioError, resolve_device
+from .audiocheck import format_devices, run_check
 from .config import Config, ConfigError, load_config, require_api_key
 from .core import Ranger
 from .events import Notice, State, StateChanged, TextDelta, ToolCalled, ToolFinished, TurnComplete
@@ -294,6 +297,62 @@ def cmd_init(config: Config, assume_yes: bool) -> int:
     return 0
 
 
+def cmd_audio_devices(config: Config) -> int:
+    """Tier 3a. What PortAudio can see, and which ones Ranger will use."""
+    from .audio import SoundDeviceBackend
+
+    try:
+        devices = SoundDeviceBackend().devices()
+    except AudioError as exc:
+        print(f"  {exc}", file=sys.stderr)
+        return 1
+
+    voice = config.voice
+    problems: list[str] = []
+    resolved: dict[str, int | None] = {}
+    for kind, spec in (("input", voice.input_device), ("output", voice.output_device)):
+        try:
+            resolved[kind] = resolve_device(spec, devices, kind=kind)
+        except AudioError as exc:
+            resolved[kind] = None
+            problems.append(str(exc))
+
+    print(format_devices(devices, resolved.get("input"), resolved.get("output")))
+    print()
+    for kind in ("input", "output"):
+        spec = getattr(voice, f"{kind}_device")
+        print(f"  voice.{kind}_device = {spec!r}" + ("   (system default)" if not spec else ""))
+    if problems:
+        print()
+        for problem in problems:
+            print(f"  {problem}")
+        return 1
+    print()
+    print("  Set voice.input_device to part of a device name rather than an index.")
+    print("  Indices move when a USB microphone or a headset connects.")
+    return 0
+
+
+def cmd_audio_check(config: Config, args) -> int:
+    from .audio import SoundDeviceBackend
+
+    try:
+        backend = SoundDeviceBackend()
+    except AudioError as exc:
+        print(f"  {exc}", file=sys.stderr)
+        return 1
+
+    keep = Path(args.keep).expanduser().resolve() if args.keep else None
+    return run_check(
+        config,
+        backend,
+        seconds=args.seconds,
+        use_trigger=args.hold,
+        keep=keep,
+        out=sys.stdout,
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="ranger", description="Ranger, a voice-first assistant.")
     parser.add_argument("-c", "--config", help="path to ranger.toml")
@@ -308,6 +367,20 @@ def main(argv: list[str] | None = None) -> int:
     init = sub.add_parser("init", help="create Ranger's own folders in the vault")
     init.add_argument("-y", "--yes", action="store_true", help="skip the confirmation")
 
+    audio = sub.add_parser("audio", help="Tier 3a: check the microphone and speaker")
+    audio_sub = audio.add_subparsers(dest="audio_command")
+    audio_sub.add_parser("devices", help="list the audio devices PortAudio can see")
+    check = audio_sub.add_parser("check", help="record, measure, save and play back")
+    check.add_argument(
+        "-s", "--seconds", type=float, default=3.0, help="how long to record (default 3)"
+    )
+    check.add_argument(
+        "--hold",
+        action="store_true",
+        help="use the push-to-talk key instead of a fixed duration",
+    )
+    check.add_argument("--keep", help="write the recording to this path")
+
     args = parser.parse_args(argv)
 
     try:
@@ -320,6 +393,13 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_doctor(config)
     if args.command == "init":
         return cmd_init(config, args.yes)
+    if args.command == "audio":
+        if args.audio_command == "devices":
+            return cmd_audio_devices(config)
+        if args.audio_command == "check":
+            return cmd_audio_check(config, args)
+        print("usage: ranger audio devices | ranger audio check", file=sys.stderr)
+        return 2
 
     try:
         return asyncio.run(repl(config, show_state=not args.quiet_state))

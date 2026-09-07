@@ -113,6 +113,14 @@ class VoiceConfig:
     stt_provider: str
     tts_provider: str
     voice_id: str
+    model_id: str = "eleven_flash_v2_5"
+    trigger: str = "hold"
+    key: str = "space"
+    input_device: str = ""
+    output_device: str = ""
+    sample_rate: int = 16000
+    channels: int = 1
+    max_seconds: int = 60
 
 
 @dataclass(frozen=True)
@@ -399,7 +407,25 @@ def load_config(path: str | Path | None = None, *, load_env: bool = True) -> Con
         stt_provider=str(voice_section.get("stt_provider", "deepgram")),
         tts_provider=str(voice_section.get("tts_provider", "elevenlabs")),
         voice_id=str(voice_section.get("voice_id", "")),
+        model_id=str(voice_section.get("model_id", "eleven_flash_v2_5")),
+        trigger=str(voice_section.get("trigger", "hold")),
+        key=str(voice_section.get("key", "space")),
+        input_device=str(voice_section.get("input_device", "")),
+        output_device=str(voice_section.get("output_device", "")),
+        sample_rate=int(voice_section.get("sample_rate", 16000)),
+        channels=int(voice_section.get("channels", 1)),
+        max_seconds=int(voice_section.get("max_seconds", 60)),
     )
+    if voice.trigger not in {"hold", "toggle"}:
+        raise ConfigError(f'voice.trigger must be "hold" or "toggle", got {voice.trigger!r}')
+    if voice.sample_rate < 8000:
+        raise ConfigError(f"voice.sample_rate looks wrong: {voice.sample_rate}")
+    if voice.channels not in (1, 2):
+        raise ConfigError(f"voice.channels must be 1 or 2, got {voice.channels}")
+    if voice.max_seconds < 1:
+        raise ConfigError("voice.max_seconds must be at least 1")
+    if voice.wake_word:
+        raise ConfigError("voice.wake_word is not built. Push to talk only.")
 
     server_section = table.get("server", {})
     server = ServerConfig(

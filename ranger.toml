@@ -96,12 +96,35 @@ max_chars = 4000
 filename_format = "{date}-{slug}.md"
 
 [voice]
-# Tier 3. Listed now so the shape is settled; unused until then.
 push_to_talk = true
-wake_word = false
+wake_word = false        # never, until everything else is stable
+
+# How recording starts and stops.
+#   "hold"   hold the key, release to send. Needs pynput. The default.
+#   "toggle" Enter to start, Enter to send. Standard library, cannot fail.
+trigger = "hold"
+key = "space"
+
+# Devices. Prefer a name fragment over an index: indices shuffle when a USB mic
+# is plugged in or a headset connects, and a stale index silently records from
+# the wrong thing. Empty means the Windows default.
+# Run 'ranger audio devices' to see the list.
+input_device = ""
+output_device = ""
+
+# 16k mono is what Deepgram wants and it keeps uploads small. If the device
+# refuses it, 48000 almost always works.
+sample_rate = 16000
+channels = 1
+# Hard ceiling on one recording, so a stuck key cannot record all afternoon.
+max_seconds = 60
+
+# Tier 3b and 3c, unused until then.
 stt_provider = "deepgram"
 tts_provider = "elevenlabs"
-voice_id = ""           # chosen before Tier 3 starts
+voice_id = ""            # from 'ranger voices' in 3c
+# Flash or Turbo. Latency is the whole experience, so the fastest model wins.
+model_id = "eleven_flash_v2_5"
 
 [server]
 # Tier 7. The browser talks to the same core the terminal does.

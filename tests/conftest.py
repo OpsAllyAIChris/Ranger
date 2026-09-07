@@ -57,6 +57,13 @@ wake_word = false
 stt_provider = "deepgram"
 tts_provider = "elevenlabs"
 voice_id = ""
+trigger = "hold"
+key = "space"
+input_device = ""
+output_device = ""
+sample_rate = 16000
+channels = 1
+max_seconds = 60
 
 [server]
 host = "127.0.0.1"

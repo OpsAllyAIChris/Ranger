@@ -106,7 +106,7 @@ quiet" tool.
 | ---- | ---- | ----- |
 | 1 | The brain. Config, provider seam, agent core as a library, event stream, vault guard, terminal REPL | done |
 | 2 | The hands. Three tools: account recall, draft and hold, what went quiet | done |
-| 3 | The ears and mouth. Push-to-talk, Deepgram in, ElevenLabs out. No wake word. Show the transcript. Let interruption work | later |
+| 3 | The ears and mouth. 3a loopback done. 3b transcribe, 3c speak, 3d full loop still to come | 3a done |
 | 4 | The memory. Durable facts in `Ranger/memory`, one fact per entry, hand-editable | later |
 | 5 | The heartbeat. Morning surface, quiet hours, held notices, a schedule that survives restarts | later |
 | 6 | The rails. Confirmation gate, audit trail, cost tally, kill switch, everything tunable in config | later |
@@ -188,6 +188,43 @@ material. They are never committed here. `tests/fixtures/vault/` holds
 fictional notes that match the contract exactly; the tests prove the logic and
 the operator's own run proves the format.
 
+## Tier 3, and why it is split
+
+Audio is the most platform-specific thing in the build and **none of it can be
+verified from the sandbox**: `import sounddevice` raises
+`OSError: PortAudio library not found` there, because the generic wheel carries
+no PortAudio. Only the operator can confirm a working microphone.
+
+So Tier 3 is four things that run independently, and each one narrows where a
+failure can be:
+
+| Step | Command | Needs |
+| ---- | ------- | ----- |
+| 3a | `ranger audio devices`, `ranger audio check` | nothing. No keys, no network |
+| 3b | `ranger audio transcribe file.wav` | Deepgram key, no microphone |
+| 3c | `ranger say "..."` | ElevenLabs key, no microphone |
+| 3d | `ranger --voice` | everything |
+
+Rules that hold across all four:
+
+- **No audioop.** Removed in Python 3.13. Level metering uses stdlib `array`.
+- **sounddevice is imported lazily,** never at module import, so the rest of
+  Ranger runs on a machine with no audio stack.
+- **PyAudio is never a dependency.** No wheel for 3.14; it would build from
+  source and need Visual C++ plus a PortAudio the operator supplies.
+- **The backend is a Protocol** so every test runs against a fake.
+- **Devices resolve by name fragment, not index.** Indices shuffle when a USB
+  microphone or a headset connects, and a stale index silently records the
+  wrong thing. Ambiguity is a question, never a guess, exactly as with account
+  names.
+- **Silence is the failure to design for.** It throws nothing: on Windows the
+  microphone privacy setting is off, the stream opens, every sample is zero.
+  `judge()` separates digital silence from a faint signal because they have
+  different causes and different fixes.
+- **No non-daemon timers.** One leaked `threading.Timer(60, ...)` held the
+  whole process open for a minute after the command had finished, while the
+  suite cheerfully reported passing in 1.6 seconds.
+
 ## Layout
 
 ```
@@ -203,6 +240,9 @@ ranger/
   toolset.py     the three Tier 2 tools, and nothing else
   accounts.py    reading account notes: parse, resolve a name, what went quiet
   drafts.py      draft and hold, including the writing rules
+  audio.py       devices, levels, wav, and the PortAudio backend behind a seam
+  trigger.py     push to talk: hold via pynput, toggle via stdlib, fixed for tests
+  audiocheck.py  Tier 3a: 'ranger audio devices' and 'ranger audio check'
   core.py        the agent. one entry point. all the logic
   cli.py         the terminal. first caller of the core, permanent debug path
   testing.py     ScriptedProvider, so the core is verifiable with no API key

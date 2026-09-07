@@ -55,6 +55,25 @@ run `ranger doctor` to see what is still missing.
 Inside the REPL: `/help`, `/config`, `/vault`, `/tools`, `/state`, `/reset`,
 `/quit`.
 
+## Voice (Tier 3a)
+
+```powershell
+pip install sounddevice numpy soundfile pynput   # nothing here compiles
+ranger audio devices     # what PortAudio sees, and which ones Ranger will use
+ranger audio check       # record 3 seconds, measure it, play it back
+ranger audio check --hold --keep out.wav
+```
+
+Do **not** install PyAudio: it has no wheel for Python 3.14 and builds from
+source. `sounddevice` bundles PortAudio in its platform wheel.
+
+Set `voice.input_device` to part of a device name rather than an index.
+Indices move when a USB microphone or a headset connects.
+
+On Windows, if the recording comes back as pure silence, the cause is almost
+always Settings, Privacy and security, Microphone, "Let desktop apps access
+your microphone".
+
 ## Test
 
 ```bash
