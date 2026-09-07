@@ -41,7 +41,12 @@ class ConfirmationRequest:
     tool: str
     action: str
     payload: dict[str, Any]
-    origin: str = "conversation"  # conversation | voice | heartbeat
+    origin: str = "conversation"  # conversation | voice | heartbeat | browser
+    #: The tool call this asks about. A gate that collects its answer from
+    #: somewhere else, like a card in a browser, matches the answer to the
+    #: question with this. Without it a click left over from a card the
+    #: operator scrolled past could approve the next action instead.
+    token: str = ""
 
     def render(self) -> str:
         return f"{self.action}"
@@ -148,6 +153,74 @@ class HoldingGate:
         except Exception as exc:  # a full disk must not become a silent yes
             return Decision(DECLINED, f"held, but the notice could not be written: {exc}")
         return Decision(HELD, "held for approval at a keyboard, and put in your inbox")
+
+
+class SocketGate:
+    """Asks in the browser and waits for a click.
+
+    The card is not the safety mechanism; this is. Nothing runs until `ask`
+    returns approved, and `ask` only returns approved when a decision arrives
+    carrying the same token as the question. A front end that never renders the
+    card, or renders it and ignores it, gets a timeout and a held action. There
+    is no path where not asking means yes.
+
+    A click, never a transcript. In voice mode the operator's spoken words are
+    a mishearing away from the opposite of what they meant, so 7d disables the
+    microphone while a card is open rather than letting a spoken yes reach here.
+    """
+
+    name = "socket"
+
+    def __init__(self, emit: Callable[[dict[str, Any]], None]) -> None:
+        self.emit = emit
+        self._pending: dict[str, asyncio.Future] = {}
+
+    async def ask(self, request: ConfirmationRequest) -> Decision:
+        loop = asyncio.get_running_loop()
+        answer: asyncio.Future = loop.create_future()
+        token = request.token or f"{id(request):x}"
+        self._pending[token] = answer
+
+        self.emit(
+            {
+                "kind": "confirm_open",
+                "token": token,
+                "action": request.action,
+                "tool": request.tool,
+                "origin": request.origin,
+            }
+        )
+        try:
+            allowed = await answer
+        finally:
+            self._pending.pop(token, None)
+            self.emit({"kind": "confirm_closed", "token": token})
+
+        if allowed:
+            return Decision(APPROVED, "approved in the browser")
+        return Decision(DECLINED, "declined in the browser")
+
+    def decide(self, token: str, allowed: bool) -> bool:
+        """Answer an open question. False if there was no such question.
+
+        A token that is not pending is not an error worth breaking the
+        connection over: it is a stale card, a double click, or an answer that
+        arrived after the gate had already timed out. Ignoring it is correct,
+        and saying so lets the front end stop showing a card nobody is waiting
+        on.
+        """
+        answer = self._pending.get(token)
+        if answer is None or answer.done():
+            return False
+        answer.set_result(bool(allowed))
+        return True
+
+    def abandon(self) -> None:
+        """The socket went away. Nothing waits forever, and nothing is approved."""
+        for answer in list(self._pending.values()):
+            if not answer.done():
+                answer.set_result(False)
+        self._pending.clear()
 
 
 class ScriptedGate:

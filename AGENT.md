@@ -110,7 +110,7 @@ quiet" tool.
 | 4 | The memory. Durable facts in `Ranger/memory`, one fact per entry, hand-editable | done |
 | 5 | The heartbeat. Morning surface, quiet hours, held notices, a schedule that survives restarts | done |
 | 6 | The rails. Confirmation gate, planted-instruction proof, audit trail, cost tally, kill switch | done |
-| 7 | The face. Browser front end: orb, transport, glass shell, mic bar | 7a, 7b done |
+| 7 | The face. Browser front end: orb, transport, glass shell, mic bar | 7a, 7b, 7c done |
 
 Each tier ends with something runnable and a verification step in
 `start-here.md`. Do not start a tier until the one before it verifies, and do
@@ -124,7 +124,7 @@ Tier 7 is built in four independently runnable steps, in this order:
 | ---- | ---- | ------------------ |
 | 7a | The orb and the cosmic background | `ranger ui`, look at it |
 | 7b | The transport: websocket, a turn in, a reply out, no styling | `/transport.html`, type into it |
-| 7c | The glass shell: header, activity panel, response cards | the shell over the orb |
+| 7c | The glass shell: header, activity panel, response cards, the card gate | `ranger ui`, use it |
 | 7d | The mic bar | hold to talk in the browser |
 
 Transport comes before the shell deliberately. Every layer tested in isolation
@@ -609,6 +609,63 @@ Two things that only showed up by running it:
   once made the suite report success and then sit there for sixty seconds.
   Reads now run on a daemon thread.
 
+## Tier 7c: the glass shell
+
+The shell renders frames and sends three kinds of message. It decides nothing,
+and a test asserts it: no local state, no storage, and the confirmation card
+sends its answer rather than acting on it.
+
+**The status dot is set from state frames only.** Never from "I just sent a
+turn so it must be thinking". If the socket says idle, the dot says idle, even
+if that disagrees with what the page expected.
+
+**The panel is a view of the vault, not a second copy of the state.** Inbox is
+`Ranger/inbox`, Drafts is `Ranger/drafts`, Awaiting Confirmation is anything
+`HoldingGate` wrote from a voice turn or the heartbeat, plus any card open in
+this browser right now. Dismissing rewrites the note the same way
+`ranger inbox dismiss` does, so closing the browser changes nothing and Obsidian
+shows the same file.
+
+Two things the panel will not do, and both are the vault's rules rather than
+the panel's. Nothing is deleted: dismissing marks a notice and leaves it
+readable, because the vault has no delete path and is not getting one. And
+drafts are listed, never removed, because removing an existing note is on the
+operator's never-without-asking list.
+
+**The gate.** The browser gets `SocketGate`, which asks by opening a card and
+waits for a click. The card is not the safety mechanism; the gate is. Nothing
+runs until `ask` returns approved, and it only returns approved when a decision
+arrives carrying the token of the question that is actually open. A front end
+that never renders the card, or renders it and ignores it, gets a timeout and a
+held action. Closing the tab mid-card is not an answer and is certainly not a
+yes: the session abandons every pending question as declined.
+
+Declining is as easy as approving, deliberately: the two buttons are the same
+size and the same shape, focus starts on decline, escape declines, and enter is
+not bound to anything, because approving is a decision and not a reflex. The
+card shows the gate's own words for the action rather than a friendlier
+summary, because the operator is judging the thing that will actually run.
+
+A click, never a transcript. 7d must disable the microphone while a card is
+open: in voice mode a spoken yes is one mishearing from the opposite of what
+the operator meant, which is the rule Tier 3 already follows.
+
+Two things that only turned up by driving a real browser:
+
+- `#confirm` is hidden with the `hidden` attribute, and `display: grid` in the
+  stylesheet beats the browser's own `[hidden]` rule. So an answered card left
+  a full screen overlay that was invisible and still ate every click: answer one
+  confirmation and the interface was dead until reload. `#confirm[hidden]
+  { display: none }` is load bearing.
+- The entry animation and the endless float cannot live on the same element.
+  The entry restarts the float and the float fights the entry. Outer element
+  arrives, inner element breathes.
+
+Inter and JetBrains Mono are vendored under `web/vendor/fonts`, four faces,
+for the same reasons three.js is: a Google Fonts link is a request to a third
+party every time a page showing account names is opened, and the wrong
+typeface on a laptop behind a proxy. The page makes no outbound request at all.
+
 ## Layout
 
 ```
@@ -638,6 +695,7 @@ ranger/
   core.py        the agent. one entry point. all the logic
   cli.py         the terminal. first caller of the core, permanent debug path
   server.py      Tier 7: the local server. static files, and one websocket
+  panel.py       Tier 7c: what the activity panel shows, read from the vault
   wsframe.py     Tier 7b: RFC 6455 framing, and nothing above it
   bridge.py      Tier 7b: the browser as the fourth caller of the core
   assembly.py    putting a Ranger together, with no default gate

@@ -20,6 +20,8 @@ from ranger.server import WEB_ROOT, build, describe
 
 PAGE = WEB_ROOT / "index.html"
 ORB = WEB_ROOT / "orb.js"
+SHELL = WEB_ROOT / "shell.js"
+STYLE = WEB_ROOT / "shell.css"
 
 
 @pytest.fixture
@@ -128,7 +130,7 @@ def test_the_page_asks_nothing_of_the_internet():
     It is also a third party learning every time the operator opens a page that
     renders their account names and their drafts.
     """
-    for path in (PAGE, ORB):
+    for path in (PAGE, ORB, SHELL, STYLE):
         text = path.read_text(encoding="utf-8")
         for url in re.findall(r"https?://[^\s\"'<>)]+", text):
             assert url.startswith("http://www.w3.org/"), f"{path.name} reaches out to {url}"
@@ -190,7 +192,54 @@ def test_three_is_licensed_and_its_version_recorded():
     ["#0E0F13", "#16171D", "#2DD4A8", "cubic-bezier(0.16, 1, 0.3, 1)", "JetBrains Mono", "Inter"],
 )
 def test_the_design_tokens_are_in_the_page(token):
-    assert token in PAGE.read_text(encoding="utf-8")
+    assert token in STYLE.read_text(encoding="utf-8")
+
+
+def test_every_transition_uses_the_one_easing_curve():
+    """No exceptions was the instruction, so this is the check.
+
+    Catches the transition written in a hurry with `ease` or `ease-out`, which
+    is the one thing that makes a set of animations feel assembled rather than
+    designed.
+    """
+    import re
+
+    style = STYLE.read_text(encoding="utf-8")
+    for line in style.splitlines():
+        stripped = line.strip()
+        if not re.match(r"^(transition|animation)(-timing-function)?\s*:", stripped):
+            continue
+        assert "var(--ease)" in stripped, f"not on the shared easing: {stripped}"
+    assert "--ease: cubic-bezier(0.16, 1, 0.3, 1)" in style
+
+
+def test_the_fonts_are_vendored_and_licensed():
+    fonts = WEB_ROOT / "vendor" / "fonts"
+    faces = sorted(p.name for p in fonts.glob("*.woff2"))
+    assert faces == [
+        "inter-latin-400-normal.woff2",
+        "inter-latin-500-normal.woff2",
+        "inter-latin-600-normal.woff2",
+        "jetbrains-mono-latin-400-normal.woff2",
+    ]
+    assert (fonts / "LICENSE-inter").is_file()
+    assert (fonts / "LICENSE-jetbrains-mono").is_file()
+    style = STYLE.read_text(encoding="utf-8")
+    for face in faces:
+        assert face in style, f"{face} is vendored but never used"
+
+
+def test_the_shell_decides_nothing():
+    """Amendment A in the browser.
+
+    The shell may render what arrived and send what was typed or clicked. It
+    may not decide whether a tool runs, and it may not keep its own idea of
+    what state Ranger is in.
+    """
+    source = SHELL.read_text(encoding="utf-8")
+    assert "type: 'decision'" in source, "the card must send its answer, not act on it"
+    for forbidden in ("localStorage", "sessionStorage", "eval(", "innerHTML ="):
+        assert forbidden not in source, f"the shell should not use {forbidden}"
 
 
 def test_the_orb_has_exactly_one_input():

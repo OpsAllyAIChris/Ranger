@@ -55,6 +55,7 @@ def _force_types() -> None:
         (".json", "application/json"),
         (".svg", "image/svg+xml"),
         (".wasm", "application/wasm"),
+        (".woff2", "font/woff2"),
     ):
         mimetypes.add_type(kind, suffix)
 
@@ -208,18 +209,25 @@ class FrontEndHandler(SimpleHTTPRequestHandler):
         session = factory(self.config, send)
         session.hello()
 
-        while True:
-            try:
-                message = await _off_the_loop(lambda: read_message(self.rfile, send_raw))
-            except ProtocolError as exc:
-                send_raw(close_frame(exc.code, str(exc)))
-                return
-            except (OSError, ValueError):
-                return
-            if message is None:
-                send_raw(close_frame())
-                return
-            await session.handle(message)
+        try:
+            while True:
+                try:
+                    message = await _off_the_loop(lambda: read_message(self.rfile, send_raw))
+                except ProtocolError as exc:
+                    send_raw(close_frame(exc.code, str(exc)))
+                    return
+                except (OSError, ValueError):
+                    return
+                if message is None:
+                    send_raw(close_frame())
+                    return
+                # Not awaited to completion for a turn: `handle` starts one as
+                # a task and returns. The gate asks this socket and waits for
+                # the answer, so a read loop that stopped during a turn would
+                # make every confirmation time out.
+                await session.handle(message)
+        finally:
+            session.close()
 
     def list_directory(self, path):  # noqa: D102 - no listings, ever
         self.send_error(404, "no listing here")

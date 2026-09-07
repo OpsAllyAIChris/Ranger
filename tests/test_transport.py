@@ -222,6 +222,16 @@ class Client:
         message = read_message(self.file, expect_mask=False)
         return None if message is None else json.loads(message)
 
+    def wait_for(self, kind: str, limit: int = 60) -> dict:
+        """The next event of this kind, skipping whatever else arrives first."""
+        for _ in range(limit):
+            event = self.next()
+            if event is None:
+                break
+            if event.get("kind") == kind:
+                return event
+        raise AssertionError(f"never saw {kind!r}")
+
     def until(self, kind: str, limit: int = 60) -> list[dict]:
         """Collect events up to and including the first of `kind`."""
         seen: list[dict] = []
@@ -250,7 +260,7 @@ SCRIPT = [
 
 @pytest.fixture
 def served(config):
-    """A real server on a real port, with a scripted core and no gate."""
+    """A real server on a real port, with a scripted core and a card gate."""
     from ranger.audit import AuditLog
     from ranger.bridge import Session
     from ranger.core import Ranger
@@ -264,6 +274,11 @@ def served(config):
         "- 2026-09-01 | Chris prefers morning meetings\n", encoding="utf-8"
     )
 
+    from ranger.gate import SocketGate
+
+    def gate_for(send):
+        return SocketGate(send)
+
     def factory(cfg, send):
         vault = Vault(cfg.vault)
         return Session(
@@ -273,7 +288,7 @@ def served(config):
                 registry=build_registry(cfg, vault),
                 vault=vault,
                 knowledge_loader=KnowledgeLoader(vault, cfg.vault, cfg.knowledge),
-                gate=None,  # no gate wired, so DenyingGate. Tier 6's rule.
+                gate=gate_for(send),
                 audit=AuditLog(vault, cfg.vault.log),
                 origin="browser",
             ),
@@ -311,7 +326,7 @@ def test_the_first_thing_across_is_what_the_front_end_needs(served, config):
         assert hello["kind"] == "hello"
         assert hello["model"] == config.model.name
         assert hello["origin"] == "browser"
-        assert hello["gate"] == "deny"
+        assert hello["gate"] == "socket"
         assert "forget" in hello["gated"]
         assert client.next() == {"kind": "state", "state": "idle"}
     finally:
@@ -351,12 +366,11 @@ def test_the_state_stream_crosses_the_socket(served):
         client.close()
 
 
-def test_a_gated_action_arrives_as_a_confirmation_and_then_a_refusal(served, config):
-    """The browser wired no gate, so it gets DenyingGate. Tier 6, unchanged.
+def test_declining_a_card_leaves_the_fact_where_it_was(served, config):
+    """The frame sequence 7c renders, and the outcome that matters.
 
-    This is also the exact frame sequence 7c has to render: the state goes to
-    awaiting_confirmation, the action arrives in words with a token, and the
-    tool comes back not done.
+    The state goes to awaiting_confirmation, the action arrives in words with a
+    token, and nothing happens until an answer carrying that token comes back.
     """
     client = Client(served)
     try:
@@ -365,22 +379,67 @@ def test_a_gated_action_arrives_as_a_confirmation_and_then_a_refusal(served, con
         client.until("done")
 
         client.send({"type": "turn", "text": "forget that I prefer morning meetings"})
+        card = client.wait_for("confirm_open")
+        assert "Permanently remove from memory" in card["action"]
+        assert card["tool"] == "forget"
+
+        client.send({"type": "decision", "token": card["token"], "allow": False})
         events = client.until("done")
-
-        states = [e["state"] for e in events if e["kind"] == "state"]
-        assert "awaiting_confirmation" in states
-
-        ask = next(e for e in events if e["kind"] == "confirmation")
-        assert "Permanently remove from memory" in ask["action"]
-        assert ask["detail"] == "forget"
-        assert ask["token"]
 
         done = next(e for e in events if e["kind"] == "tool_finished")
         assert done["ok"] is False
     finally:
         client.close()
 
-    # And the fact is still in memory, which is the only proof that matters.
+    remaining = (config.vault.memory / "facts.md").read_text(encoding="utf-8")
+    assert "morning meetings" in remaining
+
+
+def test_approving_a_card_lets_the_tool_run(served, config):
+    client = Client(served)
+    try:
+        client.until("state")
+        client.send({"type": "turn", "text": "where are we on Illes"})
+        client.until("done")
+
+        client.send({"type": "turn", "text": "forget that I prefer morning meetings"})
+        card = client.wait_for("confirm_open")
+        client.send({"type": "decision", "token": card["token"], "allow": True})
+        events = client.until("done")
+
+        done = next(e for e in events if e["kind"] == "tool_finished")
+        assert done["ok"] is True
+    finally:
+        client.close()
+
+    remaining = (config.vault.memory / "facts.md").read_text(encoding="utf-8")
+    assert "morning meetings" not in remaining
+
+
+def test_a_stale_token_approves_nothing(served, config):
+    """A click left over from a card nobody is waiting on must do nothing."""
+    client = Client(served)
+    try:
+        client.until("state")
+        client.send({"type": "decision", "token": "toolu_0", "allow": True})
+        assert "nothing was waiting" in client.wait_for("error")["message"]
+    finally:
+        client.close()
+
+
+def test_the_socket_going_away_mid_card_approves_nothing(served, config):
+    """Closing the tab is not an answer, and it is certainly not a yes."""
+    client = Client(served)
+    client.until("state")
+    client.send({"type": "turn", "text": "where are we on Illes"})
+    client.until("done")
+    client.send({"type": "turn", "text": "forget that I prefer morning meetings"})
+    client.wait_for("confirm_open")
+    client.close()
+
+    import time
+
+    time.sleep(0.5)
     remaining = (config.vault.memory / "facts.md").read_text(encoding="utf-8")
     assert "morning meetings" in remaining
 
@@ -401,9 +460,7 @@ def test_a_malformed_message_is_answered_rather_than_dropped(served, payload, ex
     try:
         client.until("state")
         client.sock.sendall(client_frame(TEXT, payload.encode()))
-        error = client.next()
-        assert error["kind"] == "error"
-        assert expected in error["message"]
+        assert expected in client.wait_for("error")["message"]
     finally:
         client.close()
 
@@ -455,14 +512,26 @@ def test_the_plain_page_is_served_alongside_the_orb(served):
 # --------------------------------------------------------------- the wiring
 
 
-def test_a_browser_session_with_no_gate_wired_gets_the_one_that_refuses(config, monkeypatch):
-    """Amendment A's fourth caller does not get to inherit the terminal's gate."""
-    from ranger.bridge import build_session
+def test_a_caller_that_wires_no_gate_gets_the_one_that_refuses(config, monkeypatch):
+    """Amendment A's callers do not get to inherit the terminal's gate.
+
+    cli.py used to default this to TerminalGate, so any new caller would have
+    blocked forever on an input() nobody could see.
+    """
+    from ranger.assembly import build_agent
     from ranger.gate import DenyingGate
 
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key-not-used")
+    assert isinstance(build_agent(config).gate, DenyingGate)
+
+
+def test_a_browser_session_gets_a_gate_that_asks_in_the_browser(config, monkeypatch):
+    from ranger.bridge import build_session
+    from ranger.gate import SocketGate
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key-not-used")
     session = build_session(config, lambda payload: None)
-    assert isinstance(session.agent.gate, DenyingGate)
+    assert isinstance(session.agent.gate, SocketGate)
     assert session.agent.origin == "browser"
 
 

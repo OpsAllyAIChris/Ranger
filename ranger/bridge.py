@@ -1,4 +1,4 @@
-"""Tier 7b. The browser as the fourth caller of the core.
+"""The browser as the fourth caller of the core.
 
 Amendment A, exactly: the browser sends a turn to the same `Ranger.turn()` the
 terminal calls, and receives the same events the terminal prints. Nothing here
@@ -9,31 +9,32 @@ Tier 1 for this moment, so this is a transport and not a refactor.
 One connection is one conversation. Two browser tabs are two transcripts, the
 same way two terminals would be, and they share the vault and the log.
 
-The gate is `DenyingGate` and that is not an oversight. A front end that has not
-wired a way to ask gets the gate that refuses, which is the rule from Tier 6
-applied to a caller that cannot yet render a question. 7c replaces it with a
-gate that asks in the browser. Until then a gated action produces the same
-event a real gate would, followed by a refusal, which is precisely the shape 7c
-has to render.
+Reading and running are concurrent, and that is not an optimisation. The gate
+asks the browser and waits for the answer, so if the read loop stopped while a
+turn was in flight the answer could never arrive and every confirmation would
+time out. A turn runs as a task; the socket keeps being read the whole time.
 """
 
 from __future__ import annotations
 
+import asyncio
 import json
-from dataclasses import dataclass
-from typing import Any, Awaitable, Callable
+from dataclasses import dataclass, field
+from typing import Any, Callable
 
 from .config import Config
 from .core import Ranger
-from .events import Notice, StateChanged, State
-from .gate import Gate
+from .events import State
+from .gate import Gate, SocketGate
 
-#: What the browser may send. Anything else is answered with a notice rather
-#: than a disconnection, because a front end being developed will get this
-#: wrong and a silent drop is the worst way to find out.
 TURN = "turn"
+DECISION = "decision"
+PANEL = "panel"
+DISMISS = "dismiss"
 
-Send = Callable[[str], Awaitable[None]] | Callable[[str], None]
+#: How many tool calls the panel remembers. Enough to see what just happened,
+#: not a second audit log: the real one is in the vault and is append only.
+RECENT_TOOLS = 8
 
 
 @dataclass
@@ -43,21 +44,42 @@ class Session:
     agent: Ranger
     send: Callable[[dict[str, Any]], None]
     busy: bool = False
+    tools: list[dict[str, Any]] = field(default_factory=list)
+    _turn: asyncio.Task | None = None
+
+    # -- outbound ------------------------------------------------------
 
     def emit(self, kind: str, **fields: Any) -> None:
         self.send({"kind": kind, **fields})
 
     def hello(self) -> None:
-        """What the front end needs to know before it can render anything."""
+        """What the front end needs before it can render anything."""
+        registry = self.agent.registry
         self.emit(
             "hello",
             model=self.agent.config.model.name,
             origin=self.agent.origin,
             gate=self.agent.gate.name,
-            tools=self.agent.registry.names() if self.agent.registry else [],
-            gated=[tool.name for tool in (self.agent.registry or []) if tool.confirm],
+            tools=registry.names() if registry else [],
+            gated=[tool.name for tool in (registry or []) if tool.confirm],
+            vault=str(self.agent.config.vault.root),
         )
         self.emit("state", state=State.IDLE.value)
+        self.push_panel()
+
+    def push_panel(self) -> None:
+        """The vault, as the panel draws it. Read fresh, never cached."""
+        from .panel import snapshot
+
+        try:
+            view = snapshot(self.agent.config, self.agent.vault)
+        except Exception as exc:  # a panel that cannot read must not kill a turn
+            self.emit("error", message=f"could not read the vault: {exc}")
+            return
+        view["tools"] = list(self.tools)
+        self.emit("panel", **view)
+
+    # -- inbound -------------------------------------------------------
 
     async def handle(self, raw: str) -> None:
         try:
@@ -70,35 +92,88 @@ class Session:
             return
 
         kind = message.get("type")
-        if kind != TURN:
-            self.emit("error", message=f"unknown message type {kind!r}, expected {TURN!r}")
-            return
+        if kind == TURN:
+            return self._start_turn(message)
+        if kind == DECISION:
+            return self._decide(message)
+        if kind == PANEL:
+            return self.push_panel()
+        if kind == DISMISS:
+            return self._dismiss(message)
+        self.emit("error", message=f"unknown message type {kind!r}")
 
+    def _start_turn(self, message: dict[str, Any]) -> None:
         text = str(message.get("text", "")).strip()
         if not text:
             self.emit("error", message="an empty turn has nothing to answer")
             return
-
         if self.busy:
-            # Sequential on purpose. Interrupting a turn is barge-in, which is
-            # Tier 7d's problem and needs the core to support cancellation.
+            # Sequential on purpose. Interrupting a turn is barge-in, which
+            # needs cancellation in the core and belongs to 7d.
             self.emit("error", message="still working on the last one")
             return
 
         self.busy = True
+        self._turn = asyncio.create_task(self._run(text))
+
+    def _decide(self, message: dict[str, Any]) -> None:
+        """A click on a confirmation card.
+
+        Only a `SocketGate` can be answered this way. If the connection is
+        wired to any other gate, a decision message is meaningless and is
+        refused rather than quietly ignored, because a front end sending one
+        into a gate that cannot hear it would look exactly like an approval
+        that did nothing.
+        """
+        gate = self.agent.gate
+        if not isinstance(gate, SocketGate):
+            self.emit("error", message=f"this connection's gate is {gate.name}, not a card")
+            return
+        token = str(message.get("token", ""))
+        allowed = bool(message.get("allow", False))
+        if not gate.decide(token, allowed):
+            self.emit("error", message="nothing was waiting on that answer")
+
+    def _dismiss(self, message: dict[str, Any]) -> None:
+        from .panel import dismiss
+
+        title = dismiss(self.agent.config, self.agent.vault, str(message.get("id", "")))
+        if title is None:
+            self.emit("error", message="that notice is not in the inbox, or is already dismissed")
+        else:
+            self.emit("dismissed", title=title)
+        self.push_panel()
+
+    # -- the turn ------------------------------------------------------
+
+    async def _run(self, text: str) -> None:
+        from .events import ToolFinished
+
         try:
-            await self.run(text)
+            async for event in self.agent.turn(text):
+                if isinstance(event, ToolFinished):
+                    self._remember_tool(event)
+                self.send(event.as_dict())
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # a failed turn is an event, not a dead socket
+            self.emit("error", message=f"{type(exc).__name__}: {exc}")
         finally:
             self.busy = False
             self.emit("state", state=State.IDLE.value)
+            self.push_panel()
             self.emit("done")
 
-    async def run(self, text: str) -> None:
-        try:
-            async for event in self.agent.turn(text):
-                self.send(event.as_dict())
-        except Exception as exc:  # a failed turn is an event, not a dead socket
-            self.emit("error", message=f"{type(exc).__name__}: {exc}")
+    def _remember_tool(self, event: Any) -> None:
+        self.tools.insert(0, {"name": event.name, "ok": event.ok, "summary": event.summary})
+        del self.tools[RECENT_TOOLS:]
+
+    def close(self) -> None:
+        """The socket went away. Nothing is left waiting and nothing is approved."""
+        if isinstance(self.agent.gate, SocketGate):
+            self.agent.gate.abandon()
+        if self._turn is not None and not self._turn.done():
+            self._turn.cancel()
 
 
 def build_session(
@@ -110,10 +185,16 @@ def build_session(
 ) -> Session:
     """Wire a core for one connection.
 
-    `gate` defaults to nothing, and `build_agent` gives an unwired caller
-    DenyingGate. That default is the Tier 6 rule, not a convenience.
+    The browser gets a `SocketGate`: there is a person at a keyboard and a card
+    to click, which is the same situation the terminal is in. What it does not
+    get is a gate it can talk its way past. Nothing runs until the gate returns
+    approved, and the gate only returns approved when a decision arrives
+    carrying the token of the question that is actually open.
     """
     from .assembly import build_agent
 
-    agent = build_agent(config, gate=gate, origin=origin)
+    def emit(payload: dict[str, Any]) -> None:
+        send(payload)
+
+    agent = build_agent(config, gate=gate or SocketGate(emit), origin=origin)
     return Session(agent=agent, send=send)

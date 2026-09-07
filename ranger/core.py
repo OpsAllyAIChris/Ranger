@@ -252,6 +252,7 @@ class Ranger:
                         action=action,
                         payload=request.input,
                         origin=self.origin,
+                        token=request.id,
                     )
                     yield StateChanged(State.AWAITING_CONFIRMATION)
                     yield ConfirmationRequested(action=action, detail=request.name, token=request.id)
