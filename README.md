@@ -180,6 +180,35 @@ them.
 inbox is the schedule: today's notice is either there or it is not. Being away
 for a week does not replay six mornings.
 
+## Talking to it in the browser
+
+Open the interface and there is a microphone button under the orb.
+
+- **Click it** to latch the microphone on, talk, and click again to send.
+- **Hold space** to talk and release to send, from anywhere except the text
+  field.
+- **Talk over it** to interrupt: a new recording stops whatever it is saying.
+
+While the microphone is open the whole frame is edged in teal and the button
+shows a stop square. While a confirmation card is open there is no microphone
+at all, because a spoken yes is not consent.
+
+The orb is driven by real amplitude: your voice while it listens, Ranger's
+while it speaks. Three presets, switchable live in the browser console:
+
+```js
+rangerOrb.smoothing('quick')     // 20ms attack, 120ms release. Follows syllables
+rangerOrb.smoothing('natural')   // 45 / 220. The default
+rangerOrb.smoothing('slow')      // 90 / 400. Follows phrases
+rangerOrb.smoothing()            // what it is set to now
+```
+
+Whichever one wins goes in `ranger.local.toml`.
+
+Voice needs `DEEPGRAM_API_KEY`, and speech needs `ELEVENLABS_API_KEY` with
+`tts.voice_id` set. Without them the interface still opens and still types; the
+microphone button simply is not there.
+
 ## Opening it from the taskbar
 
 ```powershell

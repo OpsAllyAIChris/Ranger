@@ -110,7 +110,7 @@ quiet" tool.
 | 4 | The memory. Durable facts in `Ranger/memory`, one fact per entry, hand-editable | done |
 | 5 | The heartbeat. Morning surface, quiet hours, held notices, a schedule that survives restarts | done |
 | 6 | The rails. Confirmation gate, planted-instruction proof, audit trail, cost tally, kill switch | done |
-| 7 | The face. Browser front end: orb, transport, glass shell, mic bar | 7a, 7b, 7c done |
+| 7 | The face. Browser front end: orb, transport, glass shell, mic bar | 7a to 7d done |
 
 Each tier ends with something runnable and a verification step in
 `start-here.md`. Do not start a tier until the one before it verifies, and do
@@ -125,7 +125,7 @@ Tier 7 is built in four independently runnable steps, in this order:
 | 7a | The orb and the cosmic background | `ranger ui`, look at it |
 | 7b | The transport: websocket, a turn in, a reply out, no styling | `/transport.html`, type into it |
 | 7c | The glass shell: header, activity panel, response cards, the card gate | `ranger ui`, use it |
-| 7d | The mic bar | hold to talk in the browser |
+| 7d | Voice in the browser: mic bar, capture, speech, amplitude | `ranger ui`, talk to it |
 
 Transport comes before the shell deliberately. Every layer tested in isolation
 went smoothly; everything integrated before its pieces were proven cost a round
@@ -748,6 +748,7 @@ ranger/
   server.py      Tier 7: the local server. static files, and one websocket
   panel.py       Tier 7c: what the activity panel shows, read from the vault
   brief.py       Tier 5: the morning brief. a size, not a threshold
+  listen.py      Tier 7d: audio in and out over the socket
   schedule.py    running the heartbeat with no terminal open
   desktop.py     the taskbar shortcut, the window, and bringing it forward
   icon.py        the taskbar icon, drawn rather than shipped
@@ -768,6 +769,46 @@ ranger/
   import ...` that broke collection for anyone running it normally.
   `tests/test_suite_hygiene.py` now fails on that pattern. Shared test helpers
   are fixtures, never imports.
+
+## Tier 7d: voice in the browser
+
+The microphone and the loudspeaker are in the browser. Two reasons, and the
+first is the whole point of the layer: the orb's one input is how loud Ranger
+is right now, and the only place that is really known is where the sound is
+being made. Measuring it in Python and sending a number over a socket would be
+animating a guess about something happening somewhere else. The second is that
+a design where the browser owns the audio still works when the browser is not
+on the same machine as the server.
+
+The round trip is one utterance per message, not a stream. Push to talk and a
+latching button both produce a bounded recording, Deepgram's pre-recorded
+endpoint already handles it, and streaming would mean a second transcription
+path to keep in step with the first for nothing the operator would notice.
+Audio rides as base64 inside JSON so every message on this socket stays text
+that can be read in a log; the framing layer refuses binary deliberately.
+
+The reply comes back sentence by sentence through the same `speech.py` the
+terminal uses, because that is where the perceived latency lives.
+
+**A spoken yes still cannot reach the gate.** While a confirmation card is
+open the microphone is disabled and any recording in progress is discarded.
+Tier 3's rule, enforced by the interface rather than by hoping the operator
+does not try it.
+
+Three smoothing presets, because the right values cannot be chosen without
+hearing a real voice through them: `quick` (20/120ms), `natural` (45/220ms,
+the default) and `slow` (90/400ms). Switchable live with
+`rangerOrb.smoothing('quick')`.
+
+Two bugs found by running it, both in the same family and each with a
+different cause:
+
+- `hidden` is a property of `HTMLElement`, and an `<svg>` is an `SVGElement`.
+  Setting `svg.hidden = true` succeeds, writes no attribute, and changes
+  nothing, so the button showed a microphone while it was recording. Which
+  icon shows is now decided in CSS from `data-state` and nowhere else.
+- A `display` rule on an element beats the browser's own `[hidden]` rule, which
+  is the same shape as the confirmation overlay that ate every click in 7c.
 
 ## Opening it from the taskbar
 

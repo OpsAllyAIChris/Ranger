@@ -73,7 +73,9 @@ class Transcript:
 
 @runtime_checkable
 class Transcriber(Protocol):
-    async def transcribe(self, wav: bytes, *, hints: bool = True) -> Transcript: ...
+    async def transcribe(
+        self, wav: bytes, *, hints: bool = True, content_type: str = "audio/wav"
+    ) -> Transcript: ...
 
 
 def hint_parameter(model: str) -> str:
@@ -139,7 +141,15 @@ class DeepgramTranscriber:
         self.api_key = api_key
         self._transport = transport
 
-    async def transcribe(self, wav: bytes, *, hints: bool = True) -> Transcript:
+    async def transcribe(
+        self, wav: bytes, *, hints: bool = True, content_type: str = "audio/wav"
+    ) -> Transcript:
+        """`content_type` because the browser does not record WAV.
+
+        MediaRecorder produces webm/opus, and Deepgram reads the container
+        rather than trusting the header, but it does reject a body whose
+        declared type contradicts its contents.
+        """
         if not wav:
             raise TranscriptionError("there is no audio to transcribe.")
 
@@ -159,7 +169,7 @@ class DeepgramTranscriber:
                     content=wav,
                     headers={
                         "Authorization": f"Token {self.api_key}",
-                        "Content-Type": "audio/wav",
+                        "Content-Type": content_type or "audio/wav",
                     },
                 )
         except Exception as exc:

@@ -24,6 +24,8 @@ from dataclasses import replace
 
 import pytest
 
+from ranger.testing import WebSocketClient as Client
+
 from ranger.wsframe import (
     BINARY,
     CLOSE,
@@ -182,73 +184,6 @@ def test_a_masked_frame_from_a_server_is_refused():
 
 
 # ------------------------------------------------------- a real connection
-
-
-class Client:
-    """The smallest websocket client that can hold a conversation."""
-
-    def __init__(self, port: int, origin: str | None = None) -> None:
-        self.sock = socket.create_connection(("127.0.0.1", port), timeout=10)
-        self.file = self.sock.makefile("rb")
-        key = base64.b64encode(os.urandom(16)).decode()
-        request = (
-            f"GET /ws HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n"
-            "Upgrade: websocket\r\nConnection: Upgrade\r\n"
-            f"Sec-WebSocket-Key: {key}\r\nSec-WebSocket-Version: 13\r\n"
-        )
-        if origin is not None:
-            request += f"Origin: {origin}\r\n"
-        self.sock.sendall((request + "\r\n").encode())
-
-        self.status = self.file.readline().decode().strip()
-        self.headers: dict[str, str] = {}
-        while True:
-            line = self.file.readline().decode().strip()
-            if not line:
-                break
-            name, _, value = line.partition(":")
-            self.headers[name.strip().lower()] = value.strip()
-        self.expected_accept = accept_key(key)
-
-    @property
-    def upgraded(self) -> bool:
-        return self.status.startswith("HTTP/1.1 101")
-
-    def send(self, payload: dict) -> None:
-        self.sock.sendall(client_frame(TEXT, json.dumps(payload).encode()))
-
-    def next(self) -> dict | None:
-        # expect_mask=False: this is the client's side, and a server never masks.
-        message = read_message(self.file, expect_mask=False)
-        return None if message is None else json.loads(message)
-
-    def wait_for(self, kind: str, limit: int = 60) -> dict:
-        """The next event of this kind, skipping whatever else arrives first."""
-        for _ in range(limit):
-            event = self.next()
-            if event is None:
-                break
-            if event.get("kind") == kind:
-                return event
-        raise AssertionError(f"never saw {kind!r}")
-
-    def until(self, kind: str, limit: int = 60) -> list[dict]:
-        """Collect events up to and including the first of `kind`."""
-        seen: list[dict] = []
-        for _ in range(limit):
-            event = self.next()
-            if event is None:
-                break
-            seen.append(event)
-            if event.get("kind") == kind:
-                return seen
-        raise AssertionError(f"never saw {kind!r}, got {[e.get('kind') for e in seen]}")
-
-    def close(self) -> None:
-        try:
-            self.sock.close()
-        except OSError:
-            pass
 
 
 SCRIPT = [

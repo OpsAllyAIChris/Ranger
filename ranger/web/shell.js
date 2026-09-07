@@ -10,6 +10,8 @@
  * from here except by answering it.
  */
 
+import { createMicrophone, createSpeaker, fromBase64, supported, toBase64 } from './voice.js';
+
 const $ = (id) => document.getElementById(id);
 
 const SOCKET_URL =
@@ -29,11 +31,18 @@ export function createShell(orb) {
     confirm: $('confirm'),
     togglePanel: $('toggle-panel'),
     toggleFrames: $('toggle-frames'),
+    mic: $('mic'),
+    micHint: $('mic-hint'),
+    liveEdge: $('live-edge'),
   };
 
   let socket = null;
   let reply = null; // the card currently being streamed into
   let openToken = null;
+  let voiceReady = false;
+  let listening = false;
+  let microphone = null;
+  let speaker = null;
 
   // ---------------------------------------------------------------- ui bits
 
@@ -186,6 +195,11 @@ export function createShell(orb) {
 
   function openCard(event) {
     openToken = event.token;
+    // A spoken yes is not consent, so while a card is open there is no
+    // microphone to say it into. Tier 3's rule, enforced by the interface
+    // rather than by hoping the operator does not try.
+    if (listening) stopListening(true);
+    el.mic.disabled = true;
     el.confirm.hidden = false;
     el.confirm.replaceChildren(buildCard(event));
     el.confirm.querySelector('.decline').focus();
@@ -233,6 +247,7 @@ export function createShell(orb) {
 
   function closeCard() {
     openToken = null;
+    el.mic.disabled = false;
     el.confirm.hidden = true;
     el.confirm.replaceChildren();
   }
@@ -244,6 +259,115 @@ export function createShell(orb) {
     if (e.key === 'Escape') { e.preventDefault(); answer(false); }
     // Enter is deliberately not bound. Approving is a decision, not a reflex.
   });
+
+  // -------------------------------------------------------------- the mic
+
+  function micState(state) {
+    // data-state is the only thing set here. The stylesheet decides which
+    // icon that means, because setting .hidden on an svg does nothing.
+    el.mic.dataset.state = state;
+    const live = state === 'live';
+    el.micHint.classList.toggle('live', live);
+    el.liveEdge.classList.toggle('on', live);
+    el.micHint.textContent = live ? 'listening, click to send' : 'hold space to talk';
+    el.mic.title = live ? 'click to stop and send' : 'click to talk, or hold space';
+  }
+
+  function ensureAudio() {
+    if (microphone) return;
+    microphone = createMicrophone({
+      // While recording, the operator's own voice drives the orb. It is the
+      // clearest possible signal that the microphone is actually open.
+      onLevel: (level) => { if (listening && orb) orb.setVoiceBright(level); },
+      onError: (err) => { toast('microphone error: ' + err); stopListening(true); },
+    });
+    speaker = createSpeaker({
+      onLevel: (level) => { if (!listening && orb) orb.setVoiceBright(level); },
+    });
+  }
+
+  async function startListening() {
+    if (listening || !voiceReady || openToken) return;
+    ensureAudio();
+    // Unlocked from inside the click that started this, or the browser will
+    // refuse to play the reply and nothing will say why.
+    speaker.unlock().catch(() => {});
+    if (speaker.speaking) speaker.stop();   // talking over it means stop it
+
+    try {
+      await microphone.start();
+    } catch (err) {
+      toast('no microphone: ' + (err && err.message ? err.message : err));
+      return;
+    }
+    listening = true;
+    micState('live');
+  }
+
+  async function stopListening(discard) {
+    if (!listening) return;
+    listening = false;
+    micState('idle');
+    if (orb) orb.setVoiceBright(0);
+
+    let recording = null;
+    try {
+      recording = await microphone.stop();
+    } catch (err) {
+      toast('could not finish the recording: ' + err);
+      return;
+    }
+    if (discard || !recording) {
+      if (!discard) toast('that was too short to send');
+      return;
+    }
+
+    let audio;
+    try {
+      audio = await toBase64(recording.blob);
+    } catch (err) {
+      toast('could not read the recording: ' + err);
+      return;
+    }
+    card('You', '\u2026', 'you');
+    send({
+      type: 'audio',
+      audio,
+      mime: recording.mime,
+      seconds: recording.seconds,
+      interrupt: true,
+    });
+  }
+
+  function toggleMic() {
+    if (listening) stopListening(false);
+    else startListening();
+  }
+
+  // Hold space to talk, anywhere except while typing in the field. Released
+  // early enough to be a slip is discarded rather than sent.
+  let heldSince = 0;
+  window.addEventListener('keydown', (e) => {
+    if (e.code !== 'Space' || e.repeat) return;
+    if (document.activeElement === el.say || openToken) return;
+    e.preventDefault();
+    heldSince = performance.now();
+    startListening();
+  });
+  window.addEventListener('keyup', (e) => {
+    if (e.code !== 'Space') return;
+    if (document.activeElement === el.say) return;
+    if (!listening) return;
+    e.preventDefault();
+    stopListening(performance.now() - heldSince < 200);
+  });
+
+  el.mic.onclick = () => {
+    toggleMic();
+    // The seam 7d was specced to expose. Nothing in this file listens to it;
+    // it is there so anything else can.
+    window.dispatchEvent(new CustomEvent('ranger:mic-toggle', { detail: { listening } }));
+  };
 
   // ------------------------------------------------------------ the socket
 
@@ -258,13 +382,26 @@ export function createShell(orb) {
   function setState(state) {
     el.status.dataset.state = state;
     el.status.title = state.replace(/_/g, ' ');
-    if (orb) orb.setVoiceBright(state === 'speaking' ? 0.55 : 0);
+    // The orb is driven by real amplitude now, from the microphone while
+    // listening and from the loudspeaker while speaking. State only puts it
+    // back to rest, and only when neither is running.
+    if (orb && !listening && !(speaker && speaker.speaking) && state !== 'speaking') {
+      orb.setVoiceBright(0);
+    }
   }
 
   function onEvent(event) {
     switch (event.kind) {
       case 'hello':
         setState('idle');
+        voiceReady = Boolean(event.voice) && supported();
+        el.mic.hidden = !voiceReady;
+        if (event.voice && !supported()) {
+          toast('this browser cannot record audio, so typing is the way in');
+        } else if (!event.voice) {
+          // Said once, quietly. The interface still works without a key.
+          log('-- no transcription configured, so there is no microphone');
+        }
         break;
       case 'state':
         setState(event.state);
@@ -272,6 +409,32 @@ export function createShell(orb) {
       case 'text':
         if (!reply) reply = card('Ranger', '');
         reply.textContent += event.text;
+        break;
+      case 'heard': {
+        // Replace the placeholder card with what was actually understood, so
+        // a mishearing is visible at the moment it happens rather than being
+        // inferred from a strange answer.
+        const cards = el.cards.querySelectorAll('.card.you .card-text');
+        const last = cards[cards.length - 1];
+        if (last && last.textContent === '\u2026') {
+          last.textContent = event.text || '(nothing heard)';
+        }
+        if (event.shaky && event.shaky.length) {
+          toast('unsure about: ' + event.shaky.join(', '));
+        }
+        break;
+      }
+      case 'speech':
+        if (speaker) {
+          speaker.play(fromBase64(event.audio)).catch((err) => {
+            toast('could not play that: ' + err);
+          });
+        }
+        break;
+      case 'stopped':
+        if (speaker) speaker.stop();
+        reply = null;
+        el.say.disabled = false;
         break;
       case 'panel':
         drawPanel(event);
@@ -306,6 +469,8 @@ export function createShell(orb) {
     socket.onopen = () => toast('connected');
     socket.onclose = (e) => {
       setState('idle');
+      if (listening) stopListening(true);
+      if (speaker) speaker.stop();
       closeCard();
       el.say.disabled = true;
       toast('socket closed (' + e.code + '). reload to reconnect.');
@@ -345,5 +510,10 @@ export function createShell(orb) {
   };
 
   connect();
-  return { send, connect };
+  return {
+    send,
+    connect,
+    toggleMic,
+    get listening() { return listening; },
+  };
 }

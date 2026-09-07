@@ -32,8 +32,20 @@ const PULSE_SECONDS = 4.0;
 // feeling immediate; falling slowly stops every gap between words reading as a
 // stop. Both are time constants in seconds, applied frame rate independently,
 // so a 144Hz screen and a 30fps one settle at the same speed.
-const ATTACK_SECONDS = 0.045;
-const RELEASE_SECONDS = 0.22;
+//
+// Three of them, because the right values cannot be chosen without hearing a
+// real voice through them, and describing the difference across a round trip
+// is worse than switching between them live.
+export const PRESETS = {
+  // Follows syllables. Busy, and unmistakably driven by speech.
+  quick: { attack: 0.02, release: 0.12 },
+  // The default. Reads as speaking without twitching on every consonant.
+  natural: { attack: 0.045, release: 0.22 },
+  // Follows phrases rather than words. Calm, and can feel like a lamp.
+  slow: { attack: 0.09, release: 0.4 },
+};
+
+const DEFAULT_PRESET = 'natural';
 
 // A very wide, very shallow gradient on a near black background quantises into
 // visible concentric rings at 8 bits per channel. A sub-quantum of noise breaks
@@ -284,6 +296,9 @@ export function createOrb(canvas) {
   const clock = new THREE.Clock();
   let target = 0;       // what it was told
   let current = 0;      // what it is drawing, chasing target
+  let preset = DEFAULT_PRESET;
+  let attack = PRESETS[DEFAULT_PRESET].attack;
+  let release = PRESETS[DEFAULT_PRESET].release;
   let demo = false;
   let running = true;
   let frames = 0;
@@ -303,7 +318,7 @@ export function createOrb(canvas) {
       target = 0.5 + 0.5 * Math.sin(t * 1.6);
     }
 
-    const tau = target > current ? ATTACK_SECONDS : RELEASE_SECONDS;
+    const tau = target > current ? attack : release;
     current += (target - current) * (1 - Math.exp(-dt / tau));
     uniforms.uVoiceBright.value = current;
 
@@ -347,6 +362,32 @@ export function createOrb(canvas) {
     /** Sweep the range on its own. Cancelled by any setVoiceBright call. */
     demo(on = true) { demo = !!on; },
     get demoing() { return demo; },
+    /**
+     * Switch how the orb follows a voice, live, mid sentence.
+     * Called with no argument it reports the current one instead.
+     */
+    smoothing(name) {
+      if (name === undefined) {
+        console.log(
+          `smoothing: ${preset}  attack ${attack * 1000}ms  release ${release * 1000}ms\n` +
+          `available: ${Object.keys(PRESETS).join(', ')}`
+        );
+        return { name: preset, attack, release };
+      }
+      const chosen = PRESETS[String(name)];
+      if (!chosen) {
+        console.warn(`no preset called ${name}. Try: ${Object.keys(PRESETS).join(', ')}`);
+        return { name: preset, attack, release };
+      }
+      preset = String(name);
+      attack = chosen.attack;
+      release = chosen.release;
+      console.log(
+        `smoothing: ${preset}  attack ${attack * 1000}ms  release ${release * 1000}ms`
+      );
+      return { name: preset, attack, release };
+    },
+    get presets() { return Object.keys(PRESETS); },
     /** Bloom strength, for tuning against a real screen. */
     setBloom(strength) { bloom.strength = Number(strength); },
     get bloom() { return bloom.strength; },

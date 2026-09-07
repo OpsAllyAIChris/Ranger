@@ -28,6 +28,7 @@ from .events import State
 from .gate import Gate, SocketGate
 
 TURN = "turn"
+AUDIO = "audio"
 DECISION = "decision"
 PANEL = "panel"
 DISMISS = "dismiss"
@@ -46,6 +47,11 @@ class Session:
     send: Callable[[dict[str, Any]], None]
     busy: bool = False
     tools: list[dict[str, Any]] = field(default_factory=list)
+    #: Set when the connection has ears and a mouth. None means the browser can
+    #: still type: voice is an addition to this socket, never a replacement.
+    transcriber: Any = None
+    speaker: Any = None
+    keyterms: bool = True
     _turn: asyncio.Task | None = None
 
     # -- outbound ------------------------------------------------------
@@ -64,6 +70,9 @@ class Session:
             tools=registry.names() if registry else [],
             gated=[tool.name for tool in (registry or []) if tool.confirm],
             vault=str(self.agent.config.vault.root),
+            # The front end shows a mic only if there is something behind it.
+            voice=self.transcriber is not None,
+            speech=self.speaker is not None,
         )
         self.emit("state", state=State.IDLE.value)
         self.push_panel()
@@ -95,6 +104,8 @@ class Session:
         kind = message.get("type")
         if kind == TURN:
             return self._start_turn(message)
+        if kind == AUDIO:
+            return self._start_audio(message)
         if kind == DECISION:
             return self._decide(message)
         if kind == PANEL:
@@ -124,6 +135,60 @@ class Session:
 
         self.busy = True
         self._turn = asyncio.create_task(self._run(text))
+
+    def _start_audio(self, message: dict[str, Any]) -> None:
+        """A recording arrived. Transcribe it, then take it as a turn."""
+        from .listen import AudioRejected, decode_audio
+
+        if self.transcriber is None:
+            self.emit("error", message="this connection has no transcription wired")
+            return
+        try:
+            utterance = decode_audio(message)
+        except AudioRejected as exc:
+            self.emit("error", message=str(exc))
+            return
+
+        if self.busy:
+            if not bool(message.get("interrupt", False)):
+                self.emit("error", message="still working on the last one")
+                return
+            self.stop("interrupted")
+
+        self.busy = True
+        self._turn = asyncio.create_task(self._run_audio(utterance))
+
+    async def _run_audio(self, utterance: Any) -> None:
+        from .events import State
+        from .listen import transcribe
+
+        try:
+            self.emit("state", state=State.LISTENING.value)
+            heard = await transcribe(self.transcriber, utterance, hints=self.keyterms)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            self.emit("error", message=f"could not transcribe that: {exc}")
+            self._finish()
+            return
+
+        text = (heard.text or "").strip()
+        # Always shown, even when empty. "Heard nothing in that" with the
+        # numbers is the message that stopped three silent turns in Tier 3
+        # from looking like a broken microphone.
+        self.emit(
+            "heard",
+            text=text,
+            confidence=round(getattr(heard, "confidence", 0.0) or 0.0, 3),
+            seconds=round(getattr(utterance, "seconds", 0) or 0, 2),
+            shaky=[word.text for word in getattr(heard, "shaky_words", ())],
+        )
+        if not text:
+            self.emit("error", message="heard nothing in that")
+            self._finish()
+            return
+
+        await self._run(text)
 
     def stop(self, why: str = "stopped") -> bool:
         """Cut the turn in flight. False if there was nothing to cut."""
@@ -167,13 +232,25 @@ class Session:
     # -- the turn ------------------------------------------------------
 
     async def _run(self, text: str) -> None:
-        from .events import ToolFinished
+        from .events import TextDelta, ToolFinished
+        from .speech import SentenceStream
+
+        speaking = SentenceStream() if self.speaker is not None else None
+        spoken = 0
 
         try:
             async for event in self.agent.turn(text):
                 if isinstance(event, ToolFinished):
                     self._remember_tool(event)
                 self.send(event.as_dict())
+                if speaking is not None and isinstance(event, TextDelta):
+                    for sentence in speaking.feed(event.text):
+                        await self._speak(sentence, spoken)
+                        spoken += 1
+            if speaking is not None:
+                leftover = speaking.flush().strip()
+                if leftover:
+                    await self._speak(leftover, spoken)
         except asyncio.CancelledError:
             # Barge-in, and the replacement turn is already starting. Emitting
             # idle or done here would tell the front end the new turn had
@@ -191,6 +268,27 @@ class Session:
         self.push_panel()
         self.emit("done")
 
+    async def _speak(self, sentence: str, index: int) -> None:
+        """One sentence of audio, sent as soon as it exists.
+
+        Sentence by sentence rather than a whole reply, because that is where
+        the perceived latency lives: waiting for a full answer before saying
+        any of it adds a second or more to every turn for nothing. Failure here
+        is a notice, never the end of a turn: losing the voice is bad, losing
+        the answer is worse.
+        """
+        from .listen import encode_audio, speak
+
+        try:
+            audio = await speak(self.speaker, sentence)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            self.emit("notice", level="warn", message=f"could not speak that: {exc}")
+            return
+        if audio:
+            self.emit("speech", index=index, text=sentence, audio=encode_audio(audio))
+
     def _remember_tool(self, event: Any) -> None:
         self.tools.insert(0, {"name": event.name, "ok": event.ok, "summary": event.summary})
         del self.tools[RECENT_TOOLS:]
@@ -201,6 +299,44 @@ class Session:
             self.agent.gate.abandon()
         if self._turn is not None and not self._turn.done():
             self._turn.cancel()
+
+
+def build_voice(config: Config) -> tuple[Any, Any, bool]:
+    """Ears and a mouth for a browser session, or nothing if the keys are not set.
+
+    Missing keys are not an error here. The interface has to open and take
+    typed turns whether or not speech is configured, so this reports what is
+    available and the front end shows a microphone only if there is one.
+    """
+    import os
+
+    transcriber = speaker = None
+    hinted = False
+
+    deepgram = os.environ.get("DEEPGRAM_API_KEY", "").strip()
+    if deepgram:
+        from dataclasses import replace as _replace
+
+        from .cli import _keyterm_plan
+        from .stt import build_transcriber
+
+        stt = config.stt
+        try:
+            plan = _keyterm_plan(config)
+            if plan.terms:
+                stt = _replace(stt, keyterms=plan.terms)
+                hinted = True
+        except Exception:
+            pass
+        transcriber = build_transcriber(stt, deepgram)
+
+    elevenlabs = os.environ.get("ELEVENLABS_API_KEY", "").strip()
+    if elevenlabs and config.tts.voice_id:
+        from .tts import build_speaker
+
+        speaker = build_speaker(config.tts, elevenlabs)
+
+    return transcriber, speaker, hinted
 
 
 def build_session(
@@ -224,4 +360,11 @@ def build_session(
         send(payload)
 
     agent = build_agent(config, gate=gate or SocketGate(emit), origin=origin)
-    return Session(agent=agent, send=send)
+    transcriber, speaker, hinted = build_voice(config)
+    return Session(
+        agent=agent,
+        send=send,
+        transcriber=transcriber,
+        speaker=speaker,
+        keyterms=hinted,
+    )

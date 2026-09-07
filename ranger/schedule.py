@@ -45,6 +45,10 @@ from .config import Config
 #: for removing it, so it is stable rather than derived from anything.
 TASK_NAME = "Ranger heartbeat"
 
+#: The second task: keep the interface up so a pinned icon only has to open a
+#: window at a server that is already listening.
+INTERFACE_TASK_NAME = "Ranger interface"
+
 #: Hourly. Ranger's own scheduler decides what is actually due, so the trigger
 #: only has to be frequent enough that a missed slot is caught soon.
 DEFAULT_INTERVAL_MINUTES = 60
@@ -63,16 +67,25 @@ class Plan:
     arguments: str
     working_directory: Path
     log_path: Path
-    interval_minutes: int
-    start_hour: int
+    interval_minutes: int = DEFAULT_INTERVAL_MINUTES
+    start_hour: int = 7
+    #: At logon and then left running, rather than on a clock. The interface is
+    #: a server: it starts once and stays up, and restarting it hourly would
+    #: drop whatever window was connected to it.
+    at_logon: bool = False
 
     def describe(self) -> list[str]:
+        when = (
+            "at logon, and stays running"
+            if self.at_logon
+            else f"every {self.interval_minutes} minutes, from {self.start_hour:02d}:00"
+        )
         return [
             f"name        {self.name}",
             f"runs        {self.command}",
             f"with        {self.arguments}",
             f"in          {self.working_directory}",
-            f"every       {self.interval_minutes} minutes, from {self.start_hour:02d}:00",
+            f"when        {when}",
             f"log         {self.log_path}",
         ]
 
@@ -151,9 +164,68 @@ def build_plan(
     )
 
 
+def build_interface_plan(
+    config: Config,
+    *,
+    log_path: Path | None = None,
+    windowless: bool = False,
+    config_path: Path | None = None,
+    command: Path | None = None,
+) -> Plan:
+    """Keep `ranger ui` running from logon.
+
+    Same mechanism as the heartbeat task and a different trigger: a server is
+    started once and left alone, so a repeating trigger would kill the window
+    the operator is looking at every hour.
+    """
+    launcher = command or executable(windowless)
+    log = log_path or (config.vault.log / "ui.log")
+
+    settings = config_path or config.source_path
+    if settings is None:
+        raise ScheduleError("the loaded config has no path, so the task cannot point at it")
+
+    arguments: list[str] = []
+    if windowless:
+        arguments += ["-m", "ranger"]
+    arguments += ["-c", _quote(Path(settings).resolve()), "ui", "--log", _quote(log)]
+
+    return Plan(
+        name=INTERFACE_TASK_NAME,
+        command=launcher,
+        arguments=" ".join(arguments),
+        working_directory=Path(settings).resolve().parent,
+        log_path=log,
+        at_logon=True,
+    )
+
+
 def _quote(path: Path) -> str:
     text = str(path)
     return f'"{text}"' if " " in text else text
+
+
+def _triggers(plan: Plan) -> str:
+    """At logon for the interface, on a clock for the heartbeat."""
+    if plan.at_logon:
+        return (
+            "    <LogonTrigger>\n"
+            "      <Enabled>true</Enabled>\n"
+            "      <Delay>PT20S</Delay>\n"
+            "    </LogonTrigger>"
+        )
+    return f"""    <CalendarTrigger>
+      <StartBoundary>2026-01-01T{plan.start_hour:02d}:00:00</StartBoundary>
+      <Enabled>true</Enabled>
+      <ScheduleByDay>
+        <DaysInterval>1</DaysInterval>
+      </ScheduleByDay>
+      <Repetition>
+        <Interval>PT{plan.interval_minutes}M</Interval>
+        <Duration>P1D</Duration>
+        <StopAtDurationEnd>false</StopAtDurationEnd>
+      </Repetition>
+    </CalendarTrigger>"""
 
 
 def to_xml(plan: Plan) -> str:
@@ -173,18 +245,7 @@ def to_xml(plan: Plan) -> str:
     <URI>\\{escape(plan.name)}</URI>
   </RegistrationInfo>
   <Triggers>
-    <CalendarTrigger>
-      <StartBoundary>2026-01-01T{plan.start_hour:02d}:00:00</StartBoundary>
-      <Enabled>true</Enabled>
-      <ScheduleByDay>
-        <DaysInterval>1</DaysInterval>
-      </ScheduleByDay>
-      <Repetition>
-        <Interval>PT{plan.interval_minutes}M</Interval>
-        <Duration>P1D</Duration>
-        <StopAtDurationEnd>false</StopAtDurationEnd>
-      </Repetition>
-    </CalendarTrigger>
+{_triggers(plan)}
   </Triggers>
   <Principals>
     <Principal id="Author">
@@ -208,7 +269,7 @@ def to_xml(plan: Plan) -> str:
     <Hidden>false</Hidden>
     <RunOnlyIfIdle>false</RunOnlyIfIdle>
     <WakeToRun>false</WakeToRun>
-    <ExecutionTimeLimit>PT1H</ExecutionTimeLimit>
+    <ExecutionTimeLimit>{"PT0S" if plan.at_logon else "PT1H"}</ExecutionTimeLimit>
     <Priority>7</Priority>
   </Settings>
   <Actions Context="Author">

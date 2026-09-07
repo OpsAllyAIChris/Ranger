@@ -632,6 +632,11 @@ class _Tee:
                 self.handle.write(f"{datetime.now():%Y-%m-%d %H:%M:%S}  ")
             self.handle.write(part)
             self._fresh = part.endswith("\n")
+        # Flushed on every write, not left to the 8KB buffer. A server runs for
+        # hours and then exits, so an unflushed banner means the log is empty
+        # for the entire time it would have been useful. The cost is a syscall
+        # per line on a file nothing writes to in a tight loop.
+        self.handle.flush()
         return len(text)
 
     def flush(self) -> None:
@@ -1036,9 +1041,10 @@ def cmd_schedule(config: Config, args: Any) -> int:
     from .schedule import (
         DEFAULT_INTERVAL_MINUTES,
         INTERESTING,
-        Plan,
+        INTERFACE_TASK_NAME,
         ScheduleError,
         TASK_NAME,
+        build_interface_plan,
         build_plan,
         install,
         on_windows,
@@ -1049,30 +1055,45 @@ def cmd_schedule(config: Config, args: Any) -> int:
 
     paint = _colour(sys.stdout.isatty())
     action = getattr(args, "schedule_command", None) or "show"
+    interface = getattr(args, "interface", False) or getattr(args, "interface_first", False)
+    name = INTERFACE_TASK_NAME if interface else TASK_NAME
 
     if action == "remove":
         try:
-            gone = remove()
+            gone = remove(name)
         except ScheduleError as exc:
             print(paint(f"  {exc}", RED), file=sys.stderr)
             return 1
         print(
-            paint(f"  {TASK_NAME} removed. The heartbeat no longer runs on its own.", TEAL)
+            paint(f"  {name} removed.", TEAL)
             if gone
-            else paint(f"  there was no task called {TASK_NAME}.", DIM)
+            else paint(f"  there was no task called {name}.", DIM)
         )
         return 0
 
     try:
-        plan = build_plan(
-            config,
-            interval_minutes=getattr(args, "every", None) or DEFAULT_INTERVAL_MINUTES,
-            log_path=Path(args.log).expanduser() if getattr(args, "log", None) else None,
-            windowless=getattr(args, "windowless", False),
-        )
+        if interface:
+            plan = build_interface_plan(
+                config,
+                log_path=Path(args.log).expanduser() if getattr(args, "log", None) else None,
+                windowless=getattr(args, "windowless", False),
+            )
+        else:
+            plan = build_plan(
+                config,
+                interval_minutes=getattr(args, "every", None) or DEFAULT_INTERVAL_MINUTES,
+                log_path=Path(args.log).expanduser() if getattr(args, "log", None) else None,
+                windowless=getattr(args, "windowless", False),
+            )
     except ScheduleError as exc:
         print(paint(f"  {exc}", RED), file=sys.stderr)
         return 1
+
+    if interface and not getattr(args, "windowless", False) and on_windows():
+        print(paint("  ranger.exe is a console program and 'ranger ui' never exits, so", YELLOW))
+        print(paint("  this leaves a console window open for the whole session. Closing", YELLOW))
+        print(paint("  it stops the server. --windowless runs it through pythonw instead.", YELLOW))
+        print()
 
     if action == "xml":
         print(to_xml(plan))
@@ -1088,13 +1109,18 @@ def cmd_schedule(config: Config, args: Any) -> int:
         for line in plan.describe():
             print(f"  {line}")
         print()
-        print(paint("  It runs whether or not a terminal is open, only while you are", DIM))
-        print(paint("  logged on, and a run missed while the machine was asleep happens", DIM))
-        print(paint("  shortly after it wakes rather than being skipped.", DIM))
+        if plan.at_logon:
+            print(paint("  It starts twenty seconds after you log on and stays up, so a", DIM))
+            print(paint("  pinned icon only has to open a window at a server already there.", DIM))
+        else:
+            print(paint("  It runs whether or not a terminal is open, only while you are", DIM))
+            print(paint("  logged on, and a run missed while the machine was asleep happens", DIM))
+            print(paint("  shortly after it wakes rather than being skipped.", DIM))
         print()
         print(paint(f"  Watch it:  Get-Content -Wait '{plan.log_path}'", DIM))
-        print(paint("  Check it:  ranger schedule", DIM))
-        print(paint("  Remove it: ranger schedule remove", DIM))
+        flag = " --interface" if plan.at_logon else ""
+        print(paint(f"  Check it:  ranger schedule{flag}", DIM))
+        print(paint(f"  Remove it: ranger schedule remove{flag}", DIM))
         return 0
 
     # show
@@ -1108,7 +1134,7 @@ def cmd_schedule(config: Config, args: Any) -> int:
         print(paint("  'ranger schedule xml' prints the definition anywhere.", DIM))
         return 0
 
-    current = status()
+    current = status(name)
     if current is None:
         print(paint("  not registered. 'ranger schedule install' to register it.", YELLOW))
         return 0
@@ -1343,13 +1369,16 @@ def cmd_open(config: Config, args: Any) -> int:
     it: bring that window forward. A server is up and nobody is: open a window
     at it. Nothing is up: start one, wait for it to answer, then open a window.
     """
-    import time
+    log = ui_log(config)
+    with _logging_to(str(log)):
+        return _open(config, args, log)
 
+
+def _open(config: Config, args: Any, log: Path) -> int:
     from .desktop import focus_window, open_window, start_server
     from .server import describe, probe
 
     paint = _colour(sys.stdout.isatty())
-    log = ui_log(config)
 
     running = probe(config)
     url = describe(config, (running or {}).get("port"))
@@ -1360,6 +1389,8 @@ def cmd_open(config: Config, args: Any) -> int:
             return 1
         print(paint(f"  starting Ranger, logging to {log}", DIM))
         start_server(Path(config.source_path).resolve(), log)
+
+        import time
 
         deadline = time.monotonic() + float(getattr(args, "wait", 20) or 20)
         while time.monotonic() < deadline:
@@ -1421,7 +1452,42 @@ def cmd_stop(config: Config, args: Any) -> int:
     return 0
 
 
+#: Where Chrome puts the shortcut for a page installed as an app. Dragging that
+#: file onto the taskbar is the one pinning path that still works on Windows 11.
+CHROME_APPS = r"%APPDATA%\Microsoft\Windows\Start Menu\Programs\Chrome Apps"
+
+
 def cmd_shortcut(config: Config, args: Any) -> int:
+    """Retired. It created a .lnk that silently did nothing when double clicked.
+
+    The target and its arguments were right; what was wrong is that pythonw has
+    no stdout, so anything that failed before the server started left nothing
+    anywhere to read. `ranger open` now logs before it can fail, but the
+    shortcut is not worth reviving: Chrome's own "Install page as app" produces
+    a better window than a .lnk ever did, with its own title bar and its own
+    taskbar entry.
+    """
+    paint = _colour(sys.stdout.isatty())
+    url = f"http://localhost:{config.server.port}/"
+
+    print(paint("ranger shortcut is retired.", BOLD))
+    print()
+    print("  Install the page as an app instead, which gives a real window:")
+    print(paint(f"    1. Open {url} in Chrome", DIM))
+    print(paint("    2. Menu, Cast Save and Share, Install page as app", DIM))
+    print()
+    print("  To pin it to the taskbar on Windows 11, drag the shortcut from")
+    print(paint(f"    {CHROME_APPS}", DIM))
+    print("  onto the taskbar. Right-click Pin to taskbar was removed for")
+    print("  anything that is not an installed application, so dragging is the")
+    print("  path that still works.")
+    print()
+    print(paint("  'ranger schedule install --interface' starts the server at logon,", DIM))
+    print(paint("  so the icon only has to open a window that is already there.", DIM))
+    return 0
+
+
+def _retired_shortcut(config: Config, args: Any) -> int:
     """Create the thing that gets pinned to the taskbar."""
     from .desktop import Shortcut, create_shortcut, on_windows
     from .icon import write as write_icon
@@ -1575,11 +1641,19 @@ def main(argv: list[str] | None = None) -> int:
 
     sub.add_parser("stop", help="stop a Ranger server started by the shortcut")
 
-    shortcut = sub.add_parser("shortcut", help="create the shortcut to pin to the taskbar")
-    shortcut.add_argument("path", nargs="?", help="where to write it (default: your Desktop)")
+    shortcut = sub.add_parser("shortcut", help="retired: how to install and pin the app instead")
+    shortcut.add_argument("path", nargs="?", help=argparse.SUPPRESS)
 
     schedule = sub.add_parser(
         "schedule", help="run the heartbeat on a schedule, with no terminal open"
+    )
+    # Accepted before or after the subcommand, under two dests, because
+    # argparse lets a subparser's default overwrite the parent's value and
+    # 'ranger schedule --interface' silently meaning the heartbeat would be a
+    # nasty way to remove the wrong task.
+    schedule.add_argument(
+        "--interface", dest="interface_first", action="store_true",
+        help="the 'ranger ui' task that starts at logon, not the heartbeat",
     )
     schedule_sub = schedule.add_subparsers(dest="schedule_command")
     for name, help_text in (
@@ -1589,6 +1663,10 @@ def main(argv: list[str] | None = None) -> int:
         ("xml", "print the task definition without registering anything"),
     ):
         step = schedule_sub.add_parser(name, help=help_text)
+        step.add_argument(
+            "--interface", action="store_true",
+            help="the 'ranger ui' task that starts at logon, not the heartbeat",
+        )
         if name in {"install", "xml", "show"}:
             step.add_argument(
                 "--every", type=int, metavar="MINUTES",

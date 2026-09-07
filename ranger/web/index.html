@@ -37,6 +37,23 @@
 
     <pre id="frames" hidden></pre>
 
+    <div id="micbar">
+      <button id="mic" data-state="idle" hidden
+              title="click to talk, or hold space" aria-label="microphone">
+        <span class="ring"></span>
+        <svg class="icon-mic" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+             stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <rect x="9" y="2" width="6" height="12" rx="3" />
+          <path d="M5 11a7 7 0 0 0 14 0" />
+          <line x1="12" y1="18" x2="12" y2="22" />
+        </svg>
+        <svg class="icon-stop" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+          <rect x="7" y="7" width="10" height="10" rx="1.5" />
+        </svg>
+      </button>
+      <div id="mic-hint">hold space to talk</div>
+    </div>
+
     <div id="composer">
       <input id="say" autocomplete="off" spellcheck="false"
              placeholder="type a turn and press enter" />
@@ -44,6 +61,10 @@
 
     <div id="toast"></div>
   </div>
+
+  <!-- Outside #ui so it covers everything, including the panel and the cards.
+       While the microphone is open this is the unmissable part. -->
+  <div id="live-edge"></div>
 
   <!-- Outside #ui, because a confirmation is not part of the furniture. It
        covers everything and it is answered rather than dismissed. -->
