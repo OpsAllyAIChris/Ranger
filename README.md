@@ -180,6 +180,33 @@ them.
 inbox is the schedule: today's notice is either there or it is not. Being away
 for a week does not replay six mornings.
 
+## Opening it from the taskbar
+
+```powershell
+ranger shortcut          # writes Ranger.lnk to your Desktop, with its own icon
+```
+
+Right-click it and choose **Pin to taskbar**. Clicking it runs `ranger open`,
+which:
+
+- starts the server if nothing is running, through `pythonw.exe`, so there is
+  no console window,
+- brings the existing window forward if one is already open,
+- otherwise opens the interface in its own window, in its own browser profile,
+  so it is not a tab in your work browser and closing that browser does not
+  close this.
+
+**Where the output goes**, since there is no terminal to watch:
+`<vault>/Ranger/log/ui.log`. If clicking the icon appears to do nothing, that
+file says why.
+
+```powershell
+ranger open              # the same thing the shortcut does
+ranger stop              # stop a server started this way
+```
+
+`<vault>/Ranger/server.json` holds the process id and port while it runs.
+
 ## The morning brief, without a terminal open
 
 ```powershell

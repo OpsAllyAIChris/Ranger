@@ -21,6 +21,7 @@ import json
 import mimetypes
 import sys
 import threading
+from datetime import datetime
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -31,6 +32,15 @@ from .config import Config
 #: Where the browser opens its socket. One port for the page and the socket, so
 #: there is one URL to remember and one thing to unblock in a firewall.
 WS_PATH = "/ws"
+
+#: Answers "is it already running, and is anyone looking at it". Written for
+#: the taskbar shortcut, which must not start a second server or open a second
+#: window, and useful on its own when nothing seems to be happening.
+STATUS_PATH = "/status"
+
+#: Beside Ranger's own files. Holds the pid and the port, so a shortcut can
+#: find a server that is already up and a stop can find one to stop.
+LOCK_FILE = "server.json"
 
 #: Where the front end lives. Inside the package, so a non-editable install
 #: still has one and nothing has to guess at the repository root.
@@ -118,10 +128,34 @@ class FrontEndHandler(SimpleHTTPRequestHandler):
     #: a scripted provider, and by 7c with a gate that can ask in the browser.
     session_factory = None
 
+    #: How many browser sessions are connected right now. Class level, because
+    #: every connection gets its own handler instance.
+    sessions = 0
+
     def do_GET(self) -> None:
-        if self.path.split("?")[0].rstrip("/") == WS_PATH.rstrip("/"):
+        path = self.path.split("?")[0].rstrip("/")
+        if path == WS_PATH.rstrip("/"):
             return self._websocket()
+        if path == STATUS_PATH.rstrip("/"):
+            return self._status()
         return super().do_GET()
+
+    def _status(self) -> None:
+        import os
+
+        body = json.dumps(
+            {
+                "ranger": True,
+                "pid": os.getpid(),
+                "port": self.server.server_address[1],
+                "sessions": type(self).sessions,
+            }
+        ).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
 
     # -- the websocket -------------------------------------------------
 
@@ -209,6 +243,7 @@ class FrontEndHandler(SimpleHTTPRequestHandler):
         session = factory(self.config, send)
         session.hello()
 
+        type(self).sessions += 1
         try:
             while True:
                 try:
@@ -227,6 +262,7 @@ class FrontEndHandler(SimpleHTTPRequestHandler):
                 # make every confirmation time out.
                 await session.handle(message)
         finally:
+            type(self).sessions = max(0, type(self).sessions - 1)
             session.close()
 
     def list_directory(self, path):  # noqa: D102 - no listings, ever
@@ -244,11 +280,16 @@ class FrontEndHandler(SimpleHTTPRequestHandler):
         super().end_headers()
 
 
-def describe(config: Config) -> str:
-    """The URL to open. One place, so the CLI and the tests agree."""
+def describe(config: Config, port: int | None = None) -> str:
+    """The URL to open. One place, so the CLI and the tests agree.
+
+    `port` overrides the configured one, because a configured port of 0 means
+    "let the OS choose" and the chosen one is only known after binding. Without
+    this the banner says localhost:0, which is not a thing anyone can open.
+    """
     host = config.server.host
     shown = "localhost" if host in {"127.0.0.1", "0.0.0.0", "::1", ""} else host
-    return f"http://{shown}:{config.server.port}/"
+    return f"http://{shown}:{port or config.server.port}/"
 
 
 def build(
@@ -273,6 +314,50 @@ def build(
     return FrontEnd((config.server.host, config.server.port), handler)
 
 
+def lock_path(config: Config) -> Path:
+    return config.vault.ranger / LOCK_FILE
+
+
+def read_lock(config: Config) -> dict | None:
+    try:
+        return json.loads(lock_path(config).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+
+
+def probe(config: Config, timeout: float = 1.0) -> dict | None:
+    """Ask a server that may or may not be there. None means it is not.
+
+    Over loopback to the configured address rather than trusting the lock
+    file: a stale lock from a machine that lost power says a server is running
+    when nothing is listening, and starting a second one would then fail on the
+    port instead of doing the obvious thing.
+    """
+    import http.client
+
+    host = config.server.host or "127.0.0.1"
+    port = config.server.port
+    if not port:
+        # Configured as "let the OS choose", so only the running server knows.
+        port = (read_lock(config) or {}).get("port") or 0
+    if not port:
+        return None
+    try:
+        connection = http.client.HTTPConnection(host, port, timeout=timeout)
+        connection.request("GET", STATUS_PATH)
+        response = connection.getresponse()
+        if response.status != 200:
+            return None
+        return json.loads(response.read().decode("utf-8"))
+    except Exception:
+        return None
+    finally:
+        try:
+            connection.close()
+        except Exception:
+            pass
+
+
 def serve(config: Config, *, open_browser: bool = False, verbose: bool = False) -> int:
     try:
         httpd = build(config, verbose=verbose)
@@ -288,7 +373,7 @@ def serve(config: Config, *, open_browser: bool = False, verbose: bool = False) 
         )
         return 1
 
-    url = describe(config)
+    url = describe(config, httpd.server_address[1])
     print(f"Ranger  {url}")
     print(f"  the orb        {url}")
     print(f"  the transport  {url}transport.html   (plain, for checking the socket)")
@@ -301,6 +386,27 @@ def serve(config: Config, *, open_browser: bool = False, verbose: bool = False) 
 
         webbrowser.open(url)
 
+    import os
+
+    lock = lock_path(config)
+    try:
+        lock.parent.mkdir(parents=True, exist_ok=True)
+        lock.write_text(
+            json.dumps(
+                {
+                    "pid": os.getpid(),
+                    "host": config.server.host,
+                    "port": httpd.server_address[1],
+                    "url": url,
+                    "started": datetime.now().isoformat(timespec="seconds"),
+                },
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+    except OSError as exc:  # not fatal: the server works, finding it is harder
+        print(f"  could not write {lock}: {exc}", file=sys.stderr)
+
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
@@ -308,4 +414,8 @@ def serve(config: Config, *, open_browser: bool = False, verbose: bool = False) 
     finally:
         httpd.shutdown()
         httpd.server_close()
+        try:
+            lock.unlink()
+        except OSError:
+            pass
     return 0

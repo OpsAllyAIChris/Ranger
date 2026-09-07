@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import re
+import os
 import sys
 from contextlib import contextmanager
 from datetime import datetime
@@ -1318,14 +1319,175 @@ def _survey_opportunity_shape(config: Config, vault: Vault, scans, paint) -> Non
 
 
 def cmd_ui(config: Config, args: Any) -> int:
-    """Tier 7a. Serve the front end. No agent logic passes through here."""
+    """Serve the front end. No agent logic passes through here."""
     from dataclasses import replace
 
     from .server import serve
 
     if args.port:
         config = replace(config, server=replace(config.server, port=args.port))
-    return serve(config, open_browser=args.open, verbose=args.verbose)
+    with _logging_to(getattr(args, "log", None)):
+        return serve(config, open_browser=args.open, verbose=args.verbose)
+
+
+def ui_log(config: Config) -> Path:
+    """Where a windowless server's output goes. Named in every reply, because
+    a shortcut that opens nothing has to leave something to read."""
+    return config.vault.log / "ui.log"
+
+
+def cmd_open(config: Config, args: Any) -> int:
+    """What the taskbar shortcut runs. One server, one window.
+
+    Three cases, in order. A server is already up and somebody is looking at
+    it: bring that window forward. A server is up and nobody is: open a window
+    at it. Nothing is up: start one, wait for it to answer, then open a window.
+    """
+    import time
+
+    from .desktop import focus_window, open_window, start_server
+    from .server import describe, probe
+
+    paint = _colour(sys.stdout.isatty())
+    log = ui_log(config)
+
+    running = probe(config)
+    url = describe(config, (running or {}).get("port"))
+    if running is None:
+        if config.source_path is None:
+            print(paint("  the loaded config has no path, so a server cannot be started", RED),
+                  file=sys.stderr)
+            return 1
+        print(paint(f"  starting Ranger, logging to {log}", DIM))
+        start_server(Path(config.source_path).resolve(), log)
+
+        deadline = time.monotonic() + float(getattr(args, "wait", 20) or 20)
+        while time.monotonic() < deadline:
+            running = probe(config, timeout=0.4)
+            if running is not None:
+                break
+            time.sleep(0.25)
+
+        url = describe(config, (running or {}).get("port"))
+        if running is None:
+            print(paint(f"  Ranger did not come up at {url}.", RED), file=sys.stderr)
+            print(paint(f"  The log says why: {log}", RED), file=sys.stderr)
+            return 1
+
+    elif running.get("sessions", 0) > 0 and not getattr(args, "new_window", False):
+        result = focus_window()
+        if result.focused:
+            print(paint(f"  {result.detail}", DIM))
+            return 0
+        # Not an error, and not worth mentioning twice: a second window is a
+        # much smaller problem than a shortcut that refuses to do anything.
+        print(paint(f"  could not focus the existing window ({result.detail})", DIM))
+
+    how = open_window(url, profile_dir=_browser_profile(config))
+    print(paint(f"Ranger  {url}", BOLD) + paint(f"  {how}", DIM))
+    print(paint(f"  log  {log}", DIM))
+    return 0
+
+
+def _browser_profile(config: Config) -> Path:
+    """Its own browser profile, so Ranger's window is not a tab in the
+    operator's work browser and closing that browser does not close this."""
+    return config.vault.ranger / "browser"
+
+
+def cmd_stop(config: Config, args: Any) -> int:
+    """Stop a server started by the shortcut, which has no window to close."""
+    import os
+    import signal
+
+    from .server import probe, read_lock
+
+    paint = _colour(sys.stdout.isatty())
+    running = probe(config)
+    if running is None:
+        print(paint("  nothing is running.", DIM))
+        return 0
+
+    pid = running.get("pid") or (read_lock(config) or {}).get("pid")
+    if not pid:
+        print(paint("  it is running but did not say which process it is.", YELLOW))
+        return 1
+    try:
+        os.kill(int(pid), signal.SIGTERM)
+    except (OSError, ValueError) as exc:
+        print(paint(f"  could not stop process {pid}: {exc}", RED), file=sys.stderr)
+        return 1
+    print(paint(f"  stopped Ranger (pid {pid}).", TEAL))
+    return 0
+
+
+def cmd_shortcut(config: Config, args: Any) -> int:
+    """Create the thing that gets pinned to the taskbar."""
+    from .desktop import Shortcut, create_shortcut, on_windows
+    from .icon import write as write_icon
+    from .schedule import ScheduleError
+
+    paint = _colour(sys.stdout.isatty())
+    if config.source_path is None:
+        print(paint("  the loaded config has no path", RED), file=sys.stderr)
+        return 1
+
+    settings = Path(config.source_path).resolve()
+    root = settings.parent
+    icon = write_icon(root / "ranger.ico")
+
+    launcher = Path(sys.executable)
+    windowless = launcher.with_name("pythonw.exe")
+    if windowless.exists():
+        launcher = windowless
+    elif on_windows():
+        print(paint(f"  no pythonw beside {launcher}, so a console window will appear", YELLOW))
+
+    target = Path(args.path).expanduser() if args.path else _desktop_dir() / "Ranger.lnk"
+    shortcut = Shortcut(
+        path=target,
+        target=launcher,
+        arguments=f'-m ranger -c "{settings}" open',
+        working_directory=root,
+        icon=icon,
+        description="Ranger",
+    )
+
+    if not on_windows():
+        print(paint("  shortcuts are Windows only. This is what would be created:", DIM))
+        print(f"  path       {shortcut.path}")
+        print(f"  target     {shortcut.target}")
+        print(f"  arguments  {shortcut.arguments}")
+        print(f"  icon       {shortcut.icon}")
+        return 0
+
+    try:
+        create_shortcut(shortcut)
+    except OSError as exc:
+        print(paint(f"  {exc}", RED), file=sys.stderr)
+        return 1
+
+    print(paint(f"Created {shortcut.path}", BOLD))
+    print(paint(f"  icon  {icon}", DIM))
+    print()
+    print("  Right-click it and choose Pin to taskbar.")
+    print(paint(f"  Clicking it starts Ranger if it is not running and opens {config.server.host}"
+                f":{config.server.port} in its own window.", DIM))
+    print(paint(f"  Output goes to {ui_log(config)}. 'ranger stop' stops it.", DIM))
+    return 0
+
+
+def _desktop_dir() -> Path:
+    """The Desktop, wherever OneDrive has moved it to."""
+    candidates = [Path.home() / "Desktop"]
+    profile = os.environ.get("USERPROFILE")
+    if profile:
+        candidates.append(Path(profile) / "Desktop")
+        candidates.append(Path(profile) / "OneDrive" / "Desktop")
+    for candidate in candidates:
+        if candidate.is_dir():
+            return candidate
+    return Path.home()
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -1405,6 +1567,16 @@ def main(argv: list[str] | None = None) -> int:
     ui.add_argument("--open", action="store_true", help="open the browser as well")
     ui.add_argument("--verbose", action="store_true", help="log every request")
     ui.add_argument("--port", type=int, help="override [server] port for this run")
+    ui.add_argument("--log", metavar="PATH", help="append everything printed to this file as well")
+
+    opened = sub.add_parser("open", help="open Ranger in its own window, starting it if needed")
+    opened.add_argument("--new-window", action="store_true", help="always open another window")
+    opened.add_argument("--wait", type=float, default=20, help="seconds to wait for it to come up")
+
+    sub.add_parser("stop", help="stop a Ranger server started by the shortcut")
+
+    shortcut = sub.add_parser("shortcut", help="create the shortcut to pin to the taskbar")
+    shortcut.add_argument("path", nargs="?", help="where to write it (default: your Desktop)")
 
     schedule = sub.add_parser(
         "schedule", help="run the heartbeat on a schedule, with no terminal open"
@@ -1491,6 +1663,12 @@ def main(argv: list[str] | None = None) -> int:
             return cmd_accounts_survey(config, args)
         print("usage: ranger accounts survey", file=sys.stderr)
         return 2
+    if args.command == "open":
+        return cmd_open(config, args)
+    if args.command == "stop":
+        return cmd_stop(config, args)
+    if args.command == "shortcut":
+        return cmd_shortcut(config, args)
     if args.command == "ui":
         return cmd_ui(config, args)
     if args.command == "voices":
