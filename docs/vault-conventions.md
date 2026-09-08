@@ -305,7 +305,43 @@ item K and is a decision on its own, not a gap to close in passing.
 `file_to_account`. Two existing tools, no new capability, no new path into the
 core.
 
-**The draft is not deleted afterwards.** Delete-never holds here as everywhere.
-Whether a filed draft should be marked as filed is a separate decision and
-nobody has made it.
+**The draft is not deleted afterwards, and filing does not clear it.** Two
+separate actions. "File that and clear it" is two tool calls, which is what it
+looks like; a draft vanishing from the panel as a side effect of filing would
+be a surprise, and a surprise in a delete-shaped direction is the worst kind.
+
+### Clearing a draft
+
+```powershell
+ranger drafts show       # what is held
+ranger drafts clear Telly
+ranger drafts cleared    # what has been cleared
+```
+
+Also a × beside each draft in the panel, and `clear_draft` for the model. All
+three run the same tool: the browser holds no idea of what clearing means.
+
+**Clearing MOVES the draft to `Ranger/drafts/cleared/`. It never deletes it.**
+Delete-never is the property the whole `Accounts/` append design rests on — it
+is why a snapshot had to exist before Ranger could write to an account note —
+and it is not being weakened so a panel looks tidier. A cleared draft still
+lists (`list_own_files` with `cleared`, or `ranger drafts cleared`) and still
+reads by name. Nothing becomes unreachable.
+
+Clearing twice is idempotent rather than an error, and a name matching two
+drafts returns the candidates and clears nothing: clearing the wrong draft is
+worse than asking which one.
+
+### Nothing gains an unlink
+
+`ranger/` deletes a file in exactly three places, and a test asserts that the
+set has not grown:
+
+| where | what | why it is allowed |
+| --- | --- | --- |
+| `schedule.py` | a temp XML handed to `schtasks` | outside the vault, removed the moment it is read |
+| `server.py` | `Ranger/server.json` | the running server's lock. Runtime state, not content, and leaving it makes the next start think a server is up |
+| `vault.py` | the `.ranger-tmp` scratch file | only when a write failed. Ranger made it seconds earlier and nobody has seen it |
+
+**A fourth is a conversation, not a commit.**
 

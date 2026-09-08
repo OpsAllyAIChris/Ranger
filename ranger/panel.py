@@ -27,6 +27,7 @@ from .config import Config
 from .dates import human_datetime
 from .heartbeat import Inbox, Notice
 from .vault import Vault, VaultError
+from .ownfiles import CLEARED
 
 #: HoldingGate writes these when there is nobody at a keyboard: voice turns and
 #: anything the heartbeat starts. They are the panel's Awaiting Confirmation
@@ -98,6 +99,11 @@ def snapshot(config: Config, vault: Vault) -> dict[str, Any]:
     drafts: list[Item] = []
     try:
         for item in vault.list_markdown(config.vault.drafts):
+            # Cleared drafts are moved into drafts/cleared/, not deleted. The
+            # panel is the reason clearing exists, so it is the one place that
+            # must not show them.
+            if CLEARED in item.path.parts:
+                continue
             try:
                 text = vault.read_text(item.path)
             except VaultError:

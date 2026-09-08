@@ -160,6 +160,34 @@ class Vault:
             handle.write(text)
         return target
 
+    def move_within_ranger(self, source: str | Path, target: str | Path) -> Path:
+        """Move one of Ranger's own files. **Not a delete.**
+
+        Clearing a draft moves it out of the way; it never unlinks it. Delete
+        never is the property the whole `Accounts/` append design rests on --
+        it is why a snapshot had to exist before Ranger could write there at
+        all -- and it is not going to be weakened so a panel looks tidier.
+
+        Both ends must be under `Ranger/`, checked through `resolve_write`, so
+        this cannot become a way to move an account note somewhere it can be
+        edited freely. It refuses to land on an existing file for the same
+        reason `write_new` does: a move that silently replaced something would
+        be a delete wearing a different name.
+        """
+        origin = self.resolve_write(source)
+        landing = self.resolve_write(target)
+        if not origin.is_file():
+            raise VaultError(f"no such file: {origin}")
+        if self.is_append_only(origin) or self.is_append_only(landing):
+            raise VaultWriteDenied(f"{origin} is in the append-only log folder")
+        if landing.exists():
+            raise VaultWriteDenied(
+                f"{landing} already exists; moving onto it would be a delete"
+            )
+        landing.parent.mkdir(parents=True, exist_ok=True)
+        origin.replace(landing)
+        return landing
+
     # -- the one exception, and it is narrow ---------------------------
 
     def resolve_account(self, path: str | Path) -> Path:

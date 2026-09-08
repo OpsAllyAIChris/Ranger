@@ -36,13 +36,18 @@ def build_agent(
         api_key = require_api_key()
 
     vault = Vault(config.vault)
+    audit = AuditLog(vault, config.vault.log)
     return Ranger(
         config=config,
         provider=build_provider(config.model, api_key),
-        registry=build_registry(config, vault),
+        # The registry gets the log too, so a clear through the panel button --
+        # which never goes through a turn -- is recorded the same as one the
+        # model made. The core still logs every tool call, so a clear through
+        # the model appears from both vantage points.
+        registry=build_registry(config, vault, audit=audit),
         vault=vault,
         knowledge_loader=KnowledgeLoader(vault, config.vault, config.knowledge),
         gate=gate,  # None means DenyingGate, and that is the point
-        audit=AuditLog(vault, config.vault.log),
+        audit=audit,
         origin=origin,
     )

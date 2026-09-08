@@ -35,10 +35,11 @@ async def run(registry, name, **payload):
 
 
 def test_the_registry_holds_exactly_the_intended_tools(registry):
-    """Tier 2's three, Tier 4's two, the account write path's one, and the two
-    that read Ranger's own folders back. A ninth is a scope decision."""
+    """Tier 2's three, Tier 4's two, the account write path's one, the two that
+    read Ranger's own folders back, and clearing. A tenth is a scope decision."""
     assert registry.names() == [
         "account_recall",
+        "clear_draft",
         "draft_and_hold",
         "file_to_account",
         "forget",
@@ -59,6 +60,10 @@ def test_only_forget_needs_the_confirmation_gate(registry):
     """Nothing here sends or spends. forget rewrites a file, which does not
     happen without the operator's yes.
 
+    clear_draft writes and does not gate either, for a reason stronger than
+    consistency with draft creation: it moves the file rather than deleting it,
+    so the outcome is recoverable by construction.
+
     file_to_account writes and deliberately does not gate: filing into an
     account that already exists happens often enough that a card would become a
     reflex within a week, and a card clicked without reading manufactures a
@@ -67,6 +72,7 @@ def test_only_forget_needs_the_confirmation_gate(registry):
     """
     assert [t.name for t in registry if t.confirm] == ["forget"]
     assert sorted(t.name for t in registry if t.writes) == [
+        "clear_draft",
         "draft_and_hold",
         "file_to_account",
         "forget",

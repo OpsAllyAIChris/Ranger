@@ -88,7 +88,7 @@ export function createShell(orb) {
 
   // ------------------------------------------------------------- the panel
 
-  function entry(item, dismissable) {
+  function entry(item, dismissable, clearable) {
     const node = document.createElement('div');
     node.className = 'entry';
 
@@ -117,10 +117,21 @@ export function createShell(orb) {
       button.onclick = () => send({ type: 'dismiss', id: item.id });
       node.append(button);
     }
+    if (clearable && item.id) {
+      // The same tool the model calls. The browser decides nothing here: it
+      // sends a name and the server runs clear_draft, so there is one
+      // implementation of what clearing means and one place it is logged.
+      const button = document.createElement('button');
+      button.className = 'dismiss clickable';
+      button.title = 'clear from the panel. The draft is moved, never deleted';
+      button.textContent = '×';
+      button.onclick = () => send({ type: 'clear_draft', name: item.id });
+      node.append(button);
+    }
     return node;
   }
 
-  function section(name, items, { dismissable = false, empty = 'nothing' } = {}) {
+  function section(name, items, { dismissable = false, clearable = false, empty = 'nothing' } = {}) {
     const block = document.createElement('div');
     block.className = 'section';
 
@@ -141,7 +152,7 @@ export function createShell(orb) {
       block.append(none);
       return block;
     }
-    for (const item of items) block.append(entry(item, dismissable));
+    for (const item of items) block.append(entry(item, dismissable, clearable));
     return block;
   }
 
@@ -196,7 +207,7 @@ export function createShell(orb) {
         empty: 'nothing waiting',
       }),
       section('Inbox', view.inbox || [], { dismissable: true, empty: 'nothing new' }),
-      section('Drafts', view.drafts || [], { empty: 'none held' }),
+      section('Drafts', view.drafts || [], { clearable: true, empty: 'none held' }),
       toolSection(view.tools || [])
     );
   }

@@ -38,6 +38,9 @@ DISARM = "disarm"
 #: The browser's speaker queue drained, having played up to `index`. Half of
 #: the conversation window's anchor; the other half is the turn completing.
 SPOKEN = "spoken"
+#: A click on the × beside a draft. Runs the same clear_draft tool the model
+#: calls, so the browser holds no idea of what clearing means.
+CLEAR_DRAFT = "clear_draft"
 #: The page became visible or hidden. The window will not open behind a
 #: minimised window, because the only sign the microphone is live is on it.
 VISIBLE = "visible"
@@ -162,6 +165,8 @@ class Session:
             return self._arm()
         if kind == DISARM:
             return self._disarm()
+        if kind == CLEAR_DRAFT:
+            return await self._clear_draft(message)
         if kind == SPOKEN:
             return self._played(message)
         if kind == VISIBLE:
@@ -553,6 +558,25 @@ class Session:
         allowed = bool(message.get("allow", False))
         if not gate.decide(token, allowed):
             self.emit("error", message="nothing was waiting on that answer")
+
+    async def _clear_draft(self, message: dict[str, Any]) -> None:
+        """The × beside a draft. The same tool, not a second implementation.
+
+        The browser sends a name and the server runs `clear_draft`, so there is
+        one meaning of "cleared", one place it is logged, and no path where the
+        panel can move a file the tool would have refused to move.
+        """
+        registry = self.agent.registry
+        if registry is None or "clear_draft" not in registry.names():
+            self.emit("error", message="this connection has no clear_draft wired")
+            return
+        result = await registry.run("clear_draft", {"name": str(message.get("name", ""))})
+        self.emit(
+            "notice",
+            level="info" if result.ok else "warn",
+            message=result.summary or result.content[:200],
+        )
+        self.push_panel()
 
     def _dismiss(self, message: dict[str, Any]) -> None:
         from .panel import dismiss

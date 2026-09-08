@@ -1423,6 +1423,58 @@ def cmd_dormant(config: Config, args: Any) -> int:
     return 0
 
 
+def cmd_drafts(config: Config, args: Any) -> int:
+    """List drafts, clear one, or see what has been cleared.
+
+    Clearing MOVES the draft to Ranger/drafts/cleared/. It never unlinks it:
+    delete-never is the property the Accounts/ append design rests on, and it
+    is not being weakened so a panel looks tidier.
+    """
+    from .audit import AuditLog
+    from .ownfiles import clear, listing
+    from .vault import Vault
+
+    paint = _colour(sys.stdout.isatty())
+    vault = Vault(config.vault)
+    action = getattr(args, "drafts_command", None) or "show"
+
+    if action == "clear":
+        name = " ".join(getattr(args, "name", []) or []).strip()
+        if not name:
+            print("usage: ranger drafts clear <name>", file=sys.stderr)
+            return 2
+        outcome, candidates = clear(
+            vault, config, name, audit=AuditLog(vault, config.vault.log)
+        )
+        if outcome is None:
+            if candidates:
+                print(paint(f"  {name!r} matches {len(candidates)} drafts:", YELLOW))
+                for item in candidates[:8]:
+                    print(f"    {item.name}")
+                print(paint("  nothing was cleared. Name one of them.", DIM))
+                return 1
+            print(paint(f"  no draft matches {name!r}", YELLOW))
+            return 1
+        print(paint(f"  {outcome.describe()}", TEAL))
+        if not outcome.already:
+            print(paint("  moved, not deleted. 'ranger drafts cleared' lists it", DIM))
+        return 0
+
+    cleared = action == "cleared"
+    files = listing(vault, config, "drafts", cleared=cleared)
+    where = "cleared" if cleared else "held"
+    if not files:
+        print(paint(f"  no {where} drafts", DIM))
+        return 0
+    print(paint(f"  {len(files)} {where}", BOLD))
+    for item in files:
+        when = f"{item.created}  " if item.created else ""
+        print(f"  {when}{item.name}")
+        if item.title:
+            print(paint(f"      {item.title}", DIM))
+    return 0
+
+
 def cmd_snapshot(config: Config, args: Any) -> int:
     """Set up the vault's local history, or take today's snapshot by hand."""
     from .snapshot import (
@@ -2088,6 +2140,15 @@ def main(argv: list[str] | None = None) -> int:
     migrate_cmd.add_argument(
         "--dry-run", action="store_true", help="say what would change and write nothing"
     )
+    drafts = sub.add_parser("drafts", help="the drafts Ranger is holding")
+    drafts_sub = drafts.add_subparsers(dest="drafts_command")
+    drafts_sub.add_parser("show", help="what is held right now")
+    drafts_sub.add_parser("cleared", help="what has been cleared. Moved, never deleted")
+    clear_cmd = drafts_sub.add_parser(
+        "clear", help="move a draft out of the panel. It is not deleted"
+    )
+    clear_cmd.add_argument("name", nargs="+", help="file name, or part of the title")
+
     snapshot = sub.add_parser(
         "snapshot", help="the vault's local history: the undo for account writes"
     )
@@ -2157,6 +2218,8 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_mic(config, args)
     if args.command == "dormant":
         return cmd_dormant(config, args)
+    if args.command == "drafts":
+        return cmd_drafts(config, args)
     if args.command == "snapshot":
         return cmd_snapshot(config, args)
     if args.command == "vault-guard":

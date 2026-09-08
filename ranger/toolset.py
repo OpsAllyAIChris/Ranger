@@ -659,17 +659,19 @@ def _list_own_files(config: Config, vault: Vault) -> Tool:
         from .ownfiles import UnknownFolder, listing
 
         folder = str(payload.get("folder", "drafts")).strip().lower()
+        cleared = bool(payload.get("cleared", False))
         try:
-            files = listing(vault, config, folder)
+            files = listing(vault, config, folder, cleared=cleared)
         except UnknownFolder as exc:
             return ToolResult(False, str(exc), "unknown folder")
         except Exception as exc:
             return ToolResult(False, f"{type(exc).__name__}: {exc}", "could not list")
 
+        where = f"Ranger/{folder}/cleared" if cleared else f"Ranger/{folder}"
         if not files:
             return ToolResult(
                 ok=True,
-                content=f"There is nothing in Ranger/{folder} yet.",
+                content=f"There is nothing in {where} yet.",
                 summary=f"{folder} is empty",
             )
 
@@ -681,7 +683,7 @@ def _list_own_files(config: Config, vault: Vault) -> Tool:
         return ToolResult(
             ok=True,
             content=(
-                f"{len(files)} in Ranger/{folder}, newest first. This is a list, not the "
+                f"{len(files)} in {where}, newest first. This is a list, not the "
                 f"contents: use read_own_file to open one.\n\n{body}"
             ),
             summary=f"{len(files)} in {folder}",
@@ -705,6 +707,13 @@ def _list_own_files(config: Config, vault: Vault) -> Tool:
                     "description": (
                         "drafts for held drafts, inbox for notices waiting to be seen, "
                         "memory for what Ranger remembers about the operator."
+                    ),
+                },
+                "cleared": {
+                    "type": "boolean",
+                    "description": (
+                        "Drafts only. List the ones that have been cleared instead of "
+                        "the live ones. Clearing moves a draft, it never deletes it."
                     ),
                 },
             },
@@ -797,8 +806,95 @@ def _read_own_file(config: Config, vault: Vault) -> Tool:
     )
 
 
+def _clear_draft(config: Config, vault: Vault, audit: Any = None) -> Tool:
+    """Move a draft out of the panel. Never delete it.
+
+    Ungated, consistent with drafts not gating on creation, and safe to leave
+    ungated for a reason stronger than consistency: the file is recoverable by
+    construction. It moves to `Ranger/drafts/cleared/`, still lists on request,
+    and still reads by name.
+
+    **Filing does not auto-clear.** "File that and clear it" is two tool calls,
+    which is what it looks like. A draft disappearing from the panel as a side
+    effect of filing would be a surprise, and a surprise in a delete-shaped
+    direction is the worst kind.
+    """
+
+    async def handler(payload: dict[str, Any]) -> ToolResult:
+        from .ownfiles import clear
+        from .vault import VaultError
+
+        name = str(payload.get("name", "")).strip()
+        if not name:
+            return ToolResult(False, "Which draft? Use list_own_files to see them.",
+                              "no name given")
+        try:
+            outcome, candidates = clear(vault, config, name, audit=audit)
+        except VaultError as exc:
+            return ToolResult(False, str(exc), "not cleared")
+        except Exception as exc:  # a check that raises counts as denial
+            return ToolResult(False, f"{type(exc).__name__}: {exc}. Nothing was moved.",
+                              "not cleared")
+
+        if outcome is None:
+            if candidates:
+                names = "\n".join(f"  {item.name}" for item in candidates[:8])
+                return ToolResult(
+                    ok=True,
+                    content=(
+                        f"{name!r} matches {len(candidates)} drafts. Ask which one "
+                        f"rather than picking: clearing the wrong draft is worse than "
+                        f"asking.\n{names}"
+                    ),
+                    summary=f"{len(candidates)} match {name!r}",
+                )
+            return ToolResult(
+                ok=True,
+                content=f"No draft matches {name!r}, so nothing was cleared.",
+                summary="no match",
+            )
+
+        if outcome.already:
+            return ToolResult(True, outcome.describe(), f"{outcome.name} already cleared")
+        return ToolResult(
+            ok=True,
+            content=(
+                f"Cleared {outcome.name}. It has moved to {outcome.now} and is out of "
+                "the drafts panel. It is not deleted: list_own_files with cleared true "
+                "shows it, and read_own_file still opens it by name."
+            ),
+            summary=f"cleared {outcome.name}",
+        )
+
+    return Tool(
+        name="clear_draft",
+        description=(
+            "Clear a draft out of the drafts panel once the operator is done with it. "
+            "The name can be partial: 'Telly' finds the Telly draft. This MOVES the "
+            "draft to a cleared folder and never deletes it, so it can still be listed "
+            "and read afterwards. Filing a draft into an account does not clear it; if "
+            "the operator wants both, do both."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string",
+                    "description": "Draft file name or part of its title, as they said it.",
+                },
+            },
+            "required": ["name"],
+        },
+        handler=handler,
+        writes=True,
+    )
+
+
 def build_registry(
-    config: Config, vault: Vault, today: Callable[[], date] | None = None
+    config: Config,
+    vault: Vault,
+    today: Callable[[], date] | None = None,
+    audit: Any = None,
 ) -> ToolRegistry:
     """Tier 2's three, plus Tier 4's two. Adding one is a scope decision."""
     today = today or date.today
@@ -812,5 +908,6 @@ def build_registry(
             _file_to_account(config, vault, today),
             _list_own_files(config, vault),
             _read_own_file(config, vault),
+            _clear_draft(config, vault, audit),
         ]
     )

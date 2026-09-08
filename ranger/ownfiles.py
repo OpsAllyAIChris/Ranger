@@ -34,6 +34,11 @@ from typing import Any
 #: vault wall should be the second line of defence here rather than the first.
 FOLDERS = ("drafts", "inbox", "memory")
 
+#: Where a cleared draft goes. It is moved here, never unlinked: delete-never
+#: is the property the whole `Accounts/` append design rests on, and it is not
+#: being weakened so a panel looks tidier.
+CLEARED = "cleared"
+
 #: Enough of a draft to choose between them, never the whole thing. Listing
 #: twenty drafts in full would spend the context the answer needs.
 SUMMARY_CHARS = 120
@@ -110,15 +115,23 @@ def describe(path: Path, root: Path) -> OwnFile:
     )
 
 
-def listing(vault: Any, config: Any, folder: str) -> list[OwnFile]:
+def listing(vault: Any, config: Any, folder: str, *, cleared: bool = False) -> list[OwnFile]:
     """Everything in one of Ranger's folders, newest first.
 
     Newest first because the question is almost always about something written
     recently: "the Telly draft" means today's, not the one from March.
+
+    Cleared drafts are excluded by default and listable on request. Nothing
+    becomes unreachable by being cleared -- that is the difference between
+    moving a file and deleting one, and it is the whole point.
     """
     root = folder_path(config, folder)
     files = vault.list_markdown(root, recursive=True)
-    described = [describe(item.path, config.vault.root) for item in files]
+    described = [
+        describe(item.path, config.vault.root)
+        for item in files
+        if (CLEARED in item.path.parts) == cleared
+    ]
     described.sort(key=lambda item: (item.created, item.name), reverse=True)
     return described
 
@@ -136,7 +149,10 @@ def find(files: list[OwnFile], query: str) -> tuple[OwnFile | None, list[OwnFile
         return None, files
 
     for item in files:
-        if item.name.casefold() == wanted or item.path.stem.casefold() == wanted:
+        # The vault-relative path is exact too. It is what the panel uses as a
+        # row id, so a button click resolves without the browser having to know
+        # anything about how names are matched.
+        if wanted in (item.name.casefold(), item.path.stem.casefold(), item.relative.casefold()):
             return item, []
 
     matches = [
@@ -163,9 +179,71 @@ def find(files: list[OwnFile], query: str) -> tuple[OwnFile | None, list[OwnFile
 
 
 def read(vault: Any, config: Any, folder: str, name: str) -> tuple[OwnFile | None, str, list[OwnFile]]:
-    """(the file, its text, the candidates when it was not one file)."""
+    """(the file, its text, the candidates when it was not one file).
+
+    Falls back to the cleared drafts when nothing active matches, so clearing
+    a draft never puts it out of reach.
+    """
     files = listing(vault, config, folder)
     found, candidates = find(files, name)
+    if found is None and not candidates and folder == "drafts":
+        found, candidates = find(listing(vault, config, folder, cleared=True), name)
     if found is None:
         return None, "", candidates
     return found, vault.read_text(found.path), candidates
+
+
+@dataclass(frozen=True)
+class Cleared:
+    """What a clear did, for the caller and for the log."""
+
+    name: str
+    was: str
+    now: str
+    already: bool = False
+
+    def describe(self) -> str:
+        if self.already:
+            return f"{self.name} was already cleared, at {self.now}"
+        return f"{self.name}: {self.was} -> {self.now}"
+
+
+def clear(
+    vault: Any, config: Any, name: str, *, audit: Any = None
+) -> tuple[Cleared | None, list[OwnFile]]:
+    """Move a draft out of the way. Never unlink it.
+
+    `(what happened, candidates)`. When the name matches more than one draft
+    nothing is cleared and the candidates come back instead: clearing the wrong
+    draft is worse than asking which one.
+
+    Idempotent. A draft that is already cleared reports that rather than
+    failing, because the second click on a button is not an error.
+
+    The audit line is written here rather than in each of the three callers, so
+    the tool, the panel button and the CLI record the same thing. The core also
+    logs every tool call, so a clear through the model appears twice, from two
+    different vantage points, which is what an audit log is for.
+    """
+    active = listing(vault, config, "drafts")
+    found, candidates = find(active, name)
+
+    if found is None:
+        already, _ = find(listing(vault, config, "drafts", cleared=True), name)
+        if already is not None:
+            return Cleared(already.name, already.relative, already.relative, already=True), []
+        return None, candidates
+
+    target = folder_path(config, "drafts") / CLEARED / found.name
+    landed = vault.move_within_ranger(found.path, target)
+    outcome = Cleared(
+        name=found.name,
+        was=found.relative,
+        now=landed.relative_to(config.vault.root).as_posix(),
+    )
+    if audit is not None:
+        try:
+            audit.write("draft cleared", outcome.describe())
+        except Exception:
+            pass  # the log must never be able to stop the work
+    return outcome, []

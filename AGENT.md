@@ -376,6 +376,22 @@ rebuild, and `ranger snapshot` giving the vault a local git history, because
 read-only `Accounts/` *was* the undo. Delete-never did not change and neither
 did `Knowledge/`.
 
+**Clearing a draft is a move, never a delete.** It goes to
+`Ranger/drafts/cleared/`, still lists on request and still reads by name.
+Delete-never is the property the whole `Accounts/` append design rests on, so
+it does not get weakened for panel hygiene. Three surfaces — the `clear_draft`
+tool, a × in the drafts panel, and `ranger drafts clear` — all run the same
+tool, so the browser holds no idea of what clearing means and there is one
+place it is logged. **Filing does not auto-clear:** "file that and clear it" is
+two tool calls, and a draft disappearing as a side effect of filing would be a
+surprise in a delete-shaped direction.
+
+**Nothing in `ranger/` gains an unlink without being asked about first.** There
+are exactly three, listed with their reasons in `tests/test_clearing.py` as an
+allow list, so a fourth fails a test rather than passing quietly: a schtasks
+temp file, the server's lock file, and the account-write scratch file on a
+failed write. None of them is vault content.
+
 **Ranger reads back what it writes.** It could write a draft and could not
 read one: asked to file the Telly draft into an account it correctly said it
 had no way to pull the text. `list_own_files` and `read_own_file` cover
