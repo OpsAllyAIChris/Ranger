@@ -91,40 +91,21 @@ jarvis is flattering.
 
 ### Training "hey ranger"
 
-`scripts/train_wake_word.py` writes the training config. It does not train
-anything: openWakeWord's own trainer does, and it needs a CUDA GPU, about an
-hour, and three things that are not pip installable — a clone of the piper
-sample generator, a set of room impulse responses, and hours of background
-audio. Colab is what openWakeWord's own documentation assumes.
+`python scripts/train_wake_word.py` writes a Colab notebook, tailored to the
+phrase, that runs top to bottom. It does not train anything locally and cannot:
+openWakeWord's automated training runs on Linux only, because Piper does not
+work on Windows.
 
-```powershell
-python scripts/train_wake_word.py --phrase "hey ranger" --out hey_ranger.yaml
-```
+**[docs/training-hey-ranger.md](training-hey-ranger.md) is the walkthrough** —
+what each cell does, what the free Colab tier gives you, where the file goes
+afterwards, and how to tell a badly trained model apart from a phrase that was
+never going to work.
 
-Then, on a Colab notebook with a T4:
-
-```
-!git clone https://github.com/rhasspy/piper-sample-generator
-!pip install openwakeword piper-phonemize webrtcvad mutagen \
-    torchinfo torchmetrics speechbrain audiomentations
-# room impulse responses and background audio, per openWakeWord's notebook
-!python -m openwakeword.train --training_config hey_ranger.yaml \
-    --generate_clips --augment_clips --train_model
-```
-
-It writes `hey_ranger.onnx`. Copy it back, put it next to the vault, and point
-`wake.model` at the full path. The two feature models still come from
-`ranger wake install`: a trained hotword replaces the published phrase, not the
-models underneath it.
-
-The generated config carries a list of adversarial negatives — "hey stranger",
-"hey danger", "range rover" — which is the difference between a model that
-fires on "hey ranger" and one that fires on anything with the same shape. It
-also carries `target_false_positives_per_hour`, which is the dial: lower is
-quieter and misses more.
-
-Training is synthetic. No recording of your own voice is involved and none is
-needed.
+The short version: upload the notebook, pick a T4, run everything, wait two to
+three hours, download `hey_ranger.onnx`, put it next to the vault, point
+`wake.model` at it and restart the server. `ranger wake install` does not need
+re-running — a trained hotword replaces the phrase, not the two feature models
+underneath it.
 
 ## What happens when it fires
 
