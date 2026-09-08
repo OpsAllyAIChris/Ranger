@@ -24,6 +24,7 @@ from .config import Config
 from .drafts import DraftRejected, hold_draft
 from .memory import append_fact, find_fact, load_memory
 from .tools import Tool, ToolRegistry, ToolResult
+from .ownfiles import FOLDERS
 from .untrusted import fence, scan
 from .vault import Vault, VaultError
 
@@ -641,6 +642,161 @@ def _file_to_account(config: Config, vault: Vault, today: Callable[[], date]) ->
     )
 
 
+# -- 7 and 8. reading back what Ranger wrote --------------------------------
+
+
+def _list_own_files(config: Config, vault: Vault) -> Tool:
+    """What is in Ranger's own folders. The half that was missing.
+
+    Two parameterised tools rather than six named ones. Every tool description
+    is in the prompt on every turn, so `list_drafts`, `read_draft`,
+    `list_notices`, `read_notice`, `list_memory`, `read_memory` would be six
+    descriptions carrying one idea. The folder is an enum, which keeps the
+    choice as concrete for the model as a name would be.
+    """
+
+    async def handler(payload: dict[str, Any]) -> ToolResult:
+        from .ownfiles import UnknownFolder, listing
+
+        folder = str(payload.get("folder", "drafts")).strip().lower()
+        try:
+            files = listing(vault, config, folder)
+        except UnknownFolder as exc:
+            return ToolResult(False, str(exc), "unknown folder")
+        except Exception as exc:
+            return ToolResult(False, f"{type(exc).__name__}: {exc}", "could not list")
+
+        if not files:
+            return ToolResult(
+                ok=True,
+                content=f"There is nothing in Ranger/{folder} yet.",
+                summary=f"{folder} is empty",
+            )
+
+        limit = 40
+        shown = files[:limit]
+        body = "\n".join(item.line() for item in shown)
+        if len(files) > limit:
+            body += f"\n\n({len(files) - limit} older ones not listed.)"
+        return ToolResult(
+            ok=True,
+            content=(
+                f"{len(files)} in Ranger/{folder}, newest first. This is a list, not the "
+                f"contents: use read_own_file to open one.\n\n{body}"
+            ),
+            summary=f"{len(files)} in {folder}",
+        )
+
+    return Tool(
+        name="list_own_files",
+        description=(
+            "List what Ranger has written into its own folders: drafts it is holding, "
+            "notices in the inbox, or what it remembers. Use this when the operator "
+            "refers to something you wrote earlier and you need to find which file it "
+            "is, before reading it. Returns names, dates and one line each, never the "
+            "contents."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "folder": {
+                    "type": "string",
+                    "enum": list(FOLDERS),
+                    "description": (
+                        "drafts for held drafts, inbox for notices waiting to be seen, "
+                        "memory for what Ranger remembers about the operator."
+                    ),
+                },
+            },
+            "required": ["folder"],
+        },
+        handler=handler,
+    )
+
+
+def _read_own_file(config: Config, vault: Vault) -> Tool:
+    """Open one of Ranger's own files, in full.
+
+    Fenced as untrusted content on the way back in. Ranger wrote the draft, but
+    a draft may quote a customer email the operator pasted, and a notice
+    summarises a CRM export. Having written the file earlier does not make its
+    contents trusted when read back: trust attaches to the path the bytes
+    travelled, and write-then-read-back is exactly how a fence gets walked
+    around.
+    """
+
+    async def handler(payload: dict[str, Any]) -> ToolResult:
+        from .ownfiles import UnknownFolder, read
+
+        folder = str(payload.get("folder", "drafts")).strip().lower()
+        name = str(payload.get("name", "")).strip()
+        if not name:
+            return ToolResult(False, "Which file? Use list_own_files to see them.",
+                              "no name given")
+        try:
+            found, text, candidates = read(vault, config, folder, name)
+        except UnknownFolder as exc:
+            return ToolResult(False, str(exc), "unknown folder")
+        except Exception as exc:
+            return ToolResult(False, f"{type(exc).__name__}: {exc}", "could not read")
+
+        if found is None:
+            if candidates:
+                names = "\n".join(f"  {item.name}" for item in candidates[:8])
+                return ToolResult(
+                    ok=True,
+                    content=(
+                        f"{name!r} matches {len(candidates)} files in Ranger/{folder}. "
+                        f"Ask which one rather than picking:\n{names}"
+                    ),
+                    summary=f"{len(candidates)} match {name!r}",
+                )
+            return ToolResult(
+                ok=True,
+                content=(
+                    f"Nothing in Ranger/{folder} matches {name!r}. Say so rather than "
+                    "guessing at what they meant."
+                ),
+                summary="no match",
+            )
+
+        findings = scan(text)
+        return ToolResult(
+            ok=True,
+            content=fence(found.relative, text, findings=findings),
+            summary=f"read {found.name}",
+        )
+
+    return Tool(
+        name="read_own_file",
+        description=(
+            "Read one of Ranger's own files in full: a held draft, an inbox notice, or "
+            "the memory file. Use this when the operator asks you to do something with "
+            "a draft you wrote, such as filing it into an account, or when they ask "
+            "what a notice said. The name can be partial: 'Telly' finds the Telly "
+            "draft. Reading a draft does not send or delete it."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "folder": {
+                    "type": "string",
+                    "enum": list(FOLDERS),
+                    "description": "drafts, inbox, or memory.",
+                },
+                "name": {
+                    "type": "string",
+                    "description": (
+                        "File name or part of the title, as the operator said it."
+                    ),
+                },
+            },
+            "required": ["folder", "name"],
+        },
+        handler=handler,
+    )
+
+
 def build_registry(
     config: Config, vault: Vault, today: Callable[[], date] | None = None
 ) -> ToolRegistry:
@@ -654,5 +810,7 @@ def build_registry(
             _remember(config, vault),
             _forget(config, vault),
             _file_to_account(config, vault, today),
+            _list_own_files(config, vault),
+            _read_own_file(config, vault),
         ]
     )

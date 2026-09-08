@@ -273,3 +273,39 @@ hand, which is how a gigabyte went unnoticed the first time.
 Delete the vault's `.git` folder and run `ranger snapshot init` again. The
 history is local, has no remote, and is disposable by design: nothing is lost
 except the undo, and the undo starts again from the next commit.
+
+## What Ranger can read back
+
+Every write path should have a read path. It has not always: `draft_and_hold`
+shipped without any way to open a draft again, and `parse_note` was scoped to
+`## Activity` while `scan_note` scanned the whole note. Both were the same
+shape, so this table is kept current.
+
+| written | by | read back by |
+| --- | --- | --- |
+| `Accounts/*.md` (append) | `file_to_account` | `account_recall` |
+| `Ranger/drafts/` | `draft_and_hold` | `list_own_files`, `read_own_file` |
+| `Ranger/memory/facts.md` | `remember`, `forget` | `read_own_file`, and the prompt every turn |
+| `Ranger/inbox/` | the heartbeat | `list_own_files`, `read_own_file` |
+| `Ranger/log/<date>.md` | `AuditLog.write` | **nothing** — build-plan item K |
+| `Ranger/quiet-seen.md` | the brief | **nothing** — read by the brief, not by the model |
+| `Ranger/dormant.md` | `ranger dormant` | **nothing** — the model cannot list what was set aside |
+| `Ranger/aliases.md` | `ranger alias add` | **nothing** — applied at read time, never listed |
+| `Ranger/paused.md` | `ranger pause` | **nothing** — the model cannot see the kill switch |
+| `History/` | nothing yet | **nothing** — neither half exists |
+
+The five write-only entries are known and none is a hole in the same sense as
+drafts was: four are Ranger's own bookkeeping that the code consults directly,
+and `History/` has no write path yet either. Reading the audit log is build-plan
+item K and is a decision on its own, not a gap to close in passing.
+
+### Filing a draft
+
+"File the Telly draft into the account" is `read_own_file` then
+`file_to_account`. Two existing tools, no new capability, no new path into the
+core.
+
+**The draft is not deleted afterwards.** Delete-never holds here as everywhere.
+Whether a filed draft should be marked as filed is a separate decision and
+nobody has made it.
+

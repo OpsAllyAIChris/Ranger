@@ -376,6 +376,25 @@ rebuild, and `ranger snapshot` giving the vault a local git history, because
 read-only `Accounts/` *was* the undo. Delete-never did not change and neither
 did `Knowledge/`.
 
+**Ranger reads back what it writes.** It could write a draft and could not
+read one: asked to file the Telly draft into an account it correctly said it
+had no way to pull the text. `list_own_files` and `read_own_file` cover
+`Ranger/drafts`, `Ranger/inbox` and `Ranger/memory`, read only and ungated,
+because reading its own output is not a consequential act. Two parameterised
+tools rather than six named ones, since every description is in the prompt on
+every turn and the folder is an enum.
+
+**What comes back is fenced as untrusted content, and that is the point.**
+Ranger wrote the draft, but a draft quotes what the operator pasted and a
+notice summarises a CRM export. Trust attaches to the path the bytes travelled,
+never to whose hand last touched the file — write-then-read-back is exactly how
+a fence gets walked around.
+
+**When a write path lands, wire the read path in the same change.** This was
+the third instance: `parse_note` scoped activities to `## Activity` while
+`scan_note` scanned the whole note, and drafts could be written and not read.
+The audit of what remains write-only is in `docs/vault-conventions.md`.
+
 **The vault snapshot commits an allow list, not an exclusion list.** The first
 version excluded `Ranger/log/` because the build plan named it, and nothing
 else, because nothing else was named. The first real `snapshot init` committed

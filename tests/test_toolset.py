@@ -35,13 +35,15 @@ async def run(registry, name, **payload):
 
 
 def test_the_registry_holds_exactly_the_intended_tools(registry):
-    """Tier 2's three, Tier 4's two, and the account write path's one. A
-    seventh is a scope decision."""
+    """Tier 2's three, Tier 4's two, the account write path's one, and the two
+    that read Ranger's own folders back. A ninth is a scope decision."""
     assert registry.names() == [
         "account_recall",
         "draft_and_hold",
         "file_to_account",
         "forget",
+        "list_own_files",
+        "read_own_file",
         "remember",
         "what_went_quiet",
     ]
