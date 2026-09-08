@@ -116,6 +116,7 @@ def _read_registry() -> Iterable[tuple[str, bool, int]]:
         )
 
 
+
 def _read_group(store, group: str, *, packaged: bool):
     import winreg
 
@@ -162,6 +163,18 @@ def consumers(read: Callable[[], Iterable[tuple[str, bool, int]]] | None = None)
     found: list[Consumer] = []
     for name, packaged, stop in reader():
         found.append(Consumer(name=name, packaged=packaged, in_use=stop == 0))
+
+    if not found:
+        # Zero applications is not "nobody is using the microphone". On a real
+        # machine the consent store always has entries, so an empty result is
+        # far likelier to mean the enumeration is looking in the wrong place,
+        # and the symptom of that would be a check that silently always says
+        # yes. Enforced here rather than in the registry reader so it holds for
+        # every reader, including the ones in tests.
+        raise Unreadable(
+            "the consent store listed no applications at all, which means the "
+            "check is not reading what it thinks it is"
+        )
     return found
 
 
@@ -201,6 +214,36 @@ class Verdict:
         if self.allowed:
             return "nothing else is using the microphone"
         return "the microphone is in use by " + ", ".join(self.blockers)
+
+
+def describe(read: Callable[[], Iterable[tuple[str, bool, int]]] | None = None) -> list[str]:
+    """What the consent store actually says, for the operator to check.
+
+    The whole check is unverifiable from anywhere without a Windows registry,
+    so this exists to make it verifiable in one command on the machine that
+    has one: open Teams, run `ranger mic`, and see whether Ranger sees what the
+    taskbar sees. A check nobody can confirm is a check nobody should trust.
+    """
+    try:
+        found = consumers(read)
+    except Unreadable as exc:
+        return [f"the microphone check could not run: {exc}"]
+
+    if not found:
+        return ["the consent store listed no applications at all"]
+
+    lines = [f"{len(found)} applications have asked for the microphone at some point"]
+    live = [c for c in found if c.in_use]
+    if live:
+        lines.append("")
+        lines.append("using it right now:")
+        lines += [
+            f"  {c.name}{'   (Ranger itself)' if c.is_ours else ''}"
+            for c in sorted(live, key=lambda c: c.name.lower())
+        ]
+    else:
+        lines.append("none of them is using it right now")
+    return lines
 
 
 def may_arm(

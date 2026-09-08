@@ -1167,6 +1167,29 @@ def cmd_schedule(config: Config, args: Any) -> int:
     return 0
 
 
+def cmd_mic(config: Config, args: Any) -> int:
+    """What the microphone check sees. The way to confirm it works at all.
+
+    Hands free refuses to arm while another application holds the microphone,
+    and that check reads a Windows registry key which cannot be exercised
+    anywhere without one. This makes it checkable in one command: open a call,
+    run this, and see whether Ranger sees what the taskbar sees.
+    """
+    from .micuse import describe, may_arm
+
+    paint = _colour(sys.stdout.isatty())
+    for line in describe():
+        print(f"  {line}" if line else "")
+    print()
+
+    verdict = may_arm()
+    if verdict.allowed:
+        print(paint("  hands free could arm: " + verdict.reason, TEAL))
+    else:
+        print(paint("  hands free would refuse: " + verdict.reason, YELLOW))
+    return 0
+
+
 def cmd_dormant(config: Config, args: Any) -> int:
     """Answer the morning brief's one decision, and see the answers so far."""
     from .brief import BriefStore
@@ -1693,6 +1716,10 @@ def main(argv: list[str] | None = None) -> int:
                 help="run through pythonw so no console window appears",
             )
 
+    sub.add_parser(
+        "mic", help="what the microphone check sees, and whether hands free could arm"
+    )
+
     dormant = sub.add_parser(
         "dormant", help="stop surfacing an account in the morning brief, or list those set aside"
     )
@@ -1749,6 +1776,8 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_keyterms(config, args)
     if args.command == "schedule":
         return cmd_schedule(config, args)
+    if args.command == "mic":
+        return cmd_mic(config, args)
     if args.command == "dormant":
         return cmd_dormant(config, args)
     if args.command == "accounts":

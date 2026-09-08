@@ -80,6 +80,23 @@ says so. A check that cannot run has found nothing, not found nobody. That also
 means hands free does not work on anything but Windows, because there is no
 consent store to read anywhere else.
 
+**Check that it works before trusting it.**
+
+```powershell
+ranger mic          # what the consent store says, and whether hands free could arm
+```
+
+Open a call, run it again, and see whether Ranger sees what your taskbar sees.
+The whole check reads a Windows registry key, which cannot be exercised
+anywhere without one, so this exists to make it confirmable in one command. A
+check nobody can confirm is a check nobody should trust.
+
+If it lists no applications at all, that is treated as **not knowing** rather
+than as nobody using the microphone, and hands free refuses. On a real machine
+the store always has entries, so an empty result means the enumeration is
+looking in the wrong place, and the symptom of accepting it would be a check
+that silently always says yes.
+
 It runs three times: before arming, on a timer while armed, and again whenever
 the phrase fires. A check only at arming misses a call that starts afterwards.
 A check only at fire time leaves the microphone held for a whole call that

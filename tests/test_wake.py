@@ -9,6 +9,7 @@ what needs proving is the rules, and the rules are all in the state machine.
 from __future__ import annotations
 
 import math
+import os
 import struct
 
 import pytest
@@ -349,7 +350,15 @@ def test_a_check_that_cannot_run_refuses_rather_than_allows():
     assert "could not run" in verdict.reason
 
 
+@pytest.mark.skipif(os.name == "nt", reason="there is a registry here, so it is read")
 def test_it_refuses_where_there_is_no_registry_to_read_at_all():
+    """The path taken anywhere that is not Windows.
+
+    Marked, because it asserts the absence of a consent store and on Windows
+    there is one. An earlier version of this test asserted it unconditionally
+    and so tested the sandbox's platform rather than the operator's, which is
+    exactly backwards for code that exists for Windows.
+    """
     from ranger.micuse import may_arm
 
     verdict = may_arm()
@@ -357,12 +366,59 @@ def test_it_refuses_where_there_is_no_registry_to_read_at_all():
     assert "not Windows" in verdict.reason
 
 
-def test_an_empty_store_is_a_real_answer_and_a_missing_one_is_not():
-    from ranger.micuse import Unreadable, consumers, may_arm
+def test_a_store_that_opens_and_lists_nothing_is_not_an_answer():
+    """Zero applications is much more likely to mean the enumeration is
+    looking in the wrong place than that nothing ever asked for the
+    microphone, and the difference decides whether the check works at all."""
+    from ranger.micuse import Unreadable, may_arm
 
-    assert may_arm(lambda: []).allowed, "opened, nothing in use"
-    with pytest.raises(Unreadable):
-        consumers()
+    def empty():
+        return iter(())
+
+    assert not may_arm(empty).allowed
+    assert "not reading what it thinks" in may_arm(empty).reason
+
+
+def test_a_store_with_entries_and_none_in_use_is_a_real_yes():
+    from ranger.micuse import may_arm
+
+    assert may_arm(lambda: [("Teams.exe", False, 133_000)]).allowed
+
+
+@pytest.mark.skipif(os.name != "nt", reason="reads a real Windows registry")
+def test_the_real_registry_either_says_something_or_says_it_cannot():
+    """On Windows this must never quietly return "nobody".
+
+    The failure that matters is an enumeration that silently yields nothing:
+    every call then looks like a clear microphone, and hands free arms during
+    a customer call. There is no third outcome.
+    """
+    from ranger.micuse import Unreadable, consumers
+
+    try:
+        found = consumers()
+    except Unreadable:
+        return          # said so, which is the safe half
+    assert found, "opened the store and found nothing, which cannot be right"
+
+
+def test_the_check_can_be_shown_to_the_operator():
+    """`ranger mic`. A check nobody can confirm is a check nobody should trust."""
+    from ranger.micuse import describe
+
+    lines = describe(lambda: [("chrome.exe", False, 0), ("Teams.exe", False, 99)])
+    text = "\n".join(lines)
+    assert "chrome.exe" in text and "using it right now" in text
+    assert "Teams.exe" not in text.split("using it right now")[1]
+
+
+def test_what_it_shows_says_when_it_could_not_read():
+    from ranger.micuse import Unreadable, describe
+
+    def broken():
+        raise Unreadable("the key is not there")
+
+    assert "could not run" in "\n".join(describe(broken))
 
 
 def test_hands_free_will_not_arm_when_the_check_failed():
