@@ -319,13 +319,32 @@ def cmd_doctor(config: Config) -> int:
         print(f"  ok       {len(_aliases.pairs)} accounts folded together by aliases.md")
 
     if config.wake.enabled:
-        from .wake import available
+        from .wake import available, missing_models
 
         ready, why = available()
+        gaps: list[str] = []
         if ready:
+            try:
+                gaps = missing_models(config.wake.model)
+            except Exception as exc:  # a broken install, not a missing one
+                ready, why = False, str(exc)
+
+        if ready and not gaps:
             print(f"  ok       hands free is on, listening for {config.wake.phrase!r}")
             print(f"           model {config.wake.model}, threshold {config.wake.threshold}, "
                   f"auto off after {config.wake.idle_disarm_minutes:.0f} minutes")
+        elif ready:
+            # The point the operator asked for: say it here, when hands free is
+            # switched on, rather than letting them arm something with nothing
+            # to listen with. openWakeWord ships no models in the wheel.
+            problems += 1
+            print("  problem  hands free cannot work: no model is installed")
+            for gap in gaps:
+                print(f"           missing {gap}")
+            if any(not Path(gap).suffix for gap in gaps):
+                print("           Run: ranger wake install")
+            else:
+                print("           Train it: see scripts/train_wake_word.py")
         else:
             # Not a problem, by design. It is an optional extra and the rest of
             # Ranger is unaffected by it not being there.
@@ -1267,6 +1286,78 @@ def cmd_alias(config: Config, args: Any) -> int:
     return 0
 
 
+def cmd_wake(config: Config, args: Any) -> int:
+    """Install the hotword models, or say what is missing.
+
+    openWakeWord's wheel contains no models: not the hotwords, and not the two
+    feature models every hotword runs on. They come from the project's own
+    GitHub release on first use, and that is a network fetch of a binary that
+    then listens to a room, so it is a command the operator runs rather than
+    something that happens quietly the first time they arm.
+    """
+    from .wake import (
+        MODEL_SOURCE,
+        PUBLISHED,
+        WakeUnavailable,
+        available,
+        find_model,
+        missing_models,
+        models_folder,
+        install_models,
+    )
+
+    paint = _colour(sys.stdout.isatty())
+
+    ready, why = available()
+    if not ready:
+        print(paint(f"  {why}", YELLOW))
+        return 1
+
+    action = getattr(args, "wake_command", None) or "show"
+    name = getattr(args, "model", None) or config.wake.model
+
+    if action == "install":
+        if Path(name).suffix:
+            print(paint(f"  wake.model is {name}, which is a file you trained.", YELLOW))
+            print("  Nothing to download for it. Installing the shared feature models only.")
+            name = "hey_jarvis"
+        try:
+            for path in install_models(name, log=lambda line: print(f"  {line}")):
+                print(paint(f"  ok  {path.name}  {path.stat().st_size // 1024} KB", TEAL))
+        except WakeUnavailable as exc:
+            print(paint(f"  {exc}", YELLOW))
+            return 1
+        print()
+        print(f"  Set wake.model = \"{name}\" and wake.enabled = true, then 'ranger doctor'.")
+        return 0
+
+    print(f"  models live in {models_folder()}")
+    print(f"  they come from {MODEL_SOURCE}")
+    print()
+    try:
+        gaps = missing_models(name)
+    except WakeUnavailable as exc:
+        print(paint(f"  {exc}", YELLOW))
+        return 1
+
+    found = find_model(name) if not Path(name).suffix else Path(name)
+    if not gaps:
+        print(paint(f"  ok  hands free has everything it needs for {config.wake.phrase!r}", TEAL))
+        print(f"      {found}")
+        return 0
+
+    print(paint("  hands free cannot work: no model is installed", YELLOW))
+    for gap in gaps:
+        print(f"      missing {gap}")
+    print()
+    if name in PUBLISHED:
+        print("  Run: ranger wake install")
+    else:
+        print(f"  {name!r} is not one openWakeWord publishes ({', '.join(PUBLISHED)}),")
+        print("  so it has to be trained: see scripts/train_wake_word.py")
+    return 1
+
+
 def cmd_mic(config: Config, args: Any) -> int:
     """What the microphone check sees. The way to confirm it works at all.
 
@@ -1826,6 +1917,18 @@ def main(argv: list[str] | None = None) -> int:
     drop = alias_sub.add_parser("remove", help="stop folding a name in")
     drop.add_argument("variant", nargs="+", help="the name to separate again")
 
+    wake = sub.add_parser(
+        "wake", help="the hands free hotword models: what is installed, and installing it"
+    )
+    wake_sub = wake.add_subparsers(dest="wake_command")
+    wake_sub.add_parser("show", help="what is installed and where it came from")
+    wake_install = wake_sub.add_parser(
+        "install", help="download the hotword models from the openWakeWord project"
+    )
+    wake_install.add_argument(
+        "--model", help="which published hotword. Defaults to wake.model in config"
+    )
+
     sub.add_parser(
         "mic", help="what the microphone check sees, and whether hands free could arm"
     )
@@ -1888,6 +1991,8 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_schedule(config, args)
     if args.command == "alias":
         return cmd_alias(config, args)
+    if args.command == "wake":
+        return cmd_wake(config, args)
     if args.command == "mic":
         return cmd_mic(config, args)
     if args.command == "dormant":

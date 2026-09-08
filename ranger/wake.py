@@ -96,6 +96,187 @@ def available() -> tuple[bool, str]:
     return True, "openwakeword is installed"
 
 
+# -- the models -------------------------------------------------------------
+#
+# The wheel ships no models at all. Not the hotwords, and not the two feature
+# models every hotword runs on top of: `pip install openwakeword` leaves no
+# `resources/models` directory behind, which is why enabling hands free after a
+# clean install says there is no model rather than misbehaving. They are
+# downloaded on first use from the openWakeWord project's own GitHub release
+# assets, and `ranger wake install` is that download made explicit rather than
+# something that happens quietly the first time the microphone opens.
+
+#: Where the files come from. dscripka/openWakeWord is the project itself, not
+#: a mirror and not a model hub, and this is written down because a wake word
+#: is a network fetch of a binary that then listens to a room.
+MODEL_SOURCE = "https://github.com/dscripka/openWakeWord/releases (v0.5.1 assets)"
+
+#: Every hotword runs on these two. They are shared, downloaded once, and
+#: their absence is the failure that looks like a broken hotword.
+FEATURE_MODELS = ("melspectrogram.onnx", "embedding_model.onnx")
+
+#: The names openWakeWord publishes. Anything else has to be trained.
+PUBLISHED = ("alexa", "hey_mycroft", "hey_jarvis", "hey_rhasspy", "timer", "weather")
+
+#: A download that never reached GitHub still writes a file: openWakeWord's
+#: downloader streams the response body whatever the status code was, so a
+#: proxy error page lands on disk named like a model. Every real one is over a
+#: megabyte, so anything this small is that error page.
+SMALLEST_PLAUSIBLE_MODEL = 100_000
+
+
+def models_folder() -> Path:
+    """Where openWakeWord looks for models, which is inside its own package.
+
+    Not a Ranger folder and deliberately not configurable. The two feature
+    models are found by a hardcoded path inside openWakeWord's preprocessor,
+    so a hotword downloaded anywhere else would load and then fail on the
+    first frame.
+    """
+    ok, why = available()
+    if not ok:
+        raise WakeUnavailable(why)
+
+    import openwakeword
+
+    return Path(openwakeword.__file__).parent / "resources" / "models"
+
+
+def find_model(name: str, folder: Path | None = None) -> Path | None:
+    """The file for a published name, or None.
+
+    The published names are not the file names. `hey_jarvis` is released as
+    `hey_jarvis_v0.1.onnx`, so an exact match is not enough and looking for one
+    is why a correct download still reported no model. Highest version wins.
+
+    ONNX only. Ranger's extra installs onnxruntime and not tflite_runtime, and
+    handing a `.tflite` to a model built for ONNX raises deep inside
+    openWakeWord rather than here.
+    """
+    folder = folder if folder is not None else models_folder()
+    if not folder.is_dir():
+        return None
+
+    exact = folder / f"{name}.onnx"
+    if exact.is_file():
+        return exact
+
+    versioned = sorted(
+        (path for path in folder.glob(f"{name}_v*.onnx") if path.is_file()),
+        key=_version_of,
+    )
+    return versioned[-1] if versioned else None
+
+
+def _version_of(path: Path) -> tuple[int, ...]:
+    """0.10 is after 0.9, which sorting the file names would get backwards."""
+    tail = path.stem.rsplit("_v", 1)[-1]
+    try:
+        return tuple(int(part) for part in tail.split("."))
+    except ValueError:
+        return (-1,)
+
+
+def resolve_model(setting: str, folder: Path | None = None) -> Path:
+    """The path config's `wake.model` means, or WakeUnavailable saying why not.
+
+    A setting with a suffix is a file the operator trained and placed; anything
+    else is a published name to look up.
+    """
+    named = Path(setting)
+    if named.suffix:
+        if named.is_file():
+            return named
+        raise WakeUnavailable(
+            f"no wake word model at {named}. Train one with scripts/train_wake_word.py, "
+            f"or set wake.model to one of: {', '.join(PUBLISHED)}"
+        )
+
+    found = find_model(setting, folder)
+    if found is not None:
+        return found
+
+    if setting in PUBLISHED:
+        raise WakeUnavailable(
+            f"the {setting!r} model is not downloaded. openWakeWord ships no models in "
+            "the wheel at all. Run: ranger wake install"
+        )
+    raise WakeUnavailable(
+        f"{setting!r} is not a model openWakeWord publishes and not a path to a file. "
+        "Train it with scripts/train_wake_word.py and point wake.model at the .onnx, "
+        f"or set wake.model to one of: {', '.join(PUBLISHED)}"
+    )
+
+
+def missing_models(setting: str, folder: Path | None = None) -> list[str]:
+    """What hands free needs and has not got, most fundamental first.
+
+    Answers `ranger doctor` at the point hands free is switched on, rather than
+    letting the first arm find out. Returns [] when everything is present, and
+    raises only if openWakeWord itself is missing, which is a different answer.
+    """
+    folder = folder if folder is not None else models_folder()
+    gaps = [name for name in FEATURE_MODELS if not (folder / name).is_file()]
+
+    named = Path(setting)
+    if named.suffix:
+        if not named.is_file():
+            gaps.append(str(named))
+    elif find_model(setting, folder) is None:
+        gaps.append(f"{setting} (openWakeWord's own)")
+    return gaps
+
+
+def install_models(
+    name: str = "hey_jarvis",
+    folder: Path | None = None,
+    log: Callable[[str], None] = print,
+) -> list[Path]:
+    """Download the feature models and one hotword. Idempotent.
+
+    openWakeWord's downloader skips what already exists and reports success
+    whatever the server said, so what is on disk afterwards is checked here
+    rather than trusted.
+    """
+    if name not in PUBLISHED:
+        raise WakeUnavailable(
+            f"{name!r} is not a model openWakeWord publishes. Published: "
+            f"{', '.join(PUBLISHED)}. Anything else is trained, not downloaded: "
+            "see scripts/train_wake_word.py"
+        )
+
+    folder = folder if folder is not None else models_folder()
+    folder.mkdir(parents=True, exist_ok=True)
+
+    log(f"downloading from {MODEL_SOURCE}")
+    log(f"into {folder}")
+
+    from openwakeword.utils import download_models
+
+    download_models([name], target_directory=str(folder))
+
+    wanted = [folder / feature for feature in FEATURE_MODELS]
+    hotword = find_model(name, folder)
+    if hotword is None:
+        raise WakeUnavailable(
+            f"the download finished but there is no {name} model in {folder}. "
+            "Check the network, then run it again"
+        )
+    wanted.append(hotword)
+
+    for path in wanted:
+        if not path.is_file():
+            raise WakeUnavailable(f"{path.name} did not download into {folder}")
+        size = path.stat().st_size
+        if size < SMALLEST_PLAUSIBLE_MODEL:
+            raise WakeUnavailable(
+                f"{path.name} downloaded as {size} bytes, which is too small to be a "
+                "model. That is usually a proxy or a network error page saved under the "
+                f"model's name. Delete it from {folder} and run this again"
+            )
+    return wanted
+
+
 def rms(frame: bytes) -> float:
     """Loudness of one frame of 16 bit little endian mono samples."""
     if len(frame) < 2:
@@ -203,9 +384,25 @@ class Detector:
         path = Path(model_path)
         if not path.is_file():
             raise WakeUnavailable(
-                f"no wake word model at {path}. Train one with "
-                "scripts/train_wake_word.py, or point wake.model at a bundled one"
+                f"no wake word model at {path}. Run: ranger wake install, or train one "
+                "with scripts/train_wake_word.py"
             )
+        if path.suffix != ".onnx":
+            raise WakeUnavailable(
+                f"{path.name} is not an ONNX model. Ranger's wake extra installs "
+                "onnxruntime and not tflite_runtime, so a .tflite fails several layers "
+                "down inside openWakeWord rather than here"
+            )
+
+        for feature in FEATURE_MODELS:
+            # openWakeWord's preprocessor finds these by a path hardcoded inside
+            # its own package, and a missing one raises from onnxruntime with no
+            # mention of which file. Say it here instead.
+            if not (models_folder() / feature).is_file():
+                raise WakeUnavailable(
+                    f"{feature} is missing, and every hotword runs on top of it. "
+                    "Run: ranger wake install"
+                )
 
         from openwakeword.model import Model
 
@@ -386,10 +583,7 @@ class Hotword:
 def build_hotword(config: Any, *, check_microphone: Callable[[], Any] | None = None) -> "Hotword":
     """A Hotword wired from config, or WakeUnavailable saying why not."""
     wake = config.wake
-    model = Path(wake.model)
-    if not model.suffix:
-        # A name openWakeWord ships rather than a path. Its own loader finds it.
-        model = _bundled(wake.model)
+    model = resolve_model(wake.model)
 
     return Hotword(
         detector=Detector(model, wake.threshold),
@@ -400,25 +594,6 @@ def build_hotword(config: Any, *, check_microphone: Callable[[], Any] | None = N
         preroll_seconds=wake.preroll_seconds,
         idle_disarm_seconds=wake.idle_disarm_seconds,
         check_microphone=check_microphone,
-    )
-
-
-def _bundled(name: str) -> Path:
-    """Where openWakeWord keeps the models it ships with."""
-    ok, why = available()
-    if not ok:
-        raise WakeUnavailable(why)
-
-    import openwakeword
-
-    folder = Path(openwakeword.__file__).parent / "resources" / "models"
-    for suffix in (".onnx", ".tflite"):
-        candidate = folder / f"{name}{suffix}"
-        if candidate.is_file():
-            return candidate
-    raise WakeUnavailable(
-        f"no bundled model called {name!r} in {folder}. openWakeWord ships a small "
-        "fixed set, and anything else has to be trained: see scripts/train_wake_word.py"
     )
 
 

@@ -10,6 +10,8 @@ remembered, so a restart always comes back off.
 ranger stop
 pip install -e ".[wake]"
 ranger doctor          # says whether it imported
+ranger wake install    # downloads the models. The wheel has none
+ranger wake show       # what is installed, and where it came from
 ```
 
 **`pip install "ranger[wake]"` does not work**, and worse, it does not fail. It
@@ -23,6 +25,60 @@ versions arrive late, and nothing else in Ranger may stop working because a
 wake word would not install. If it will not install, hands free simply is not
 offered and everything else is unaffected.
 
+## The models, and where they come from
+
+**openWakeWord's wheel contains no models.** Not the six published phrases, and
+not the two feature models every phrase runs on top of. `pip install` leaves no
+`resources/models` directory behind at all. The first version of this shipped
+without knowing that, so hands free armed with nothing to listen with, which is
+exactly the failure the whole design is meant to prevent.
+
+`ranger wake install` is that download made explicit. It is a network fetch of
+a binary that then listens to a room, so it is a command that is run rather
+than something that happens quietly the first time the microphone opens.
+
+Everything comes from **the openWakeWord project's own GitHub release assets**:
+
+```
+https://github.com/dscripka/openWakeWord/releases/download/v0.5.1/...
+```
+
+`dscripka` is openWakeWord itself. Not a mirror, not a model hub, not a third
+party. Three files land, about 1.2 MB each:
+
+| file | what it is |
+| --- | --- |
+| `melspectrogram.onnx` | turns audio into a spectrogram. Shared |
+| `embedding_model.onnx` | Google's speech embedding. Shared |
+| `hey_jarvis_v0.1.onnx` | the phrase itself |
+
+The first two are the ones worth knowing about. Every hotword runs on them, and
+their absence looks like a broken hotword rather than a missing file, so
+`Detector` names them before openWakeWord gets a chance to raise from four
+layers down.
+
+They install **inside the openWakeWord package**, not next to the vault. That
+is not a choice: openWakeWord's preprocessor finds the two feature models by a
+path hardcoded in its own source, so a hotword downloaded anywhere else would
+load and then fail on the first frame. The consequence is that **rebuilding the
+virtual environment loses them** and `ranger wake install` has to be run again.
+It is idempotent, so running it when nothing is missing costs nothing.
+
+Two smaller things that cost an afternoon each and are worth writing down:
+
+- **A published name is not a file name.** `hey_jarvis` is released as
+  `hey_jarvis_v0.1.onnx`. Looking for `hey_jarvis.onnx` finds nothing even
+  after a correct download.
+- **A failed download still writes a file.** openWakeWord streams the response
+  body whatever the status code was, so a proxy error page lands on disk under
+  the model's name and the download reports success. `ranger wake install`
+  checks the size afterwards rather than trusting it.
+
+`ranger doctor` reports a missing model as a **problem**, not a todo, whenever
+`wake.enabled` is true. Not installing the extra at all is the todo; installing
+it, switching hands free on and having nothing to listen with is the one that
+looks like it works right up until it is needed.
+
 ## The phrase
 
 openWakeWord ships a small fixed set of phrases. **"hey ranger" is not one of
@@ -33,8 +89,42 @@ mechanism. Be careful what you conclude from it: `hey jarvis` is phonetically
 rare and "hey ranger" is two ordinary English words, so anything observed with
 jarvis is flattering.
 
-To train the real one, see `scripts/train_wake_word.py`. It writes an `.onnx`
-you copy back and point `wake.model` at.
+### Training "hey ranger"
+
+`scripts/train_wake_word.py` writes the training config. It does not train
+anything: openWakeWord's own trainer does, and it needs a CUDA GPU, about an
+hour, and three things that are not pip installable — a clone of the piper
+sample generator, a set of room impulse responses, and hours of background
+audio. Colab is what openWakeWord's own documentation assumes.
+
+```powershell
+python scripts/train_wake_word.py --phrase "hey ranger" --out hey_ranger.yaml
+```
+
+Then, on a Colab notebook with a T4:
+
+```
+!git clone https://github.com/rhasspy/piper-sample-generator
+!pip install openwakeword piper-phonemize webrtcvad mutagen \
+    torchinfo torchmetrics speechbrain audiomentations
+# room impulse responses and background audio, per openWakeWord's notebook
+!python -m openwakeword.train --training_config hey_ranger.yaml \
+    --generate_clips --augment_clips --train_model
+```
+
+It writes `hey_ranger.onnx`. Copy it back, put it next to the vault, and point
+`wake.model` at the full path. The two feature models still come from
+`ranger wake install`: a trained hotword replaces the published phrase, not the
+models underneath it.
+
+The generated config carries a list of adversarial negatives — "hey stranger",
+"hey danger", "range rover" — which is the difference between a model that
+fires on "hey ranger" and one that fires on anything with the same shape. It
+also carries `target_false_positives_per_hour`, which is the dial: lower is
+quieter and misses more.
+
+Training is synthetic. No recording of your own voice is involved and none is
+needed.
 
 ## What happens when it fires
 

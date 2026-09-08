@@ -14,11 +14,18 @@ import struct
 
 import pytest
 
+from pathlib import Path
+
 from ranger.micuse import Verdict, may_arm, others_using, unmangle
 from ranger.wake import (
     FRAME_SAMPLES,
     SAMPLE_RATE,
     Fire,
+    WakeUnavailable,
+    find_model,
+    install_models,
+    missing_models,
+    resolve_model,
     Hotword,
     Outcome,
     Ring,
@@ -565,3 +572,173 @@ def test_the_click_path_stands_down_while_python_owns_the_microphone():
     )
     listening = shell.split("async function startListening()")[1].split("\n  }")[0]
     assert "handsFree.armed" in listening
+
+
+# -- the models --------------------------------------------------------------
+#
+# openWakeWord's wheel contains no models at all: not the six published
+# hotwords, and not the two feature models every hotword runs on top of. They
+# are downloaded from the project's own GitHub release on first use. That is
+# what made hands free arm with nothing to listen with, so the rules for
+# finding, reporting and installing them are exercised against a folder on disk
+# rather than against whatever the machine happens to have.
+
+
+def _model_file(folder, name: str, size: int = 200_000) -> None:
+    (folder / name).write_bytes(b"\0" * size)
+
+
+def test_a_published_name_is_not_the_file_name(tmp_path):
+    """hey_jarvis is released as hey_jarvis_v0.1.onnx.
+
+    Looking for an exact match is why a correct download still reported no
+    model. This is the whole bug, in one assertion.
+    """
+    _model_file(tmp_path, "hey_jarvis_v0.1.onnx")
+
+    assert find_model("hey_jarvis", tmp_path) == tmp_path / "hey_jarvis_v0.1.onnx"
+
+
+def test_the_highest_version_wins(tmp_path):
+    for version in ("v0.1", "v0.9", "v0.10"):
+        _model_file(tmp_path, f"hey_jarvis_{version}.onnx")
+
+    # Sorting the file names would put 0.9 last, which is the wrong model.
+    assert find_model("hey_jarvis", tmp_path).name == "hey_jarvis_v0.10.onnx"
+
+
+def test_an_exact_name_is_preferred_to_a_versioned_one(tmp_path):
+    _model_file(tmp_path, "hey_jarvis.onnx")
+    _model_file(tmp_path, "hey_jarvis_v0.1.onnx")
+
+    assert find_model("hey_jarvis", tmp_path).name == "hey_jarvis.onnx"
+
+
+def test_a_tflite_model_is_not_found(tmp_path):
+    """The wake extra installs onnxruntime and not tflite_runtime.
+
+    Returning the .tflite would load and then raise several layers down inside
+    openWakeWord, naming neither the file nor the reason.
+    """
+    _model_file(tmp_path, "hey_jarvis_v0.1.tflite")
+
+    assert find_model("hey_jarvis", tmp_path) is None
+
+
+def test_nothing_at_all_is_not_a_crash(tmp_path):
+    assert find_model("hey_jarvis", tmp_path / "never-created") is None
+
+
+def test_the_feature_models_count_as_missing(tmp_path):
+    """Every hotword runs on these two, and their absence looks like a broken
+    hotword rather than a missing file."""
+    _model_file(tmp_path, "hey_jarvis_v0.1.onnx")
+
+    assert missing_models("hey_jarvis", tmp_path) == [
+        "melspectrogram.onnx",
+        "embedding_model.onnx",
+    ]
+
+
+def test_a_complete_install_is_missing_nothing(tmp_path):
+    for name in ("melspectrogram.onnx", "embedding_model.onnx", "hey_jarvis_v0.1.onnx"):
+        _model_file(tmp_path, name)
+
+    assert missing_models("hey_jarvis", tmp_path) == []
+
+
+def test_a_trained_model_is_reported_by_its_path(tmp_path):
+    """A setting with a suffix is a file the operator trained and placed.
+
+    It is not something 'ranger wake install' can fetch, so it has to be named
+    as a path rather than as a name to download.
+    """
+    for name in ("melspectrogram.onnx", "embedding_model.onnx"):
+        _model_file(tmp_path, name)
+    trained = tmp_path / "hey_ranger.onnx"
+
+    assert missing_models(str(trained), tmp_path) == [str(trained)]
+
+    _model_file(tmp_path, "hey_ranger.onnx")
+    assert missing_models(str(trained), tmp_path) == []
+
+
+def test_resolving_a_published_name_that_is_not_downloaded_says_the_command(tmp_path):
+    with pytest.raises(WakeUnavailable) as raised:
+        resolve_model("hey_jarvis", tmp_path)
+
+    assert "ranger wake install" in str(raised.value)
+
+
+def test_resolving_an_invented_name_says_it_has_to_be_trained(tmp_path):
+    """The operator's own phrase is not something anyone publishes."""
+    with pytest.raises(WakeUnavailable) as raised:
+        resolve_model("hey_ranger", tmp_path)
+
+    assert "train" in str(raised.value).lower()
+    assert "ranger wake install" not in str(raised.value)
+
+
+def test_resolving_a_path_that_is_not_there_names_the_path(tmp_path):
+    missing = tmp_path / "models" / "hey_ranger.onnx"
+
+    with pytest.raises(WakeUnavailable) as raised:
+        resolve_model(str(missing), tmp_path)
+
+    assert str(missing) in str(raised.value)
+
+
+def test_installing_an_unpublished_name_is_refused_before_any_network(tmp_path):
+    """Six phrases exist. Anything else is an hour on a GPU, not a download."""
+    with pytest.raises(WakeUnavailable) as raised:
+        install_models("hey_ranger", tmp_path, log=lambda line: None)
+
+    assert "hey_ranger" in str(raised.value)
+    assert "trained" in str(raised.value)
+
+
+def test_an_error_page_saved_under_a_models_name_is_caught(tmp_path, monkeypatch):
+    """openWakeWord's downloader streams the response body whatever the status
+    code was, so a proxy error page lands on disk named like a model and the
+    download reports success. Every real model is over a megabyte.
+    """
+
+    def pretend_to_download(names, target_directory):
+        folder = Path(target_directory)
+        _model_file(folder, "melspectrogram.onnx")
+        _model_file(folder, "embedding_model.onnx")
+        (folder / "hey_jarvis_v0.1.onnx").write_bytes(b"<html>403 Forbidden</html>")
+
+    monkeypatch.setattr(
+        "openwakeword.utils.download_models", pretend_to_download, raising=False
+    )
+
+    with pytest.raises(WakeUnavailable) as raised:
+        install_models("hey_jarvis", tmp_path, log=lambda line: None)
+
+    assert "too small to be a model" in str(raised.value)
+
+
+def test_installing_says_where_the_files_come_from(tmp_path, monkeypatch):
+    """A wake word is a network fetch of a binary that then listens to a room.
+    Where it came from is said out loud, not buried in a docstring.
+    """
+    said: list[str] = []
+
+    def pretend_to_download(names, target_directory):
+        folder = Path(target_directory)
+        for name in ("melspectrogram.onnx", "embedding_model.onnx", "hey_jarvis_v0.1.onnx"):
+            _model_file(folder, name)
+
+    monkeypatch.setattr(
+        "openwakeword.utils.download_models", pretend_to_download, raising=False
+    )
+
+    written = install_models("hey_jarvis", tmp_path, log=said.append)
+
+    assert "github.com/dscripka/openWakeWord" in " ".join(said)
+    assert [path.name for path in written] == [
+        "melspectrogram.onnx",
+        "embedding_model.onnx",
+        "hey_jarvis_v0.1.onnx",
+    ]

@@ -843,10 +843,25 @@ guessing it wrong eats the first word.
 
 **openWakeWord is an optional extra.** `pip install -e ".[wake]"`. If it will
 not install, hands free is not offered and nothing else is affected.
-openWakeWord ships a small fixed set of phrases and "hey ranger" is not one of
-them: `scripts/train_wake_word.py` trains it, and `hey jarvis` is the default
-until then. Anything observed with jarvis is flattering, because it is
-phonetically rare and "hey ranger" is two ordinary English words.
+openWakeWord publishes a small fixed set of phrases and "hey ranger" is not one
+of them: `scripts/train_wake_word.py` writes the training config, and
+`hey jarvis` is the default until then. Anything observed with jarvis is
+flattering, because it is phonetically rare and "hey ranger" is two ordinary
+English words.
+
+**The wheel contains no models.** Not the published phrases, and not the two
+feature models every phrase runs on top of; `pip install openwakeword` leaves
+no `resources/models` directory at all. `ranger wake install` downloads them
+from the openWakeWord project's own GitHub release, and `ranger doctor` reports
+their absence as a **problem** whenever `wake.enabled` is true, because arming
+something with nothing to listen with is the failure the design exists to
+prevent. Two traps inside that: a published name is not a file name
+(`hey_jarvis` ships as `hey_jarvis_v0.1.onnx`), and a failed download still
+writes a file, because openWakeWord streams the response body whatever the
+status code was. Check what is on disk; do not trust that the download said it
+worked. The models install inside the openWakeWord package rather than next to
+the vault, because its preprocessor finds the feature models by a hardcoded
+path — so rebuilding the venv loses them and the install has to be run again.
 
 ## Tier 7d: voice in the browser
 

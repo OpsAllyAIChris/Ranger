@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
 from ranger.cli import _describe_config, _describe_vault, _run_turn, cmd_doctor, cmd_init, main
 from ranger.core import Ranger
 from ranger.testing import ScriptedProvider
@@ -198,3 +200,52 @@ async def test_the_turn_reports_whether_the_cache_was_used(config, capsys):
     err = capsys.readouterr().err
     assert "98% cached" in err
     assert "session:" in err
+
+
+def test_doctor_says_hands_free_has_nothing_to_listen_with(config, monkeypatch, capsys):
+    """The operator's ask: say it when hands free is switched on, not on the
+    first arm. openWakeWord's wheel contains no models, so a machine that
+    installed the extra and turned wake.enabled on has nothing to listen with.
+    """
+    config = replace(config, wake=replace(config.wake, enabled=True))
+    monkeypatch.setattr("ranger.wake.available", lambda: (True, "openwakeword is installed"))
+    monkeypatch.setattr(
+        "ranger.wake.missing_models",
+        lambda setting, folder=None: ["melspectrogram.onnx", "hey_jarvis (openWakeWord's own)"],
+    )
+
+    code = cmd_doctor(config)
+    out = capsys.readouterr().out
+
+    assert "hands free cannot work: no model is installed" in out
+    assert "ranger wake install" in out
+    assert code >= 1
+
+
+def test_doctor_is_quiet_about_hands_free_once_the_models_are_there(config, monkeypatch, capsys):
+    config = replace(config, wake=replace(config.wake, enabled=True))
+    monkeypatch.setattr("ranger.wake.available", lambda: (True, "openwakeword is installed"))
+    monkeypatch.setattr("ranger.wake.missing_models", lambda setting, folder=None: [])
+
+    cmd_doctor(config)
+    out = capsys.readouterr().out
+
+    assert "no model is installed" not in out
+    assert "hands free is on" in out
+
+
+def test_doctor_separates_a_missing_extra_from_a_missing_model(config, monkeypatch, capsys):
+    """Not installing the optional extra is a todo. Installing it, switching
+    hands free on and having no model is a problem, because that one looks like
+    it works right up until the moment it is needed.
+    """
+    config = replace(config, wake=replace(config.wake, enabled=True))
+    monkeypatch.setattr(
+        "ranger.wake.available", lambda: (False, "openwakeword is not installed")
+    )
+
+    cmd_doctor(config)
+    out = capsys.readouterr().out
+
+    assert "todo     wake.enabled is true but openwakeword is not installed" in out
+    assert "problem  hands free" not in out
