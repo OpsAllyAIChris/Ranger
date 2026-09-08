@@ -125,8 +125,14 @@ def test_a_quote_in_a_path_cannot_end_the_powershell_string(tmp_path):
 
 def test_focus_never_raises_wherever_it_runs():
     """It is best effort by design: a second window is a much smaller problem
-    than a shortcut that errors."""
+    than a shortcut that errors.
+
+    Deliberately asks for a title nothing can have, so the answer is the same
+    on every platform and the test needs no branch. The platform-specific cases
+    live in test_surfacing.py, stated separately rather than assumed.
+    """
     result = focus_window("Definitely Not A Window " * 4)
+    assert result.outcome == "not_found"
     assert result.focused is False
     assert result.detail
 

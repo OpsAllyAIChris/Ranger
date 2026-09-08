@@ -376,6 +376,22 @@ rebuild, and `ranger snapshot` giving the vault a local git history, because
 read-only `Accounts/` *was* the undo. Delete-never did not change and neither
 did `Knowledge/`.
 
+**A platform-specific expectation is stated per platform, never assumed.**
+Three instances now: the symlink test that skipped on Windows, the CRLF
+round-trip that only Linux could pass, and `focus_window` asserting `NOT_FOUND`
+with a docstring saying "on Linux there is no window" and no branch — on
+Windows it found the real window, Windows refused the foreground, it flashed,
+and the assertion failed on correct behaviour.
+
+The rule: **if a docstring has to explain which platform it is describing, the
+test needs a branch.** Write both cases as a `skipif` pair so each platform
+runs its own and neither is silently absent, or find an input whose answer is
+the same everywhere — asking `focus_window` for a title nothing can have is the
+better shape, because it needs no branch at all. A test that quietly asserts
+the wrong thing on the only machine that runs the software is worse than no
+test, and the skip count going from one to two per platform is the visible cost
+of saying so.
+
 **`focus_window` reports which of three things happened.** Restoring and
 foregrounding are two different permissions, which the first version conflated:
 `SW_RESTORE` is not gated by the foreground lock, while `SetForegroundWindow` is

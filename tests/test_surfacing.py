@@ -12,6 +12,8 @@ Windows was really doing. **The refusal path matters more than the happy path**
 
 from __future__ import annotations
 
+import os
+
 import pytest
 
 from ranger.desktop import (
@@ -149,15 +151,63 @@ def test_the_config_carries_both_switches(config):
     assert config.wake.surface_topmost is False
 
 
-# -- off Windows ------------------------------------------------------------
+# -- what happens on each platform, said separately -------------------------
+#
+# This test used to assert NOT_FOUND unconditionally, with a docstring saying
+# "on Linux there is no window" and no platform branch. On Windows it found the
+# real Ranger window, Windows refused the foreground, and it degraded to a
+# flash -- correct behaviour, failing assertion. Same class as the symlink test
+# that skipped on Windows: an expectation that is true on the machine the suite
+# runs on and wrong on the machine the software runs on.
+#
+# So both platforms are stated, and neither is skipped.
+
+ON_WINDOWS = os.name == "nt"
+
+#: Every outcome focus_window is allowed to return. Anything else is a bug in
+#: the enum rather than a fact about the machine.
+OUTCOMES = {NOT_FOUND, RESTORED, FOREGROUND, FLASHED, TOPMOST, FAILED}
 
 
-def test_focus_says_not_found_rather_than_pretending():
-    """On Linux there is no window. It says so and claims nothing."""
+@pytest.mark.skipif(ON_WINDOWS, reason="there is a real window here; see the Windows case")
+def test_off_windows_focus_finds_nothing_and_claims_nothing():
     result = focus_window()
 
     assert result.outcome == NOT_FOUND
+    assert result.detail == "not Windows"
     assert not result.focused and not result.surfaced
+
+
+@pytest.mark.skipif(not ON_WINDOWS, reason="needs a real HWND and a real taskbar")
+def test_on_windows_focus_returns_a_real_outcome():
+    """The platform that matters, not skipped.
+
+    Which outcome depends on whether a Ranger window is up and on whether
+    Windows grants the foreground, so the assertion is on the *contract*: a
+    known outcome, a reason attached, and the two properties agreeing with each
+    other. It is the only test here that touches a real window.
+
+    Side effect worth knowing: if a Ranger window is running, this may flash
+    its taskbar button once per suite run. The foreground is almost certainly
+    refused to a console process, so it should not steal focus while typing.
+    """
+    result = focus_window()
+
+    assert result.outcome in OUTCOMES
+    assert result.detail, "an outcome with no reason attached is not reportable"
+    # focused means in front. A flash is not focus, and this is where that
+    # would show up if the two ever drifted apart.
+    assert result.focused == (result.outcome in {FOREGROUND, TOPMOST})
+    assert result.surfaced == (result.outcome in {RESTORED, FOREGROUND, FLASHED, TOPMOST})
+
+
+def test_a_title_that_matches_nothing_is_not_found_anywhere():
+    """True on both platforms, so it needs no branch. This is the shape the
+    other test should have had from the start."""
+    result = focus_window("Definitely Not A Window " * 4)
+
+    assert result.outcome == NOT_FOUND
+    assert not result.focused
 
 
 def test_every_outcome_describes_itself():
@@ -178,6 +228,18 @@ def test_occlusion_is_reported_as_unknown_not_as_false():
     state = window_state()
 
     assert state["occluded"] is None
+    if ON_WINDOWS:
+        # The parts that did improve, asserted where they are real: minimised
+        # and foreground come from Windows now rather than from the page.
+        assert state["found"] in (True, False)
+        if state["found"]:
+            assert isinstance(state["minimised"], bool)
+            assert isinstance(state["foreground"], bool)
+    else:
+        assert state == {
+            "found": False, "minimised": None, "foreground": None,
+            "cloaked": None, "occluded": None,
+        }
 
 
 def test_the_limitation_is_written_where_the_guard_lives():
