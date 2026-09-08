@@ -376,6 +376,22 @@ rebuild, and `ranger snapshot` giving the vault a local git history, because
 read-only `Accounts/` *was* the undo. Delete-never did not change and neither
 did `Knowledge/`.
 
+**The vault snapshot commits an allow list, not an exclusion list.** The first
+version excluded `Ranger/log/` because the build plan named it, and nothing
+else, because nothing else was named. The first real `snapshot init` committed
+a live Chrome profile — cookies, autofill, account databases, a gigabyte of
+browser internals — plus `.obsidian/` and every PDF in a resources folder.
+Local repository, no remote, and still wrong.
+
+An exclusion list can only exclude what somebody thought of, and this vault has
+folders nobody writing the plan knew about. So `INCLUDED` in `snapshot.py` names
+what the backup is *for*, `.gitignore` is rewritten whole on every init so a
+stale rule cannot survive, and a per-file size ceiling catches the next thing
+nobody named. **When a rule is written from a document rather than from the
+thing itself, that is the bug.** The tests for it build a real vault on disk
+with a browser profile in it, because nothing in the suite had ever looked
+outside the repository.
+
 **The account write path is binary from end to end, and that is load-bearing.**
 `Path.write_text` opens in text mode: on Windows it rewrites every `\n` as
 `\r\n`, so a file that already used `\r\n` comes back as `\r\r\n`, and

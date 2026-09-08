@@ -52,16 +52,18 @@ def git(root, *args):
 
 
 def test_init_makes_the_vault_a_repository(vault):
-    assert initialise(vault) == "created"
+    state, seen = initialise(vault)
 
+    assert state == "created"
     assert is_repository(vault)
     assert remotes(vault) == []
+    assert seen.count > 0, "init has to say what the first snapshot would hold"
 
 
 def test_init_is_idempotent(vault):
     initialise(vault)
 
-    assert initialise(vault) == "already a repository"
+    assert initialise(vault)[0] == "already a repository"
 
 
 def test_init_never_adds_a_remote(vault):
@@ -82,13 +84,18 @@ def test_the_log_folder_is_ignored(vault):
     assert "Ranger/log" not in tracked
 
 
-def test_an_existing_gitignore_is_added_to_not_replaced(vault):
-    (vault / ".gitignore").write_text("# mine\n.obsidian/cache\n", encoding="utf-8")
+def test_the_ignore_file_is_ranger_s_and_is_rewritten(vault):
+    """It used to be appended to, so a hand-edit could leave a stale rule in
+    place. The rule that let a browser profile through was exactly that kind of
+    staleness, so this file is now Ranger's and is written whole every time.
+    A vault that needs extra exclusions gets them in .git/info/exclude."""
+    (vault / ".gitignore").write_text("# mine\n!Ranger/browser/\n", encoding="utf-8")
 
     initialise(vault)
 
     text = (vault / ".gitignore").read_text(encoding="utf-8")
-    assert ".obsidian/cache" in text
+    assert "!Ranger/browser/" not in text, "a hand-edit survived and re-included the profile"
+    assert "ALLOW LIST" in text
     assert "Ranger/log/" in text
 
 

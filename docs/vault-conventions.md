@@ -221,5 +221,55 @@ ranger snapshot now      # take one by hand
 The heartbeat commits daily with the date as the message. **Local only.** The
 snapshot refuses to run if the repository has a remote, and says why: this vault
 holds customer email, pricing and material under NDA, and it never leaves the
-machine. `Ranger/log/` is git-ignored because it grows every turn and is already
-the thing that survives.
+machine.
+
+### What it commits, and why it is an allow list
+
+**Only these:** `Accounts/`, `Knowledge/`, `History/`, `Ranger/memory/`,
+`Ranger/drafts/`, `Ranger/inbox/`, and the markdown sitting directly in
+`Ranger/` (aliases, the kill switch, the brief's own record). Everything else
+is ignored.
+
+The first version of this was an exclusion list, and it excluded `Ranger/log/`
+because the build plan named it and nothing else, because nothing else was
+named. The first `snapshot init` on the real vault committed the **live Chrome
+profile** in `Ranger/browser/` — cookies, autofill, account databases, about a
+gigabyte of browser internals — plus `.obsidian/`, an 11MB deck and every PDF
+in a resources folder. Local repository, no remote, so nothing left the machine.
+It still had no business in git history.
+
+An exclusion list can only exclude what somebody thought of, and a vault grows
+folders nobody thought of. So the question is not "what should be kept out" but
+"what is this backup for", and the answer is the six trees above.
+
+`ranger snapshot init` **rewrites `.gitignore` every time.** A stale ignore file
+is how a browser profile gets committed by the version that knew better. Vault
+specific exclusions of your own go in `.git/info/exclude`, which Ranger never
+touches.
+
+### The size ceiling
+
+No single file over `vault.snapshot_max_file_mb` (default 5) is committed, and
+skipped files are **named** in the result rather than silently dropped — a file
+too big to snapshot is a file with no undo, and you have to be able to know
+which. `snapshot init` refuses a first snapshot over
+`vault.snapshot_max_total_mb` (default 200) and names the largest offenders
+without committing anything.
+
+The ceiling is the half that catches the next thing nobody named.
+
+### Seeing what is there
+
+```powershell
+ranger snapshot show
+```
+
+Prints tracked file count, size on disk, the last snapshot date, and anything
+currently too big to snapshot. So the state is visible without running git by
+hand, which is how a gigabyte went unnoticed the first time.
+
+### If a snapshot ever takes something it should not
+
+Delete the vault's `.git` folder and run `ranger snapshot init` again. The
+history is local, has no remote, and is disposable by design: nothing is lost
+except the undo, and the undo starts again from the next commit.

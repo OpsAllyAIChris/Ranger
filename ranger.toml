@@ -78,7 +78,21 @@ log = "Ranger/log"          # Tier 6, append only
 # Local only. The repository has no remote and the snapshot REFUSES to run if
 # one appears, because this vault holds customer email, pricing and material
 # under NDA. Set up with: ranger snapshot init
+#
+# What it commits is an ALLOW LIST, not an exclusion list: Accounts/,
+# Knowledge/, History/, Ranger/memory, drafts and inbox, and the markdown
+# sitting directly in Ranger/. Everything else is ignored, including the live
+# Chrome profile in Ranger/browser/, .obsidian/, and anything added later that
+# nobody thought to name. The first version of this was an exclusion list and
+# it committed the whole browser profile the first time it ran.
 snapshot = true
+# Refuse to commit any single file over this. The allow list catches what was
+# thought of; the ceiling catches the next thing that was not. Skipped files
+# are named in the audit log rather than silently dropped.
+snapshot_max_file_mb = 5.0
+# Refuse a FIRST snapshot larger than this in total, naming the largest files.
+# A backup that quietly swallows a gigabyte is not a backup, it is a surprise.
+snapshot_max_total_mb = 200.0
 
 [context]
 # The whole standing allowance: memory plus knowledge, resent every turn.

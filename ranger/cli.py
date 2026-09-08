@@ -1425,24 +1425,48 @@ def cmd_dormant(config: Config, args: Any) -> int:
 
 def cmd_snapshot(config: Config, args: Any) -> int:
     """Set up the vault's local history, or take today's snapshot by hand."""
-    from .snapshot import SnapshotRefused, commit, initialise, is_repository, last_snapshot, remotes
+    from .snapshot import (
+        SnapshotRefused,
+        commit,
+        initialise,
+        is_repository,
+        last_snapshot,
+        megabytes,
+        remotes,
+        repository_size,
+        survey,
+    )
 
     paint = _colour(sys.stdout.isatty())
     root = config.vault.root
+    vault = config.vault
     action = getattr(args, "snapshot_command", None) or "show"
 
     if action == "init":
         try:
-            state = initialise(root)
+            state, seen = initialise(
+                root,
+                max_file_bytes=vault.snapshot_max_file_bytes,
+                max_total_bytes=vault.snapshot_max_total_bytes,
+            )
         except SnapshotRefused as exc:
             print(paint(f"  {exc}", YELLOW))
             return 1
         print(paint(f"  {root}: {state}", TEAL))
+        # Said before anything is committed, because a snapshot that quietly
+        # swallows a gigabyte is not a backup, it is a surprise.
+        print()
+        print("  the first snapshot would hold:")
+        for line in seen.describe():
+            print(f"    {line}")
+        print()
         print(paint("  no remote, and the daily snapshot refuses to run if one appears", DIM))
+        print(paint("  nothing has been committed yet. Run: ranger snapshot now", DIM))
         return 0
 
     if action == "now":
-        result = commit(root, datetime.now().date())
+        result = commit(root, datetime.now().date(),
+                        max_file_bytes=vault.snapshot_max_file_bytes)
         print(paint(f"  {result.describe()}", TEAL if result.taken else YELLOW))
         return 0 if result.taken else 1
 
@@ -1458,9 +1482,16 @@ def cmd_snapshot(config: Config, args: Any) -> int:
         print(paint(f"  REMOTE PRESENT: {', '.join(found)}. Snapshots are refused.", YELLOW))
         print("  The vault holds customer email and pricing. Remove the remote.")
         return 1
-    last = last_snapshot(root)
+
+    count, on_disk = repository_size(root)
     print(paint(f"  ok  {root} is a local repository with no remote", TEAL))
-    print(f"      last snapshot: {last or 'none yet'}")
+    print(f"      {count} files tracked, {megabytes(on_disk)} on disk")
+    print(f"      last snapshot: {last_snapshot(root) or 'none yet'}")
+    pending = survey(root, vault.snapshot_max_file_bytes)
+    if pending.files or pending.oversized:
+        print(f"      waiting: {pending.count} changed, {megabytes(pending.total)}")
+    for name, size in pending.oversized[:5]:
+        print(paint(f"      too big to snapshot: {name} ({megabytes(size)})", YELLOW))
     return 0
 
 

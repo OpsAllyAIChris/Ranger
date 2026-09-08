@@ -71,6 +71,21 @@ class VaultConfig:
     #: Take a daily git snapshot of the vault. Read-only Accounts/ used to be
     #: the undo; once Ranger appends there, this is. Local only, never pushed.
     snapshot: bool = True
+    #: Refuse to snapshot any single file larger than this. A ceiling catches
+    #: the thing nobody thought to name, which is the failure that actually
+    #: happened: the first snapshot took a live Chrome profile.
+    snapshot_max_file_mb: float = 5.0
+    #: Refuse a first snapshot larger than this in total, naming the largest
+    #: files. A backup that quietly swallows a gigabyte is a surprise.
+    snapshot_max_total_mb: float = 200.0
+
+    @property
+    def snapshot_max_file_bytes(self) -> int:
+        return int(self.snapshot_max_file_mb * 1_048_576)
+
+    @property
+    def snapshot_max_total_bytes(self) -> int:
+        return int(self.snapshot_max_total_mb * 1_048_576)
 
     @property
     def writable_roots(self) -> tuple[Path, ...]:
@@ -481,7 +496,7 @@ KNOWN_KEYS: dict[str, frozenset[str]] = {
     }),
     "vault": frozenset({
         "root", "accounts", "knowledge", "ranger", "memory", "inbox", "drafts", "log",
-        "snapshot",
+        "snapshot", "snapshot_max_file_mb", "snapshot_max_total_mb",
     }),
     "knowledge": frozenset({"priority"}),
     "memory": frozenset({"reserve_chars", "file"}),
@@ -648,7 +663,13 @@ def _build_vault(table: dict[str, Any]) -> VaultConfig:
                 f"vault.{name} is read only and must not sit under vault.ranger"
             )
 
-    return VaultConfig(root=root, snapshot=bool(section.get("snapshot", True)), **paths)
+    return VaultConfig(
+        root=root,
+        snapshot=bool(section.get("snapshot", True)),
+        snapshot_max_file_mb=float(section.get("snapshot_max_file_mb", 5.0)),
+        snapshot_max_total_mb=float(section.get("snapshot_max_total_mb", 200.0)),
+        **paths,
+    )
 
 
 def _validate_schedule(schedule: ScheduleConfig) -> None:

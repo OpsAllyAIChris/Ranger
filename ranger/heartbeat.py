@@ -309,6 +309,9 @@ class VaultSnapshot:
 
     root: Path
     audit: Any = None
+    #: The per-file ceiling, from config. A pattern list catches what somebody
+    #: thought of; this catches the next thing nobody did.
+    max_file_bytes: int = 5 * 1_048_576
     name: str = "snapshot"
     runs_in_quiet_hours: bool = True
     now: Callable[[], datetime] = datetime.now
@@ -329,7 +332,8 @@ class VaultSnapshot:
     async def run(self, *, record: bool = True) -> Notice | None:
         from .snapshot import commit
 
-        result = commit(self.root, self.now().date())
+        result = commit(self.root, self.now().date(),
+                        max_file_bytes=self.max_file_bytes)
         if self.audit is not None:
             try:
                 self.audit.write("vault snapshot", result.describe(), origin="heartbeat")
@@ -633,5 +637,10 @@ def build_checks(config: Config, registry: Any, vault: Any = None) -> list[Check
         )
     ]
     if config.vault.snapshot:
-        checks.append(VaultSnapshot(root=config.vault.root))
+        checks.append(
+            VaultSnapshot(
+                root=config.vault.root,
+                max_file_bytes=config.vault.snapshot_max_file_bytes,
+            )
+        )
     return checks
