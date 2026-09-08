@@ -14,6 +14,10 @@ the panel's:
 - **Drafts are listed, never removed.** A draft is a note, and removing an
   existing note is on the operator's never-without-asking list. The panel shows
   them and opens them; taking one away is done in Obsidian, by a person.
+
+The panel also carries the dashlets, and they arrive the same way everything
+else here does: read off the disk, computed in Python, on the push. See
+`dashlets.py` for why a dashlet is never an agent turn.
 """
 
 from __future__ import annotations
@@ -24,6 +28,7 @@ from pathlib import Path
 from typing import Any
 
 from .config import Config
+from .dashlets import readings
 from .dates import human_datetime
 from .heartbeat import Inbox, Notice
 from .vault import Vault, VaultError
@@ -124,6 +129,9 @@ def snapshot(config: Config, vault: Vault) -> dict[str, Any]:
         "inbox": [_notice_item(vault, n).as_dict() for n in ordinary],
         "drafts": [item.as_dict() for item in drafts],
         "awaiting": [_notice_item(vault, n).as_dict() for n in waiting],
+        # Python-computed reads, not agent turns. The panel redraws on every
+        # push; nothing that redraws that often may cost a model call.
+        "dashlets": [reading.as_dict() for reading in readings(config, vault)],
     }
 
 

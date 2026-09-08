@@ -156,6 +156,127 @@ export function createShell(orb) {
     return block;
   }
 
+  // A dashlet is a number Python computed, drawn as it arrived. The browser
+  // does no arithmetic here on purpose: if the panel formatted or summed
+  // anything, there would be two implementations of the figure and no way to
+  // tell which one is on screen. See dashlets.py.
+  function dashlet(reading) {
+    const node = document.createElement('div');
+    node.className = 'entry dashlet';
+
+    const title = document.createElement('div');
+    title.className = 'entry-title';
+    title.textContent = reading.title;
+    node.append(title);
+
+    if (reading.error) {
+      // Not a value and not an absence: a third state, and it says so. A
+      // failed read that rendered blank would read as a legitimate nothing.
+      const bad = document.createElement('div');
+      bad.className = 'dashlet-error';
+      bad.textContent = 'could not read: ' + reading.error;
+      node.append(bad);
+    } else if (reading.value) {
+      const value = document.createElement('div');
+      value.className = 'dashlet-value' + (reading.stale ? ' stale' : '');
+      value.textContent = reading.value;
+      node.append(value);
+    } else {
+      // ABSENCE IS NEVER ZERO. No value means the words the server sent, never
+      // a currency symbol and a nought: a zero looks like a figure that was
+      // measured, and it would get acted on.
+      const none = document.createElement('div');
+      none.className = 'dashlet-empty';
+      none.textContent = reading.empty || 'nothing entered';
+      node.append(none);
+    }
+
+    if (reading.detail) {
+      const detail = document.createElement('div');
+      detail.className = 'entry-detail';
+      detail.textContent = reading.detail;
+      node.append(detail);
+    }
+
+    // The "as of" line is always drawn when there is anything to date it by.
+    // A stale figure that looks current is this dashlet's failure mode, so the
+    // age is on screen rather than in a tooltip.
+    if (reading.as_of) {
+      const when = document.createElement('div');
+      when.className = 'entry-when' + (reading.stale ? ' stale' : '');
+      const age =
+        reading.age_days === null || reading.age_days === undefined
+          ? ''
+          : reading.age_days === 0
+          ? ' (today)'
+          : reading.age_days === 1
+          ? ' (1 day ago)'
+          : ' (' + reading.age_days + ' days ago)';
+      when.textContent = 'as of ' + reading.as_of + age + (reading.stale ? ' · stale' : '');
+      node.append(when);
+    }
+
+    if (reading.key === 'gp') node.append(gpForm(reading));
+    return node;
+  }
+
+  // The manual entry field. The operator types a figure they were given; the
+  // server parses it and writes a create-only note. Nothing is sent to a model
+  // and nothing is edited: a correction is a second entry for the same month.
+  function gpForm(reading) {
+    const form = document.createElement('div');
+    form.className = 'dashlet-form';
+
+    const amount = document.createElement('input');
+    amount.type = 'text';
+    amount.inputMode = 'decimal';
+    amount.placeholder = 'GP figure';
+    amount.className = 'dashlet-input';
+    amount.setAttribute('aria-label', 'gross profit figure');
+
+    const period = document.createElement('input');
+    period.type = 'text';
+    period.className = 'dashlet-input period';
+    period.value = (reading.extra && reading.extra.period) || '';
+    period.title = 'the month this figure is for, as 2026-09';
+    period.setAttribute('aria-label', 'period, as 2026-09');
+
+    const add = document.createElement('button');
+    add.className = 'dashlet-add clickable';
+    add.textContent = 'enter';
+    add.title = 'record this figure. A second figure for the same month corrects it';
+
+    const submit = () => {
+      const value = amount.value.trim();
+      if (!value) return;
+      send({ type: 'gp_entry', amount: value, period: period.value.trim() });
+      amount.value = '';
+    };
+    add.onclick = submit;
+    amount.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') submit();
+    });
+    period.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') submit();
+    });
+
+    form.append(amount, period, add);
+    return form;
+  }
+
+  function dashletSection(items) {
+    const block = document.createElement('div');
+    block.className = 'section';
+    const head = document.createElement('div');
+    head.className = 'section-head';
+    const label = document.createElement('span');
+    label.textContent = 'Numbers';
+    head.append(label);
+    block.append(head);
+    for (const reading of items) block.append(dashlet(reading));
+    return block;
+  }
+
   function toolSection(tools) {
     const block = document.createElement('div');
     block.className = 'section';
@@ -202,6 +323,7 @@ export function createShell(orb) {
 
   function drawPanel(view) {
     el.panel.replaceChildren(
+      dashletSection(view.dashlets || []),
       section('Awaiting Confirmation', view.awaiting || [], {
         dismissable: true,
         empty: 'nothing waiting',

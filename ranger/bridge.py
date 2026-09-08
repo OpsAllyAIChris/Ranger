@@ -44,6 +44,10 @@ CLEAR_DRAFT = "clear_draft"
 #: The page became visible or hidden. The window will not open behind a
 #: minimised window, because the only sign the microphone is live is on it.
 VISIBLE = "visible"
+#: A gross profit figure typed into the panel. The operator's own keystrokes,
+#: not an agent action: the model is not in this path and must not be. See
+#: dashlets.py for why the whole command centre works this way.
+GP_ENTRY = "gp_entry"
 
 #: How many tool calls the panel remembers. Enough to see what just happened,
 #: not a second audit log: the real one is in the vault and is append only.
@@ -171,6 +175,8 @@ class Session:
             return self._played(message)
         if kind == VISIBLE:
             return self._visibility(message)
+        if kind == GP_ENTRY:
+            return self._gp_entry(message)
         if kind == STOP:
             if not self.stop():
                 self.emit("error", message="nothing was running")
@@ -679,6 +685,47 @@ class Session:
             "notice",
             level="info" if result.ok else "warn",
             message=result.summary or result.content[:200],
+        )
+        self.push_panel()
+
+    def _gp_entry(self, message: dict[str, Any]) -> None:
+        """A GP figure typed into the panel.
+
+        No gate, and no model. A gate exists because a spoken yes is not
+        consent and because Jarvis should not act consequentially on its own;
+        this is the operator typing a number they were sent, at their own
+        keyboard, into their own vault. Asking them to confirm their own
+        keystroke would train them to click through cards.
+
+        What it does check is the input, because it arrived over a socket: the
+        amount and the period are parsed strictly and a bad one is refused
+        rather than guessed at. The path is built by Python from the parsed
+        period, so nothing from the browser becomes part of a filename.
+        """
+        from .gp import BadEntry, money, record
+
+        try:
+            entry = record(
+                self.agent.config,
+                self.agent.vault,
+                message.get("amount", ""),
+                period=message.get("period", ""),
+                note=str(message.get("note", "")),
+            )
+        except BadEntry as exc:
+            self.emit("error", message=str(exc))
+            return
+        except Exception as exc:
+            self.emit("error", message=f"could not record that: {type(exc).__name__}: {exc}")
+            return
+
+        self.emit(
+            "notice",
+            level="info",
+            message=(
+                f"{entry.period} recorded as "
+                f"{money(entry.amount, self.agent.config.gp.currency)}"
+            ),
         )
         self.push_panel()
 

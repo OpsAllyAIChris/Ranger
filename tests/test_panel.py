@@ -110,7 +110,14 @@ def test_dismiss_refuses_anything_that_is_not_a_notice_in_the_inbox(seeded, atte
 
 
 def test_an_empty_vault_gives_an_empty_panel_rather_than_an_error(config, vault):
-    assert snapshot(config, vault) == {"inbox": [], "drafts": [], "awaiting": []}
+    view = snapshot(config, vault)
+    assert (view["inbox"], view["drafts"], view["awaiting"]) == ([], [], [])
+    # The dashlets are always present, because a dashlet that vanished when it
+    # had nothing to show would read as a panel that lost a section. They carry
+    # no value instead, and say why.
+    assert [d["key"] for d in view["dashlets"]] == ["gp"]
+    assert view["dashlets"][0]["value"] == ""
+    assert view["dashlets"][0]["empty"] == "no GP entered yet"
 
 
 def test_a_draft_with_no_title_falls_back_to_its_filename(config, vault):

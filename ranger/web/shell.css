@@ -253,6 +253,48 @@ html, body {
 
 .empty { padding: 0 14px 4px; font-size: 11px; color: var(--ink-faint); }
 
+/* Dashlets. A figure and the date it is from, never one without the other. */
+.dashlet-value {
+  margin-top: 4px;
+  font-family: var(--mono);
+  font-size: 19px;
+  letter-spacing: -0.01em;
+  color: var(--accent);
+}
+/* Stale is dimmed rather than hidden: the number is still true, it is just
+   older than it should be, and the "as of" line says how much older. */
+.dashlet-value.stale { color: var(--ink-dim); }
+.entry-when.stale { color: #E8B84B; }
+/* An absent figure is words, never a nought in the value's own typeface. */
+.dashlet-empty { margin-top: 4px; font-size: 12px; color: var(--ink-faint); font-style: italic; }
+.dashlet-error { margin-top: 4px; font-size: 11px; color: #E8B84B; }
+
+.dashlet-form { display: flex; gap: 5px; margin-top: 9px; }
+.dashlet-input {
+  min-width: 0;
+  flex: 1 1 auto;
+  padding: 5px 7px;
+  border-radius: 7px;
+  border: 1px solid var(--hairline);
+  background: rgba(0, 0, 0, 0.25);
+  color: var(--ink);
+  font-family: var(--mono);
+  font-size: 11px;
+}
+.dashlet-input.period { flex: 0 0 62px; color: var(--ink-dim); }
+.dashlet-input:focus { outline: 1px solid var(--accent); }
+.dashlet-add {
+  flex: 0 0 auto;
+  padding: 5px 9px;
+  border-radius: 7px;
+  border: 1px solid var(--hairline);
+  background: transparent;
+  color: var(--ink-dim);
+  font-size: 11px;
+  cursor: pointer;
+}
+.dashlet-add:hover { background: rgba(255, 255, 255, 0.06); color: var(--ink); }
+
 .tool { display: flex; align-items: baseline; gap: 7px; }
 .tool-name { font-family: var(--mono); font-size: 11px; }
 .tool-mark { font-size: 11px; color: var(--accent); }

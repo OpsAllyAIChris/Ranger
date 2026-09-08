@@ -44,6 +44,9 @@ INCLUDED = (
     "Ranger/memory/",
     "Ranger/drafts/",
     "Ranger/inbox/",
+    # Hand-entered figures that exist nowhere else. Small, text, and the one
+    # folder here whose contents cannot be reconstructed from the CRM.
+    "Ranger/gp/",
 )
 
 #: Markdown sitting directly in `Ranger/`, not recursively: aliases.md,

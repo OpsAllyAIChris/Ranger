@@ -36,13 +36,19 @@ async def run(registry, name, **payload):
 
 def test_the_registry_holds_exactly_the_intended_tools(registry):
     """Tier 2's three, Tier 4's two, the account write path's one, the two that
-    read Ranger's own folders back, and clearing. A tenth is a scope decision."""
+    read Ranger's own folders back, clearing, and the GP read. An eleventh is a
+    scope decision.
+
+    `gross_profit` reads figures Python added up and has no write side, which
+    is checked in test_gp.py: a model that could record a GP figure could
+    record one it inferred from a conversation."""
     assert registry.names() == [
         "account_recall",
         "clear_draft",
         "draft_and_hold",
         "file_to_account",
         "forget",
+        "gross_profit",
         "list_own_files",
         "read_own_file",
         "remember",

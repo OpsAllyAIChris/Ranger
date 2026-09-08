@@ -13,7 +13,7 @@ import re
 import os
 import sys
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
@@ -1496,6 +1496,118 @@ def cmd_drafts(config: Config, args: Any) -> int:
     return 0
 
 
+def cmd_gp(config: Config, args: Any) -> int:
+    """The GP tracker at the terminal. The same figures the panel draws.
+
+    Show, add and history run through `gp.summary` and `gp.record`, which is
+    what the panel calls too. One computation, so the number on screen and the
+    number in the terminal cannot disagree -- and neither of them was produced
+    by a model.
+    """
+    from . import gp
+    from .vault import Vault
+
+    paint = _colour(sys.stdout.isatty())
+    vault = Vault(config.vault)
+    action = getattr(args, "gp_command", None) or "show"
+    today = date.today()
+    symbol = config.gp.currency
+
+    if action == "add":
+        amount = " ".join(getattr(args, "amount", []) or []).strip()
+        try:
+            entry = gp.record(
+                config,
+                vault,
+                amount,
+                period=getattr(args, "period", "") or "",
+                note=getattr(args, "note", "") or "",
+            )
+        except gp.BadEntry as exc:
+            print(paint(f"  {exc}", YELLOW), file=sys.stderr)
+            return 2
+        ledger, _ = gp.summary(config, vault, today)
+        supersedes = ledger.corrections(entry.period)
+        print(paint(f"  {entry.period}  {gp.money(entry.amount, symbol)}", TEAL))
+        if supersedes:
+            was = "figure" if supersedes == 1 else "figures"
+            print(paint(
+                f"  corrects the previous {was} for {entry.period}. "
+                "Nothing was overwritten; the earlier entry is still there.", DIM
+            ))
+        if entry.path:
+            print(paint(f"  {entry.path.name}", DIM))
+        return 0
+
+    ledger, total = gp.summary(config, vault, today)
+
+    if action == "history":
+        year = str(getattr(args, "year", "") or "").strip()
+        entries = sorted(ledger.entries, key=lambda e: (e.period, gp.order(e)))
+        if year:
+            entries = [e for e in entries if e.year == year]
+        if not entries:
+            print(paint("  nothing entered yet", DIM))
+            return 0
+        current = {e.path for e in ledger.current().values()}
+        print(paint(f"  {len(entries)} entries, superseded ones included", BOLD))
+        for entry in entries:
+            mark = " " if entry.path in current else paint("superseded", DIM)
+            stamp = entry.recorded.strftime("%Y-%m-%d %H:%M")
+            print(f"  {entry.period}  {gp.money(entry.amount, symbol):>14}  {stamp}  {mark}")
+            if entry.note:
+                print(paint(f"      {entry.note.splitlines()[0][:80]}", DIM))
+        return 0
+
+    # show
+    if total.empty:
+        # Absence, in words. Never a nought: a zero looks like a figure that
+        # was measured and it would get acted on.
+        print(paint("  no GP entered yet", DIM))
+        print(paint("  ranger gp add 48250            records this month", DIM))
+        print(paint("  ranger gp add 44000 --period 2026-08", DIM))
+        return 0
+
+    if total.ytd is None:
+        print(paint(f"  nothing entered for {total.year} yet", YELLOW))
+    else:
+        months = "month" if total.months_counted == 1 else "months"
+        print(paint(
+            f"  {total.year} YTD  {gp.money(total.ytd, symbol)}"
+            f"   over {total.months_counted} {months}", BOLD
+        ))
+    if total.mtd is None:
+        print(paint(f"  {total.month}      not entered", DIM))
+    else:
+        print(f"  {total.month}      {gp.money(total.mtd, symbol)}")
+    if total.last_year_total is not None:
+        print(paint(
+            f"  {total.last_year}       {gp.money(total.last_year_total, symbol)}", DIM
+        ))
+
+    age = total.days_old(today)
+    if total.as_of:
+        stale = age is not None and age > config.gp.stale_after_days
+        line = f"  as of {human_datetime(total.as_of)}"
+        if age == 0:
+            line += " (today)"
+        elif age is not None:
+            line += f" ({age} days ago)" if age != 1 else " (1 day ago)"
+        print(paint(line, YELLOW if stale else DIM))
+        if stale:
+            print(paint(
+                f"  older than gp.stale_after_days ({config.gp.stale_after_days}). "
+                "The panel marks it stale too.", YELLOW
+            ))
+    if total.corrections:
+        print(paint(f"  {total.corrections} correction(s) for {total.month}", DIM))
+    if ledger.unreadable:
+        print(paint(f"  {len(ledger.unreadable)} file(s) in Ranger/gp could not be read:", YELLOW))
+        for line in ledger.unreadable[:5]:
+            print(paint(f"      {line}", DIM))
+    return 0
+
+
 def cmd_snapshot(config: Config, args: Any) -> int:
     """Set up the vault's local history, or take today's snapshot by hand."""
     from .snapshot import (
@@ -2173,6 +2285,22 @@ def main(argv: list[str] | None = None) -> int:
     )
     clear_cmd.add_argument("name", nargs="+", help="file name, or part of the title")
 
+    gp = sub.add_parser(
+        "gp", help="gross profit: figures you enter, totals Python computes"
+    )
+    gp_sub = gp.add_subparsers(dest="gp_command")
+    gp_sub.add_parser("show", help="year to date and month to date, with an as-of date")
+    gp_add = gp_sub.add_parser("add", help="record a figure. Never edits an existing one")
+    gp_add.add_argument("amount", nargs="+", help="the figure, e.g. 48250 or $48,250.00")
+    gp_add.add_argument(
+        "--period", default="", help="the month it is for, as 2026-09. Defaults to this month"
+    )
+    gp_add.add_argument("--note", default="", help="anything worth remembering about it")
+    gp_history = gp_sub.add_parser(
+        "history", help="every entry ever made, superseded ones included"
+    )
+    gp_history.add_argument("--year", default="", help="only this year, e.g. 2026")
+
     snapshot = sub.add_parser(
         "snapshot", help="the vault's local history: the undo for account writes"
     )
@@ -2244,6 +2372,8 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_dormant(config, args)
     if args.command == "drafts":
         return cmd_drafts(config, args)
+    if args.command == "gp":
+        return cmd_gp(config, args)
     if args.command == "snapshot":
         return cmd_snapshot(config, args)
     if args.command == "vault-guard":

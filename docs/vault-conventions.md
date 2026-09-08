@@ -149,6 +149,14 @@ correctable in Obsidian.
 | `Ranger/memory/` | Durable facts, one per file | 4 |
 | `Ranger/inbox/` | Notices surfaced and not yet cleared, one file per notice | 5 |
 | `Ranger/log/` | The audit trail, append only | 6 |
+| `Ranger/gp/` | Gross profit figures, one create-only note per entry | C |
+
+`Ranger/gp/` is the first dashlet's store. One note per figure, named for the
+month it is for and the moment it was entered:
+`2026-08 entered 2026-09-03 163000.md`. A correction is a second note for the
+same month, never an edit, and reading takes the newest one — so the folder is
+a record of what was believed and when. Python does the arithmetic; the model
+never calculates the number. See `docs/dashlets.md`.
 
 ## The marker, and what Ranger appends
 

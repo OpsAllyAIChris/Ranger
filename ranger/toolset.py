@@ -890,6 +890,106 @@ def _clear_draft(config: Config, vault: Vault, audit: Any = None) -> Tool:
     )
 
 
+def _gross_profit(config: Config, vault: Vault, today: Callable[[], date]) -> Tool:
+    """Read the GP figures. **Read.** Every number here was computed in Python.
+
+    This tool exists so that "what is my GP this year" can be answered out
+    loud, and it is deliberately shaped so that answering it requires no
+    arithmetic: year to date, month to date and last year all arrive already
+    added up and already formatted. The model's job is to read one of them
+    back, and the description says so in as many words, because a model that
+    adds up twelve months itself will occasionally get it wrong and be believed.
+
+    There is no write side, and there is not going to be one. GP figures are
+    entered by the operator in the panel or with `ranger gp add`. A model that
+    could record a figure could record one it inferred from a conversation, and
+    a figure nobody typed is exactly the thing this whole module exists to keep
+    out of the vault.
+    """
+
+    async def handler(payload: dict[str, Any]) -> ToolResult:
+        from . import gp
+
+        try:
+            ledger, total = gp.summary(config, vault, today())
+        except Exception as exc:
+            return ToolResult(False, f"{type(exc).__name__}: {exc}", "could not read GP")
+
+        symbol = config.gp.currency
+        if total.empty:
+            # Absence, said as absence. Never "0", which the model would
+            # repeat as a fact and the operator would act on.
+            return ToolResult(
+                ok=True,
+                content=(
+                    "No gross profit figures have been entered yet. Say that rather "
+                    "than estimating one: there is no figure, which is not the same "
+                    "as a figure of zero."
+                ),
+                summary="no GP entered",
+            )
+
+        lines = [
+            "These figures were computed in Python from the entries in Ranger/gp. "
+            "Read them back as they are. Do not add, convert or extrapolate them, "
+            "and do not fill in a month that says it has not been entered.",
+            "",
+        ]
+        lines.append(
+            f"{total.year} to date: "
+            + (gp.money(total.ytd, symbol) if total.ytd is not None else "nothing entered yet")
+            + f" (from {total.months_counted} month(s) entered)"
+        )
+        lines.append(
+            f"{total.month}: "
+            + (gp.money(total.mtd, symbol) if total.mtd is not None else "not entered")
+        )
+        if total.last_year_total is not None:
+            lines.append(f"{total.last_year} total: {gp.money(total.last_year_total, symbol)}")
+
+        by_month = sorted(ledger.current().items())
+        if by_month:
+            lines.append("")
+            lines.append("Each month, most recent entry for each:")
+            for period, entry in by_month:
+                lines.append(f"  {period}  {gp.money(entry.amount, symbol)}")
+
+        age = total.days_old(today())
+        if total.as_of:
+            lines.append("")
+            lines.append(
+                f"Most recent entry was recorded {total.as_of.strftime('%Y-%m-%d %H:%M')}"
+                + (f", {age} day(s) ago." if age is not None else ".")
+            )
+            if age is not None and age > config.gp.stale_after_days:
+                lines.append(
+                    "That is older than the operator's own staleness window, so say "
+                    "how old it is when you give the number."
+                )
+
+        summary = (
+            f"{total.year} YTD {gp.money(total.ytd, symbol)}"
+            if total.ytd is not None
+            else f"nothing entered for {total.year}"
+        )
+        return ToolResult(ok=True, content="\n".join(lines), summary=summary)
+
+    return Tool(
+        name="gross_profit",
+        description=(
+            "The operator's gross profit figures, already added up. Use this whenever "
+            "they ask about GP, the year, the month, or how the numbers are looking. "
+            "Everything it returns was computed in Python from figures the operator "
+            "entered by hand: read the numbers back as given and never calculate, "
+            "estimate or project one yourself. If a month has not been entered, say "
+            "so; it is not zero. This tool cannot record a figure -- the operator "
+            "enters those in the panel or with 'ranger gp add'."
+        ),
+        input_schema={"type": "object", "properties": {}},
+        handler=handler,
+    )
+
+
 def build_registry(
     config: Config,
     vault: Vault,
@@ -909,5 +1009,6 @@ def build_registry(
             _list_own_files(config, vault),
             _read_own_file(config, vault),
             _clear_draft(config, vault, audit),
+            _gross_profit(config, vault, today),
         ]
     )

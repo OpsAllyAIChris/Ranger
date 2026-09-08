@@ -1257,6 +1257,45 @@ behaves identically when run by hand.
 anywhere, and a Ranger that cannot find `ranger.toml` fails with a config error
 that says nothing about the working directory being `C:\Windows\System32`.
 
+## Item C: the GP tracker, and the rule the panel runs on
+
+The gross profit tracker is the first dashlet, and the seam matters more than
+the feature. **A dashlet is a Python-computed read of the vault** — never an
+agent turn, never a cached model answer, never a background prompt on a timer.
+The panel redraws on every push, so a dashlet that called a provider would cost
+a model call every redraw; and worse, it would put a number on screen that a
+language model produced. The operator acts on gross profit. A hallucinated
+figure there is worse than an empty panel, because an empty panel is obviously
+empty.
+
+`ranger/dashlets.py` is the seam: a frozen `Reading` and a fixed tuple of
+sources. `tests/test_gp.py::test_the_dashlet_path_cannot_reach_a_model` walks
+the import graph, function-level imports included, and fails if the dashlet
+path can reach `provider`, `core`, `prompts`, `assembly`, `speech`, `tts` or
+`stt`. That test is the rule; this paragraph is a description of it.
+
+Three properties, and the first is the one that gets acted on when it breaks:
+
+- **Absence is never zero.** A figure that was never entered has no value at
+  all, and the surfaces say so in words: "no GP entered yet" in the panel and
+  the CLI, "there is no figure, which is not the same as a figure of zero" in
+  the model's tool result. A nought looks like something that was measured.
+- **Every figure carries when it is from.** `as_of` is when the entry was
+  recorded, not when the panel drew it, and past `gp.stale_after_days` it says
+  stale on screen.
+- **A correction is a new entry.** Delete-never, as everywhere: a second
+  create-only note for the same month, the newest wins on read, the earlier one
+  stays on disk, and `ranger gp history` shows both.
+
+Figures come from the operator's keyboard — the panel's entry field or
+`ranger gp add` — through one function, `gp.record`. **The model cannot record
+one.** `gross_profit` reads figures Python already added up and says in its own
+description not to recalculate them. A model that could enter a GP figure could
+enter one it inferred from a conversation.
+
+Full write-up, including the entry format and the year and month boundaries:
+`docs/dashlets.md`.
+
 ## Closing out a session
 
 Every session ends with a debrief written to `docs/sessions/<date>.md`, and it

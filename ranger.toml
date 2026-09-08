@@ -291,6 +291,25 @@ max_chars = 4000
 # Tier 2 "draft and hold". Ranger writes here and never sends.
 filename_format = "{date}-{slug}.md"
 
+[gp]
+# The gross profit tracker: the first dashlet. Figures are entered by hand, in
+# the panel or with "ranger gp add", and land in Ranger/gp/ as create-only
+# notes. Python adds them up. The model never calculates the number, because a
+# dashlet showing a figure a language model arrived at is worse than no dashlet
+# -- it gets acted on.
+#
+# A display symbol only. Nothing here converts anything: a dashlet that did
+# currency conversion would be showing a number nobody entered.
+currency = "$"
+# The month the financial year starts in. 1 is January and a calendar year.
+# Set it to 4 for a year starting in April. Guessing this wrong is silent: the
+# figures still add up, they just add up into the wrong year.
+year_starts_month = 1
+# After this many days with no new entry the panel marks the figure stale.
+# GP arrives monthly, so 45 days means one missed month shows. A stale figure
+# that looks current is the failure mode this dashlet is arranged against.
+stale_after_days = 45
+
 [voice]
 push_to_talk = true
 wake_word = false        # never, until everything else is stable

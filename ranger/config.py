@@ -274,6 +274,30 @@ class DraftsConfig:
 
 
 @dataclass(frozen=True)
+class GpConfig:
+    """The gross profit tracker. Entered by hand, computed in Python.
+
+    Nothing here is a figure. These are the three things about the operator's
+    year that the code cannot work out for itself, and each one, guessed
+    wrongly, puts a real number quietly in the wrong place -- which is worse
+    than showing nothing, because a wrong number that looks right gets acted
+    on.
+    """
+
+    #: What the figures are in. Only ever a display symbol: no conversion
+    #: happens anywhere, because a dashlet that converted currencies would be
+    #: computing a number the operator never entered.
+    currency: str = "$"
+    #: The month a financial year starts in. 1 is the calendar year. A fiscal
+    #: year starting in April is ordinary, and guessing January would put
+    #: April's figure in the previous year's total with no sign of it.
+    year_starts_month: int = 1
+    #: After this many days with no new entry, the panel says the figure is
+    #: stale. A stale figure that looks current is this dashlet's failure mode.
+    stale_after_days: int = 45
+
+
+@dataclass(frozen=True)
 class VoiceConfig:
     push_to_talk: bool
     wake_word: bool
@@ -420,6 +444,7 @@ class Config:
     wake: WakeConfig
     recall: RecallConfig
     drafts: DraftsConfig
+    gp: GpConfig
     voice: VoiceConfig
     stt: SttConfig
     tts: TtsConfig
@@ -528,6 +553,7 @@ KNOWN_KEYS: dict[str, frozenset[str]] = {
         "activities", "detail_activities", "section_chars", "body_chars", "max_chars",
     }),
     "drafts": frozenset({"filename_format"}),
+    "gp": frozenset({"currency", "year_starts_month", "stale_after_days"}),
     "voice": frozenset({
         "push_to_talk", "wake_word", "trigger", "key", "input_device", "output_device",
         "sample_rate", "channels", "max_seconds",
@@ -893,6 +919,24 @@ def load_config(path: str | Path | None = None, *, load_env: bool = True) -> Con
         )
     )
 
+    gp_section = table.get("gp", {})
+    gp = GpConfig(
+        currency=str(gp_section.get("currency", "$")),
+        year_starts_month=int(gp_section.get("year_starts_month", 1)),
+        stale_after_days=int(gp_section.get("stale_after_days", 45)),
+    )
+    if not 1 <= gp.year_starts_month <= 12:
+        raise ConfigError(
+            f"gp.year_starts_month is {gp.year_starts_month}, which is not a month. "
+            "1 is January and a calendar year; 4 is a financial year starting in April."
+        )
+    if gp.stale_after_days < 1:
+        raise ConfigError(
+            "gp.stale_after_days must be at least 1. Turning the stale marker off is "
+            "not an option: a figure that looks current when it is months old is the "
+            "one failure this dashlet has."
+        )
+
     voice_section = table.get("voice", {})
     voice = VoiceConfig(
         push_to_talk=bool(voice_section.get("push_to_talk", True)),
@@ -1004,6 +1048,7 @@ def load_config(path: str | Path | None = None, *, load_env: bool = True) -> Con
         wake=wake,
         recall=recall,
         drafts=drafts,
+        gp=gp,
         voice=voice,
         stt=stt,
         tts=tts,
