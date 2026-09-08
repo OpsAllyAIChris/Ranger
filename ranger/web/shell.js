@@ -34,12 +34,18 @@ export function createShell(orb) {
     mic: $('mic'),
     micHint: $('mic-hint'),
     liveEdge: $('live-edge'),
+    handsFree: $('handsfree'),
+    handsFreeLabel: $('handsfree-label'),
+    banner: $('live-banner'),
+    bannerText: $('live-banner-text'),
+    bannerStop: $('live-banner-stop'),
   };
 
   let socket = null;
   let reply = null; // the card currently being streamed into
   let openToken = null;
   let voiceReady = false;
+  let handsFree = { offered: false, ready: false, armed: false, phrase: '' };
   let listening = false;
   let microphone = null;
   let speaker = null;
@@ -195,6 +201,9 @@ export function createShell(orb) {
 
   function openCard(event) {
     openToken = event.token;
+    // A spoken yes is not consent, and hands free is a microphone that is
+    // already open. It goes off, not just quiet.
+    if (handsFree.armed) killHandsFree();
     // A spoken yes is not consent, so while a card is open there is no
     // microphone to say it into. Tier 3's rule, enforced by the interface
     // rather than by hoping the operator does not try.
@@ -255,6 +264,14 @@ export function createShell(orb) {
   // Escape declines. There is no way to dismiss this card without answering
   // it, and the answer a stray keypress gives is the safe one.
   window.addEventListener('keydown', (e) => {
+    // Escape kills hands free before anything else looks at it. Condition
+    // three, and the one key that must never be ambiguous.
+    if (e.key === 'Escape' && handsFree.armed) {
+      e.preventDefault();
+      killHandsFree();
+      toast('hands free off');
+      return;
+    }
     if (!openToken) return;
     if (e.key === 'Escape') { e.preventDefault(); answer(false); }
     // Enter is deliberately not bound. Approving is a decision, not a reflex.
@@ -369,6 +386,56 @@ export function createShell(orb) {
     window.dispatchEvent(new CustomEvent('ranger:mic-toggle', { detail: { listening } }));
   };
 
+  // -------------------------------------------------------- hands free
+
+  function drawHandsFree(state) {
+    handsFree = Object.assign({}, handsFree, state || {});
+    el.handsFree.classList.toggle('on', Boolean(handsFree.offered));
+    const armed = Boolean(handsFree.armed);
+
+    el.handsFree.querySelector('.pip').style.visibility = armed ? 'visible' : 'hidden';
+    el.handsFreeLabel.textContent = armed ? 'listening' : 'hands free';
+    el.handsFree.setAttribute('aria-pressed', String(armed));
+
+    // The edge is shared with recording, so the class decides which it means.
+    el.liveEdge.classList.toggle('hands-free', armed);
+    el.liveEdge.classList.toggle('on', armed || listening);
+    el.banner.classList.toggle('on', armed);
+    document.body.classList.toggle('hands-free', armed);
+    if (armed) {
+      el.bannerText.textContent = 'microphone open, listening for "' + handsFree.phrase + '"';
+    }
+  }
+
+  function armHandsFree() {
+    if (!handsFree.offered) return;
+    if (!handsFree.ready) {
+      toast(handsFree.reason || 'hands free is not installed');
+      return;
+    }
+    // Unlocked from inside this click, as with the mic button, or the reply
+    // to a hands free turn cannot be played.
+    ensureAudio();
+    speaker.unlock().catch(() => {});
+    send({ type: 'arm' });
+  }
+
+  function killHandsFree() {
+    if (!handsFree.armed) return false;
+    send({ type: 'disarm' });
+    // Drawn immediately rather than waiting for the round trip. Condition
+    // three is one click to kill, and a kill that looks like it might not
+    // have worked is not one.
+    drawHandsFree({ armed: false });
+    return true;
+  }
+
+  el.handsFree.onclick = () => {
+    if (handsFree.armed) killHandsFree();
+    else armHandsFree();
+  };
+  el.bannerStop.onclick = killHandsFree;
+
   // ------------------------------------------------------------ the socket
 
   function send(payload) {
@@ -394,6 +461,7 @@ export function createShell(orb) {
     switch (event.kind) {
       case 'hello':
         setState('idle');
+        drawHandsFree(event.hands_free);
         voiceReady = Boolean(event.voice) && supported();
         el.mic.hidden = !voiceReady;
         if (event.voice && !supported()) {
@@ -424,6 +492,20 @@ export function createShell(orb) {
         }
         break;
       }
+      case 'hands_free':
+        drawHandsFree(event);
+        break;
+      case 'wake_fire':
+        // Every firing, including the discarded ones. It is in the audit log
+        // either way; this is so the operator sees it happen.
+        log('-- wake: ' + event.detail);
+        if (event.outcome !== 'spoke') toast(event.detail);
+        break;
+      case 'level':
+        // While Python owns the microphone the input level arrives over the
+        // socket rather than being measured here. Playback is unchanged.
+        if (orb && handsFree.armed && !listening) orb.setVoiceBright(event.value);
+        break;
       case 'speech':
         if (speaker) {
           speaker.play(fromBase64(event.audio), event.format).catch((err) => {
@@ -472,6 +554,7 @@ export function createShell(orb) {
       setState('idle');
       if (listening) stopListening(true);
       if (speaker) speaker.stop();
+      drawHandsFree({ armed: false, offered: handsFree.offered });
       closeCard();
       el.say.disabled = true;
       toast('socket closed (' + e.code + '). reload to reconnect.');

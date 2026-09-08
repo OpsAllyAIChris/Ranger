@@ -148,6 +148,41 @@ class AccountsConfig:
 
 
 @dataclass(frozen=True)
+class WakeConfig:
+    """Hands free. Off unless the operator turns it on, every session.
+
+    `enabled` is what the *setting file* says, and it is deliberately not the
+    same thing as being armed: arming is a per session act in the interface and
+    is never persisted. This only decides whether the control appears at all.
+    """
+
+    enabled: bool = False
+    #: The phrase, two words, used to strip it off the front of a transcript
+    #: and to say what is being listened for.
+    phrase: str = "hey jarvis"
+    #: A .onnx or .tflite next to the vault, or a name openWakeWord ships.
+    model: str = "hey_jarvis"
+    #: Higher is fewer false fires and more missed ones.
+    threshold: float = 0.6
+    #: Seconds to wait for speech after the phrase before discarding.
+    grace_seconds: float = 3.0
+    #: Silence that ends an utterance.
+    silence_seconds: float = 0.9
+    #: Ceiling, for a room noisy enough that silence never arrives.
+    max_seconds: float = 30.0
+    #: Kept before the fire, because detection lags the phrase.
+    preroll_seconds: float = 1.5
+    #: An open microphone nobody remembers is the likeliest failure.
+    idle_disarm_minutes: float = 15.0
+    #: How often to ask whether another application took the microphone.
+    mic_check_seconds: float = 5.0
+
+    @property
+    def idle_disarm_seconds(self) -> float:
+        return self.idle_disarm_minutes * 60
+
+
+@dataclass(frozen=True)
 class BriefConfig:
     """Tier 5. What the morning brief is allowed to say.
 
@@ -339,6 +374,7 @@ class Config:
     schedule: ScheduleConfig
     accounts: AccountsConfig
     brief: BriefConfig
+    wake: WakeConfig
     recall: RecallConfig
     drafts: DraftsConfig
     voice: VoiceConfig
@@ -433,6 +469,10 @@ KNOWN_KEYS: dict[str, frozenset[str]] = {
     "schedule": frozenset({"morning_hour", "quiet_start_hour", "quiet_end_hour"}),
     "accounts": frozenset({
         "quiet_after_days", "exclude_files", "skip_statuses", "tier_order", "closed_stages",
+    }),
+    "wake": frozenset({
+        "enabled", "phrase", "model", "threshold", "grace_seconds", "silence_seconds",
+        "max_seconds", "preroll_seconds", "idle_disarm_minutes", "mic_check_seconds",
     }),
     "brief": frozenset({
         "lines", "slipping_max", "deals_max", "cold_after_days", "decision_prompt",
@@ -725,6 +765,32 @@ def load_config(path: str | Path | None = None, *, load_env: bool = True) -> Con
     if accounts.quiet_after_days < 1:
         raise ConfigError("accounts.quiet_after_days must be at least 1")
 
+    wake_section = table.get("wake", {})
+    wake = WakeConfig(
+        enabled=bool(wake_section.get("enabled", False)),
+        phrase=str(wake_section.get("phrase", "hey jarvis")),
+        model=str(wake_section.get("model", "hey_jarvis")),
+        threshold=float(wake_section.get("threshold", 0.6)),
+        grace_seconds=float(wake_section.get("grace_seconds", 3.0)),
+        silence_seconds=float(wake_section.get("silence_seconds", 0.9)),
+        max_seconds=float(wake_section.get("max_seconds", 30.0)),
+        preroll_seconds=float(wake_section.get("preroll_seconds", 1.5)),
+        idle_disarm_minutes=float(wake_section.get("idle_disarm_minutes", 15.0)),
+        mic_check_seconds=float(wake_section.get("mic_check_seconds", 5.0)),
+    )
+    if len(wake.phrase.split()) < 2:
+        raise ConfigError(
+            f"wake.phrase is {wake.phrase!r}, which is one word. A single common word is "
+            "a wake phrase that fires constantly, so two are required."
+        )
+    if not 0.0 < wake.threshold <= 1.0:
+        raise ConfigError("wake.threshold must be above 0 and at most 1")
+    if wake.idle_disarm_minutes <= 0:
+        raise ConfigError(
+            "wake.idle_disarm_minutes must be positive. Hands free that never disarms "
+            "itself is the failure this setting exists to prevent."
+        )
+
     brief_section = table.get("brief", {})
     brief = BriefConfig(
         lines=int(brief_section.get("lines", 5)),
@@ -866,6 +932,7 @@ def load_config(path: str | Path | None = None, *, load_env: bool = True) -> Con
         schedule=schedule,
         accounts=accounts,
         brief=brief,
+        wake=wake,
         recall=recall,
         drafts=drafts,
         voice=voice,

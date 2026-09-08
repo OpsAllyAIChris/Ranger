@@ -145,6 +145,40 @@ tier_order = ["1", "2", "3", "4", "Historical"]
 # the deal is over.
 closed_stages = ["Closed Won", "Closed Lost"]
 
+[wake]
+# Hands free. A local hotword model, so nothing is streamed to transcription
+# until the phrase fires. Needs the optional extra: pip install "ranger[wake]"
+#
+# enabled only decides whether the control appears. Arming is a per session act
+# in the interface and is never remembered, so a restart is always off.
+enabled = false
+# Two words, always. A single common word is a wake phrase that fires
+# constantly, and the loader refuses one.
+#
+# 'hey jarvis' is what openWakeWord ships and it is phonetically rare, which
+# makes it flattering. 'hey ranger' is two ordinary English words and will do
+# noticeably worse. Train one with scripts/train_wake_word.py and point model
+# at the file it writes.
+phrase = "hey jarvis"
+model = "hey_jarvis"
+# Higher is fewer false fires and more missed ones.
+threshold = 0.6
+# Seconds to wait for speech after the phrase. Nothing spoken in this window is
+# discarded rather than sent: silence costs money and transcribes to nothing.
+grace_seconds = 3.0
+# Silence that ends an utterance, and the ceiling for a room where it never
+# arrives.
+silence_seconds = 0.9
+max_seconds = 30.0
+# Kept from before the phrase fired. Detection lags by a few hundred
+# milliseconds and people run the phrase into the request, so without this the
+# first word after the phrase is already gone.
+preroll_seconds = 1.5
+# An open microphone nobody remembers is the likeliest failure.
+idle_disarm_minutes = 15.0
+# How often to ask Windows whether another application took the microphone.
+mic_check_seconds = 5.0
+
 [brief]
 # Tier 5. A morning brief has a size, not a threshold.
 #

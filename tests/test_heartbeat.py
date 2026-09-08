@@ -254,7 +254,9 @@ async def test_the_morning_surface_calls_what_went_quiet(seeded):
 
     assert notice is not None
     assert "quiet means no logged activity" in notice.body
-    assert "Rusty Supply Co" in notice.body
+    # Not a named account: the brief's decision prompt rotates by the day, so
+    # asserting on one of them makes this pass or fail depending on the date.
+    assert "Ask for the full list" in notice.body
 
 
 async def test_the_morning_surface_reports_a_tool_failure_rather_than_crashing(config):

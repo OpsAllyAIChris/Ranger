@@ -33,6 +33,8 @@ DECISION = "decision"
 PANEL = "panel"
 DISMISS = "dismiss"
 STOP = "stop"
+ARM = "arm"
+DISARM = "disarm"
 
 #: How many tool calls the panel remembers. Enough to see what just happened,
 #: not a second audit log: the real one is in the vault and is append only.
@@ -52,6 +54,11 @@ class Session:
     transcriber: Any = None
     speaker: Any = None
     keyterms: bool = True
+    #: Hands free. None until armed, and never armed by anything but an
+    #: explicit message from the operator: condition one is that it is opted
+    #: into per session and never persisted on, so there is no path where a
+    #: restart comes back listening.
+    listener: Any = None
     _turn: asyncio.Task | None = None
 
     # -- outbound ------------------------------------------------------
@@ -73,6 +80,7 @@ class Session:
             # The front end shows a mic only if there is something behind it.
             voice=self.transcriber is not None,
             speech=self.speaker is not None,
+            hands_free=self._hands_free_state(),
         )
         self.emit("state", state=State.IDLE.value)
         self.push_panel()
@@ -112,6 +120,10 @@ class Session:
             return self.push_panel()
         if kind == DISMISS:
             return self._dismiss(message)
+        if kind == ARM:
+            return self._arm()
+        if kind == DISARM:
+            return self._disarm()
         if kind == STOP:
             if not self.stop():
                 self.emit("error", message="nothing was running")
@@ -158,7 +170,7 @@ class Session:
         self.busy = True
         self._turn = asyncio.create_task(self._run_audio(utterance))
 
-    async def _run_audio(self, utterance: Any) -> None:
+    async def _run_audio(self, utterance: Any, *, strip: str = "") -> None:
         from .events import State
         from .listen import transcribe
 
@@ -173,6 +185,13 @@ class Session:
             return
 
         text = (heard.text or "").strip()
+        if strip:
+            # The wake phrase is taken off as text, never cut out of the audio:
+            # the audio boundary is a guess and guessing it wrong eats the
+            # first word of the request.
+            from .wake import strip_phrase
+
+            text = strip_phrase(text, strip)
         # Always shown, even when empty. "Heard nothing in that" with the
         # numbers is the message that stopped three silent turns in Tier 3
         # from looking like a broken microphone.
@@ -200,6 +219,135 @@ class Session:
         self.emit("stopped", reason=why)
         self.emit("state", state=State.IDLE.value)
         return True
+
+    # -- hands free ----------------------------------------------------
+
+    def _hands_free_state(self) -> dict[str, Any]:
+        """What the interface needs to draw the control, or to hide it."""
+        from .wake import available
+
+        wake = self.agent.config.wake
+        ready, why = available()
+        return {
+            "offered": bool(wake.enabled) and self.transcriber is not None,
+            "ready": ready,
+            "reason": why,
+            "phrase": wake.phrase,
+            "armed": bool(self.listener and self.listener.hotword.armed),
+            "idle_minutes": wake.idle_disarm_minutes,
+        }
+
+    def _arm(self) -> None:
+        """Turn hands free on for this session only."""
+        from .handsfree import Listener, microphone_frames
+        from .micuse import may_arm
+        from .wake import WakeUnavailable, build_hotword
+
+        wake = self.agent.config.wake
+        if not wake.enabled:
+            self.emit("error", message="wake.enabled is false, so hands free is not offered")
+            return
+        if self.transcriber is None:
+            self.emit("error", message="there is no transcription wired, so hands free would be deaf")
+            return
+        if self.listener is not None and self.listener.hotword.armed:
+            self.emit("error", message="hands free is already on")
+            return
+
+        try:
+            hotword = build_hotword(self.agent.config, check_microphone=may_arm)
+        except WakeUnavailable as exc:
+            self.emit("error", message=str(exc))
+            return
+
+        ok, why = hotword.arm()
+        self._log_wake("armed" if ok else "refused", why)
+        if not ok:
+            self.emit("error", message=f"hands free did not start: {why}")
+            self.emit("hands_free", **self._hands_free_state())
+            return
+
+        loop = asyncio.get_running_loop()
+
+        def utterance(pcm: bytes) -> None:
+            loop.call_soon_threadsafe(self._heard_hands_free, pcm)
+
+        def fired(fire) -> None:
+            loop.call_soon_threadsafe(self._log_fire, fire)
+
+        def state(value) -> None:
+            loop.call_soon_threadsafe(
+                lambda: self.emit("hands_free", **self._hands_free_state(), listening=value.value)
+            )
+
+        def level(value: float) -> None:
+            loop.call_soon_threadsafe(lambda: self.emit("level", value=round(value, 3)))
+
+        self.listener = Listener(
+            hotword=hotword,
+            frames=microphone_frames,
+            on_utterance=utterance,
+            on_fire=fired,
+            on_state=state,
+            on_level=level,
+            check_seconds=wake.mic_check_seconds,
+        )
+        self.listener.start()
+        self.emit("hands_free", **self._hands_free_state())
+        self.emit("notice", level="info", message=why)
+
+    def _disarm(self, why: str = "stopped at the keyboard") -> None:
+        if self.listener is None:
+            self.emit("error", message="hands free is not on")
+            return
+        self.listener.hotword.disarm(why)
+        self.listener.stop()
+        self.listener = None
+        self._log_wake("disarmed", why)
+        self.emit("hands_free", **self._hands_free_state())
+
+    def _heard_hands_free(self, pcm: bytes) -> None:
+        """An utterance captured by the hotword, taken as a turn."""
+        from .listen import Utterance
+        from .wake import wav_of
+
+        if self.busy:
+            self.stop("interrupted")
+        self.busy = True
+        self._turn = asyncio.create_task(
+            self._run_audio(Utterance(audio=wav_of(pcm), mime="audio/wav",
+                                      seconds=round(len(pcm) / 2 / 16000, 2)),
+                            strip=self.agent.config.wake.phrase)
+        )
+
+    def _log_fire(self, fire) -> None:
+        """Every firing, including the discarded ones.
+
+        The operator asked for this so false fires can be counted over a week
+        rather than guessed at, and so a fire during a call it should have
+        disarmed for is visible rather than invisible.
+        """
+        self._log_wake(f"fired {fire.outcome.value}", fire.describe(self.agent.config.wake.phrase))
+        self.emit(
+            "wake_fire",
+            outcome=fire.outcome.value,
+            confidence=round(fire.confidence, 3),
+            seconds=round(fire.seconds, 2),
+            blockers=list(fire.blockers),
+            detail=fire.describe(self.agent.config.wake.phrase),
+        )
+        if fire.outcome.value == "blocked":
+            self.listener = None
+            self.emit("hands_free", **self._hands_free_state())
+
+    def _log_wake(self, kind: str, detail: str) -> None:
+        audit = getattr(self.agent, "audit", None)
+        if audit is None:
+            return
+        try:
+            audit.write(f"hands-free {kind}", detail, origin=self.agent.origin)
+        except Exception:
+            pass
 
     def _decide(self, message: dict[str, Any]) -> None:
         """A click on a confirmation card.
@@ -302,7 +450,13 @@ class Session:
         del self.tools[RECENT_TOOLS:]
 
     def close(self) -> None:
-        """The socket went away. Nothing is left waiting and nothing is approved."""
+        """The socket went away. Nothing is left waiting, and the microphone
+        is put down: a closed tab must never leave Ranger listening."""
+        if self.listener is not None:
+            self.listener.hotword.disarm("the interface went away")
+            self.listener.stop()
+            self.listener = None
+            self._log_wake("disarmed", "the interface went away")
         if isinstance(self.agent.gate, SocketGate):
             self.agent.gate.abandon()
         if self._turn is not None and not self._turn.done():

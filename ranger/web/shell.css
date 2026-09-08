@@ -85,6 +85,7 @@ html, body {
 #header {
   position: absolute;
   top: 0; left: 0; right: 0;
+  transition: top 300ms var(--ease);
   height: var(--header);
   display: flex;
   align-items: center;
@@ -164,6 +165,7 @@ html, body {
 #panel {
   position: absolute;
   top: var(--header); right: 0; bottom: 0;
+  transition: top 300ms var(--ease);
   width: var(--panel);
   box-sizing: border-box;
   background: var(--glass);
@@ -429,6 +431,96 @@ html, body {
   transition: opacity 300ms var(--ease);
 }
 #live-edge.on { opacity: 1; }
+
+/* ------------------------------------------------------- hands free */
+
+/* Deliberately not the accent. Armed and recording must never look alike, and
+   the accent already means "Ranger is doing something you asked for". This is
+   the state where the microphone is open without you having said anything. */
+:root { --live: #FF7A45; }
+
+#handsfree {
+  display: none;
+  align-items: center;
+  gap: 8px;
+  height: 26px;
+  padding: 0 10px 0 8px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 122, 69, 0.55);
+  background: rgba(255, 122, 69, 0.12);
+  color: var(--live);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
+  cursor: pointer;
+  pointer-events: auto;
+  transition: background 260ms var(--ease), border-color 260ms var(--ease);
+}
+#handsfree.on { display: flex; }
+#handsfree:hover { background: rgba(255, 122, 69, 0.22); }
+#handsfree .pip {
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  background: var(--live);
+  animation: live-pip 1.2s var(--ease) infinite;
+}
+@keyframes live-pip {
+  0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(255, 122, 69, 0.6); }
+  50%      { opacity: 0.5; box-shadow: 0 0 0 7px rgba(255, 122, 69, 0); }
+}
+
+/* Condition two: unmistakable, not a subtle dot. The whole frame, in a colour
+   used for nothing else, plus a banner that says what it is listening for. */
+#live-edge.hands-free {
+  box-shadow: inset 0 0 0 3px rgba(255, 122, 69, 0.7);
+  animation: live-breathe 2.4s var(--ease) infinite;
+}
+@keyframes live-breathe {
+  0%, 100% { box-shadow: inset 0 0 0 3px rgba(255, 122, 69, 0.7); }
+  50%      { box-shadow: inset 0 0 0 3px rgba(255, 122, 69, 0.35); }
+}
+
+#live-banner {
+  position: fixed;
+  top: 0; left: 0; right: 0;
+  z-index: 3;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  height: 30px;
+  background: rgba(255, 122, 69, 0.16);
+  border-bottom: 1px solid rgba(255, 122, 69, 0.45);
+  backdrop-filter: blur(var(--glass-blur));
+  -webkit-backdrop-filter: blur(var(--glass-blur));
+  color: var(--live);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+  pointer-events: auto;
+}
+#live-banner.on { display: flex; }
+#live-banner button {
+  border: 1px solid rgba(255, 122, 69, 0.5);
+  background: transparent;
+  color: var(--live);
+  border-radius: 7px;
+  padding: 2px 9px;
+  font: inherit;
+  cursor: pointer;
+  transition: background 220ms var(--ease);
+}
+#live-banner button:hover { background: rgba(255, 122, 69, 0.2); }
+
+/* The banner pushes everything down rather than covering the wordmark. */
+body.hands-free #header { top: 30px; }
+body.hands-free #panel { top: calc(var(--header) + 30px); }
+
+@media (prefers-reduced-motion: reduce) {
+  #handsfree .pip, #live-edge.hands-free { animation: none !important; }
+}
 
 /* ------------------------------------------------------ the frame log */
 

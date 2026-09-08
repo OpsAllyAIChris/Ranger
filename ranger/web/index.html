@@ -27,6 +27,9 @@
             <rect x="3" y="4" width="18" height="16" rx="2" /><line x1="15" y1="4" x2="15" y2="20" />
           </svg>
         </button>
+        <button id="handsfree" title="hands free: listening for the wake phrase">
+          <span class="pip"></span><span id="handsfree-label">hands free</span>
+        </button>
         <span id="status" data-state="idle" title="idle"></span>
       </div>
     </header>
@@ -65,6 +68,13 @@
   <!-- Outside #ui so it covers everything, including the panel and the cards.
        While the microphone is open this is the unmissable part. -->
   <div id="live-edge"></div>
+
+  <!-- Condition two. Says what it is listening for and how to stop it, in a
+       colour used for nothing else in the interface. -->
+  <div id="live-banner">
+    <span id="live-banner-text">listening for the wake phrase</span>
+    <button id="live-banner-stop">stop, or press escape</button>
+  </div>
 
   <!-- Outside #ui, because a confirmation is not part of the furniture. It
        covers everything and it is answered rather than dismissed. -->

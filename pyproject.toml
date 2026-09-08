@@ -13,6 +13,14 @@ dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.24",
 ]
+# Hands free. An extra rather than a dependency: onnxruntime wheels for new
+# Python versions arrive late, and nothing else in Ranger may stop working
+# because a wake word would not install.
+wake = [
+    "openwakeword>=0.6",
+    "onnxruntime>=1.17",
+    "numpy>=1.24",
+]
 
 [project.scripts]
 ranger = "ranger.cli:main"

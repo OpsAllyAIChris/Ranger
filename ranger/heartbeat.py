@@ -224,6 +224,11 @@ class MorningSurface:
     store: Any = None
     #: Rebuilt each run so the record matches what was actually surfaced.
     scan: Any = None
+    #: The same clock the loop uses. It has to be, because the loop decides
+    #: "already ran today" from the date on the notice this writes, and two
+    #: clocks meant a forced run near midnight could file a notice the
+    #: scheduler would never match.
+    now: Callable[[], datetime] = datetime.now
 
     def status(self, now: datetime, inbox: Inbox) -> Dueness:
         # Only today. Six missed mornings are not replayed on the seventh,
@@ -252,14 +257,14 @@ class MorningSurface:
                 kind=self.name,
                 title="The morning check could not run",
                 body=result.content,
-                created=datetime.now(),
+                created=self.now(),
             )
-        now = datetime.now()
+        moment = self.now()
         return Notice(
             kind=self.name,
-            title=f"What went quiet, {day_and_month(now)}",
+            title=f"What went quiet, {day_and_month(moment)}",
             body=result.content,
-            created=now,
+            created=moment,
         )
 
 
@@ -382,6 +387,7 @@ class Heartbeat:
         self.now = now or datetime.now
         self.kill_switch = kill_switch
         self.audit = audit
+        self._align_clocks()
         #: Checks currently in flight. A slow check must not stack up behind
         #: itself when its next turn comes round.
         self._running: set[str] = set()
@@ -396,6 +402,23 @@ class Heartbeat:
         if candidate <= now:
             candidate += timedelta(days=1)
         return candidate
+
+    def _align_clocks(self) -> None:
+        """Everything in the loop runs on the loop's clock, not on its own.
+
+        Two bugs of the same shape, and both only appear at a boundary. A check
+        that stamps a notice with `datetime.now()` while the loop asks "did
+        this run today" against another clock disagrees with itself, and the
+        symptom is a morning check that runs twice or never. An audit log doing
+        the same writes the row into a different day's file from the notice it
+        is describing.
+        """
+        for target in (*self.checks, self.audit):
+            if target is not None and hasattr(target, "now"):
+                try:
+                    target.now = self.now
+                except Exception:
+                    pass
 
     async def tick(self, force: tuple[str, ...] = ()) -> TickReport:
         """One pass. Every check ends with a stated outcome, never silence."""

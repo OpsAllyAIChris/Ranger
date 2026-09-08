@@ -297,6 +297,21 @@ def cmd_doctor(config: Config) -> int:
         print("  todo     tts.voice_id is not set. Run 'ranger voices', then put the id in")
         print(f"           {_local_config_path(config)}, which is git-ignored and survives a pull.")
 
+    if config.wake.enabled:
+        from .wake import available
+
+        ready, why = available()
+        if ready:
+            print(f"  ok       hands free is on, listening for {config.wake.phrase!r}")
+            print(f"           model {config.wake.model}, threshold {config.wake.threshold}, "
+                  f"auto off after {config.wake.idle_disarm_minutes:.0f} minutes")
+        else:
+            # Not a problem, by design. It is an optional extra and the rest of
+            # Ranger is unaffected by it not being there.
+            print(f"  todo     wake.enabled is true but {why}")
+    else:
+        print("  ok       hands free is off. Set wake.enabled to offer it")
+
     if not config.vault.root.is_dir():
         problems += 1
         print(f"  problem  vault root does not exist: {config.vault.root}")

@@ -749,6 +749,9 @@ ranger/
   panel.py       Tier 7c: what the activity panel shows, read from the vault
   brief.py       Tier 5: the morning brief. a size, not a threshold
   listen.py      Tier 7d: audio in and out over the socket
+  wake.py        hands free: the hotword state machine and its rules
+  handsfree.py   the microphone loop behind it, on a daemon thread
+  micuse.py      who else is using the microphone, read from Windows
   schedule.py    running the heartbeat with no terminal open
   desktop.py     the taskbar shortcut, the window, and bringing it forward
   icon.py        the taskbar icon, drawn rather than shipped
@@ -769,6 +772,49 @@ ranger/
   import ...` that broke collection for anyone running it normally.
   `tests/test_suite_hygiene.py` now fails on that pattern. Shared test helpers
   are fixtures, never imports.
+
+## Hands free
+
+Reopened after being settled against twice, under seven conditions that are the
+specification rather than preferences. They live in `wake.py`'s docstring so
+they cannot drift away from the code.
+
+**Nothing streams anywhere until the phrase fires.** A local model on 80ms
+frames, and the audio never leaves the machine until there is a reason. That is
+the whole point of a hotword rather than an open connection to a transcription
+service, and it is why continuous streaming was refused.
+
+**Python owns the microphone while armed, and the rule is strict: any other
+consumer wins.** Windows records which applications hold the microphone and
+Ranger reads the same source the taskbar indicator does. Strict rather than
+lenient because most of the operator's meetings are browser calls, and a
+browser holding the microphone cannot be told apart from a browser holding it
+for a call: lenient leaves uncovered exactly the case the check exists for. It
+is checked at arming and again at every fire, because a call that starts while
+Ranger sits armed is the case a check only at arming would miss.
+
+The cost, stated where the decision is: while armed the orb's *input* level
+arrives over the socket instead of being measured in the page. Playback is
+unchanged and still measured where the sound comes out.
+
+**A fire with no speech after it is discarded and still logged.** Silence costs
+money and transcribes to nothing, and it is the most common outcome of a false
+fire. Logging it anyway is what lets false fires be counted over a week rather
+than guessed at, and makes a fire during a call it should have disarmed for
+visible rather than invisible.
+
+**The pre-roll.** Detection lags the phrase by a few hundred milliseconds and
+people run the phrase into the request, so a rolling buffer is always kept and
+the utterance starts before the fire. The phrase is stripped off the front of
+the transcript, never cut out of the audio: that boundary is a guess and
+guessing it wrong eats the first word.
+
+**openWakeWord is an optional extra.** `pip install "ranger[wake]"`. If it will
+not install, hands free is not offered and nothing else is affected.
+openWakeWord ships a small fixed set of phrases and "hey ranger" is not one of
+them: `scripts/train_wake_word.py` trains it, and `hey jarvis` is the default
+until then. Anything observed with jarvis is flattering, because it is
+phonetically rare and "hey ranger" is two ordinary English words.
 
 ## Tier 7d: voice in the browser
 
