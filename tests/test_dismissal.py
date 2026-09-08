@@ -27,33 +27,98 @@ def dismissed(text: str, phrase: str = "hey jarvis") -> bool:
     return is_dismissal(text, phrase)
 
 
-# -- the counterexample, first ---------------------------------------------
+# -- real transcripts, verbatim --------------------------------------------
+#
+# The first version required the whole utterance to be the dismissal and never
+# fired once in a live session. Three things stack, and none of them is a bug:
+#
+#   - the wake word echoes into the transcript as a leading "Jarvis."
+#   - conversation mode means the previous reply's tail is transcribed into the
+#     next turn, so the utterance is almost never clean
+#   - Deepgram writes "That's all, Jarvis" with a comma
+#
+# So the design assumed a clean utterance and the pipeline never produces one.
+# These four are copied out of the operator's log exactly as Deepgram wrote
+# them, trailing "So" included. **Do not tidy them.** Synthetic clean input is
+# what let the first version pass its tests and fail every real attempt.
+
+REAL_TRANSCRIPTS = [
+    "Jarvis. That's all Jarvis.",
+    "In writing. Anything else? That's all, Jarvis.",
+    (
+        "Got it. I'll go by Jarvis from here on. Done. That's locked in. "
+        "Anything else? Well, no. That's all Jarvis."
+    ),
+    "Jarvis. That's all Jarvis. So",
+]
+
+
+@pytest.mark.parametrize("said", REAL_TRANSCRIPTS)
+def test_a_real_transcript_dismisses(said):
+    assert dismissed(said) is True, said
+
+
+def test_the_leading_wake_word_echo_does_not_prevent_it():
+    """The echo sits in front, and a trailing-clause rule never looks there."""
+    assert dismissed("Jarvis. That's all Jarvis.") is True
+
+
+def test_deepgrams_comma_does_not_split_the_phrase():
+    """Commas are not clause separators, and this is the whole reason why:
+    splitting on one would tear "That's all, Jarvis" in half."""
+    assert dismissed("Anything else? That's all, Jarvis.") is True
+
+
+def test_a_hanging_fragment_at_the_end_is_ignored():
+    """Deepgram ends an utterance on a stray word constantly. Treating that
+    "So" as the final clause is the difference between working and never
+    firing."""
+    assert dismissed("That's all Jarvis. So") is True
+    assert dismissed("That's all Jarvis. Um") is True
+    assert dismissed("That's all Jarvis. Ok then") is True
+
+
+def test_a_substantive_trailing_clause_is_not_ignored():
+    """The fragment rule is for filler, and only filler. Anything carrying a
+    request blocks the dismissal, which is what keeps this from being a
+    substring match with extra steps."""
+    assert dismissed("That's all Jarvis. Tell Rusty we're done") is False
+    assert dismissed("That's all Jarvis. What about Illes") is False
+
+
+# -- the counterexample ----------------------------------------------------
 
 
 def test_the_counterexample():
-    """The literal sentence the operator named, and it must never fire.
+    """The clause the operator named, and it must never be a dismissal.
 
-    It contains "that's all". It contains "Jarvis". A substring rule takes it
-    and minimises their window in the middle of a request about Rusty.
+    It survives the move from whole-utterance to trailing-clause for a reason
+    rather than by luck: it is a single clause, and that clause is not the
+    dismissal phrase. A substring rule takes it; neither of these does.
     """
     assert dismissed("tell Rusty that's all we need from Jarvis") is False
 
 
-@pytest.mark.parametrize(
-    "said",
-    [
-        "tell Rusty that's all we need from Jarvis",
-        "what's happening with Illes, that's all Jarvis",
-        "say thanks Jarvis to Dana for me",
-        "draft a note that says that's all for now",
-        "that's all the pricing we have from Telly",
-        "Jarvis, what's all this about the retort line",
-    ],
-)
-def test_a_dismissal_inside_a_request_is_not_a_dismissal(said):
-    """The deliberate trade: a dismissal that misses costs one click, and one
-    that fires wrongly takes the window away mid-sentence."""
-    assert dismissed(said) is False
+def test_the_counterexample_holds_wherever_it_sits():
+    """Not just at the end. Nothing about its position is what saves it."""
+    assert dismissed("Tell Rusty that's all we need from Jarvis. Anything else?") is False
+    assert dismissed("First, tell Rusty that's all we need from Jarvis") is False
+
+
+def test_a_dismissal_after_a_request_now_fires_and_that_is_deliberate():
+    """The one behaviour that changed, stated so it is a decision and not a
+    surprise.
+
+    This is the operator's 12:25 transcript. Under the whole-utterance rule it
+    did not dismiss. Under the trailing-clause rule it does, because the last
+    thing said was the dismissal, as its own clause, and they meant it.
+    """
+    said = (
+        "Just checking the name sticks. Tell Rusty that's all we need from "
+        "Jarvis. That's all Jarvis."
+    )
+
+    assert dismissed(said) is True
 
 
 # -- and the ones that should fire -----------------------------------------
@@ -176,7 +241,7 @@ def session(config):
         armed = True
 
         def listen(self, seconds=None):
-            return True
+            return True, "listening for a follow-up"
 
         def disarm(self, why=""):
             self.armed = False

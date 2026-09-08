@@ -12,12 +12,13 @@ from datetime import datetime
 
 from .config import Config
 from .dates import prompt_datetime
+from .naming import ASSISTANT
 from .knowledge import KnowledgeContext
 from .memory import MemoryContext
 from .tools import ToolRegistry
 
 PERSONA = """\
-You are Ranger, a voice-first assistant working for one person. Call them the
+You are {assistant}, a voice-first assistant working for one person. Call them the
 operator.
 
 What you are for: you know the operator's accounts, you remember what they have
@@ -174,7 +175,12 @@ def _stable_sections(
 ) -> str:
     """Everything that does not change from one turn to the next."""
     vault = config.vault
-    sections: list[str] = [PERSONA, WRITING_RULES, SAFETY, VAULT_POSTURE]
+    sections: list[str] = [
+        PERSONA.format(assistant=ASSISTANT),
+        WRITING_RULES,
+        SAFETY,
+        VAULT_POSTURE,
+    ]
 
     sections.append(
         "## Where things are\n"

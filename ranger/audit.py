@@ -25,9 +25,9 @@ from .dates import human_datetime
 from .vault import Vault
 
 HEADER = """\
-# Ranger log
+# Jarvis log
 
-Append only. Ranger cannot rewrite this file; the vault refuses.
+Append only. Jarvis cannot rewrite this file; the vault refuses.
 
 | time | origin | kind | detail |
 | ---- | ------ | ---- | ------ |

@@ -3,7 +3,7 @@
 Python owns the microphone while hands free is armed, by the operator's
 decision. The alternative, letting the browser keep it, would have meant that
 "Chrome is using the microphone" could not be told apart from "Chrome is using
-the microphone because Ranger asked it to" — and most of their meetings are
+the microphone because Jarvis asked it to" — and most of their meetings are
 browser calls, so the lenient version leaves uncovered exactly the case the
 check exists for.
 
@@ -110,7 +110,7 @@ class Listener:
                     break
 
                 # Asked on a timer, not only when the phrase fires. Arming and
-                # then joining a call would otherwise leave Ranger holding the
+                # then joining a call would otherwise leave Jarvis holding the
                 # microphone for the whole call, because the check at fire time
                 # only runs if something fires.
                 now = clock.monotonic()

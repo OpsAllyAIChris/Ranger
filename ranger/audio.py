@@ -5,7 +5,7 @@ If this step does not work nothing after it can, and every failure here is a
 device or a driver rather than an API.
 
 sounddevice is imported lazily and never at module import time, so the rest of
-Ranger keeps working on a machine with no audio stack at all. The backend is a
+Jarvis keeps working on a machine with no audio stack at all. The backend is a
 Protocol so the logic below is testable without a microphone, which matters
 because the sandbox this was written in has neither a microphone nor PortAudio.
 
@@ -188,7 +188,7 @@ def read_wav(path: Path) -> tuple[bytes, int, int]:
     with wave.open(str(path), "rb") as handle:
         if handle.getsampwidth() != SAMPLE_WIDTH:
             raise AudioError(
-                f"{path} is {handle.getsampwidth() * 8} bit; Ranger works in 16 bit PCM."
+                f"{path} is {handle.getsampwidth() * 8} bit; Jarvis works in 16 bit PCM."
             )
         return handle.readframes(handle.getnframes()), handle.getframerate(), handle.getnchannels()
 

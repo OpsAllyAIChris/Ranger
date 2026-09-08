@@ -226,7 +226,7 @@ def _draft_and_hold(config: Config, vault: Vault) -> Tool:
         return ToolResult(
             ok=True,
             content=(
-                f"Draft held at {held.relative}. It has not been sent and Ranger cannot "
+                f"Draft held at {held.relative}. It has not been sent and Jarvis cannot "
                 "send it. Tell the operator where it is in one short line."
             ),
             summary=held.relative,
@@ -431,7 +431,7 @@ def _remember(config: Config, vault: Vault) -> Tool:
         return ToolResult(
             ok=True,
             content=(
-                f"Remembered, in {written.name}. It will be there next time Ranger starts, "
+                f"Remembered, in {written.name}. It will be there next time Jarvis starts, "
                 "and the operator can correct or delete the line in Obsidian."
             ),
             summary=fact[:60],
@@ -553,7 +553,7 @@ def _file_to_account(config: Config, vault: Vault, today: Callable[[], date]) ->
 
         account = str(payload.get("account", "")).strip()
         note = str(payload.get("note", "")).strip()
-        source = str(payload.get("source", "")).strip() or "Ranger"
+        source = str(payload.get("source", "")).strip() or "Jarvis"
 
         if not account:
             return ToolResult(False, "An account name is needed to file anything.",
@@ -631,7 +631,7 @@ def _file_to_account(config: Config, vault: Vault, today: Callable[[], date]) ->
                     "type": "string",
                     "description": (
                         "Where it came from: 'call', 'email', 'Chris', 'meeting'. "
-                        "Defaults to Ranger."
+                        "Defaults to Jarvis."
                     ),
                 },
             },
@@ -642,7 +642,7 @@ def _file_to_account(config: Config, vault: Vault, today: Callable[[], date]) ->
     )
 
 
-# -- 7 and 8. reading back what Ranger wrote --------------------------------
+# -- 7 and 8. reading back what Jarvis wrote --------------------------------
 
 
 def _list_own_files(config: Config, vault: Vault) -> Tool:
@@ -692,7 +692,7 @@ def _list_own_files(config: Config, vault: Vault) -> Tool:
     return Tool(
         name="list_own_files",
         description=(
-            "List what Ranger has written into its own folders: drafts it is holding, "
+            "List what Jarvis has written into its own folders: drafts it is holding, "
             "notices in the inbox, or what it remembers. Use this when the operator "
             "refers to something you wrote earlier and you need to find which file it "
             "is, before reading it. Returns names, dates and one line each, never the "
@@ -706,7 +706,7 @@ def _list_own_files(config: Config, vault: Vault) -> Tool:
                     "enum": list(FOLDERS),
                     "description": (
                         "drafts for held drafts, inbox for notices waiting to be seen, "
-                        "memory for what Ranger remembers about the operator."
+                        "memory for what Jarvis remembers about the operator."
                     ),
                 },
                 "cleared": {

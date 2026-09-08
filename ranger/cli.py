@@ -39,7 +39,7 @@ RESET = "\033[0m"
 
 HELP = """\
   /help     this
-  /state    what Ranger thinks it is doing
+  /state    what Jarvis thinks it is doing
   /config   the loaded configuration
   /tools    the tool registry
   /vault    vault paths and whether they exist
@@ -189,7 +189,7 @@ async def voice_loop(config: Config, show_state: bool) -> int:
 
         stt = replace(stt, keyterms=plan.terms)
 
-    print(paint("Ranger", BOLD + TEAL) + paint(f"  {config.model.name}, voice {config.tts.voice_id}", DIM))
+    print(paint("Jarvis", BOLD + TEAL) + paint(f"  {config.model.name}, voice {config.tts.voice_id}", DIM))
     print(paint(f"  {len(plan.terms)} vocabulary hints, {config.stt.model}", DIM))
     print(paint("  the typed interface is still there: run 'ranger' with no flags", DIM))
     _announce_inbox(config, paint)
@@ -219,7 +219,7 @@ async def repl(config: Config, show_state: bool) -> int:
         print(paint(f"cannot start: {exc}", RED), file=sys.stderr)
         return 1
 
-    print(paint("Ranger", BOLD + TEAL) + paint(f"  {config.model.name}", DIM))
+    print(paint("Jarvis", BOLD + TEAL) + paint(f"  {config.model.name}", DIM))
     for warning in config.warnings:
         print(paint(f"  note: {warning}", YELLOW))
     knowledge = agent.knowledge()
@@ -347,7 +347,7 @@ def cmd_doctor(config: Config) -> int:
                 print("           Train it: see scripts/train_wake_word.py")
         else:
             # Not a problem, by design. It is an optional extra and the rest of
-            # Ranger is unaffected by it not being there.
+            # Jarvis is unaffected by it not being there.
             print(f"  todo     wake.enabled is true but {why}")
     else:
         print("  ok       hands free is off. Set wake.enabled to offer it")
@@ -387,7 +387,7 @@ def _knowledge_report(config: Config, vault: Vault) -> list[str]:
 
     lines: list[str] = []
     if not context.docs and not context.omitted:
-        lines.append("  todo     Knowledge is empty. Ranger has no business context.")
+        lines.append("  todo     Knowledge is empty. Jarvis has no business context.")
         lines.append("  note     any .md in that folder is loaded. The names in")
         lines.append("           knowledge.priority only set the order, they are not required.")
         return lines
@@ -447,7 +447,7 @@ def cmd_init(config: Config, assume_yes: bool) -> int:
         if path == config.vault.accounts or path == config.vault.knowledge:
             note = "  (yours, read only, seed it by hand)"
         elif path in config.vault.named_roots:
-            note = "  (Ranger's)"
+            note = "  (Jarvis's)"
         print(f"  {path}{note}")
 
     print("Empty folders only. No notes are written, and nothing outside")
@@ -464,13 +464,13 @@ def cmd_init(config: Config, assume_yes: bool) -> int:
 
     if vault.is_empty(config.vault.knowledge):
         print()
-        print("Knowledge is empty, so Ranger knows nothing about the business yet.")
+        print("Knowledge is empty, so Jarvis knows nothing about the business yet.")
         print("See docs/vault-conventions.md for what to put there.")
     return 0
 
 
 def cmd_audio_devices(config: Config) -> int:
-    """Tier 3a. What PortAudio can see, and which ones Ranger will use."""
+    """Tier 3a. What PortAudio can see, and which ones Jarvis will use."""
     from .audio import SoundDeviceBackend
 
     try:
@@ -629,7 +629,7 @@ def cmd_pause(config: Config, args) -> int:
     switch = _kill_switch(config)
     path = switch.set(paused=True)
     print("  Proactive behaviour is paused. The heartbeat will surface nothing.")
-    print("  You can still talk to Ranger normally.")
+    print("  You can still talk to Jarvis normally.")
     print(f"  {path}")
     print("  Resume with 'ranger resume'.")
     return 0
@@ -791,7 +791,7 @@ def _run_heartbeat(config: Config, args) -> int:
         return asyncio.run(once())
 
     schedule = config.schedule
-    print(paint("Ranger heartbeat", BOLD + TEAL))
+    print(paint("Jarvis heartbeat", BOLD + TEAL))
     print(paint(
         f"  morning surface at {schedule.morning_hour:02d}:00, quiet "
         f"{schedule.quiet_start_hour:02d}:00 to {schedule.quiet_end_hour:02d}:00", DIM))
@@ -818,7 +818,7 @@ def cmd_memory(config: Config, args) -> int:
     print()
     if context.empty:
         print("  nothing remembered yet.")
-        print("  Ranger writes here when you tell it something worth keeping, and you")
+        print("  Jarvis writes here when you tell it something worth keeping, and you")
         print("  can add lines by hand in the same format.")
         return 0
 
@@ -1233,7 +1233,7 @@ def cmd_alias(config: Config, args: Any) -> int:
             return 0
 
         print(paint(f"{len(found)} pairs that might be one account", BOLD))
-        print(paint("  Ranger never merges these. Pick the name to keep and run:", DIM))
+        print(paint("  Jarvis never merges these. Pick the name to keep and run:", DIM))
         print(paint("    ranger alias add \"<other name>\" \"<name to keep>\"", DIM))
         print()
         for item in found:
@@ -1364,7 +1364,7 @@ def cmd_mic(config: Config, args: Any) -> int:
     Hands free refuses to arm while another application holds the microphone,
     and that check reads a Windows registry key which cannot be exercised
     anywhere without one. This makes it checkable in one command: open a call,
-    run this, and see whether Ranger sees what the taskbar sees.
+    run this, and see whether Jarvis sees what the taskbar sees.
     """
     from .micuse import describe, may_arm
 
@@ -1568,7 +1568,7 @@ def cmd_accounts_migrate(config: Config, args: Any) -> int:
         from .marker import survey_endings
 
         print(paint("  dry run, nothing written", DIM))
-        # What is about to be migrated, before it is. Ranger never converts
+        # What is about to be migrated, before it is. Jarvis never converts
         # what is already on disk, so this decides nothing -- but the vault
         # came out of four separate CRM exports and a mixed count above zero
         # is worth knowing beforehand rather than afterwards.
@@ -1588,7 +1588,7 @@ def cmd_vault_guard(config: Config, args: Any) -> int:
     """What a rebuild of the vault would destroy.
 
     build_vault.py regenerates account notes from the CRM export. Everything
-    above the marker is its to replace; everything below is Ranger's and is not
+    above the marker is its to replace; everything below is Jarvis's and is not
     regenerable from anything. This is the check that script has to make before
     it writes, runnable on its own until it can be wired in.
 
@@ -1809,7 +1809,7 @@ def _open(config: Config, args: Any, log: Path) -> int:
             print(paint("  the loaded config has no path, so a server cannot be started", RED),
                   file=sys.stderr)
             return 1
-        print(paint(f"  starting Ranger, logging to {log}", DIM))
+        print(paint(f"  starting Jarvis, logging to {log}", DIM))
         start_server(Path(config.source_path).resolve(), log)
 
         import time
@@ -1823,7 +1823,7 @@ def _open(config: Config, args: Any, log: Path) -> int:
 
         url = describe(config, (running or {}).get("port"))
         if running is None:
-            print(paint(f"  Ranger did not come up at {url}.", RED), file=sys.stderr)
+            print(paint(f"  Jarvis did not come up at {url}.", RED), file=sys.stderr)
             print(paint(f"  The log says why: {log}", RED), file=sys.stderr)
             return 1
 
@@ -1840,13 +1840,13 @@ def _open(config: Config, args: Any, log: Path) -> int:
         print(paint(f"  could not focus the existing window ({result.detail})", DIM))
 
     how = open_window(url, profile_dir=_browser_profile(config))
-    print(paint(f"Ranger  {url}", BOLD) + paint(f"  {how}", DIM))
+    print(paint(f"Jarvis  {url}", BOLD) + paint(f"  {how}", DIM))
     print(paint(f"  log  {log}", DIM))
     return 0
 
 
 def _browser_profile(config: Config) -> Path:
-    """Its own browser profile, so Ranger's window is not a tab in the
+    """Its own browser profile, so Jarvis's window is not a tab in the
     operator's work browser and closing that browser does not close this."""
     return config.vault.ranger / "browser"
 
@@ -1873,7 +1873,7 @@ def cmd_stop(config: Config, args: Any) -> int:
     except (OSError, ValueError) as exc:
         print(paint(f"  could not stop process {pid}: {exc}", RED), file=sys.stderr)
         return 1
-    print(paint(f"  stopped Ranger (pid {pid}).", TEAL))
+    print(paint(f"  stopped Jarvis (pid {pid}).", TEAL))
     return 0
 
 
@@ -1934,14 +1934,14 @@ def _retired_shortcut(config: Config, args: Any) -> int:
     elif on_windows():
         print(paint(f"  no pythonw beside {launcher}, so a console window will appear", YELLOW))
 
-    target = Path(args.path).expanduser() if args.path else _desktop_dir() / "Ranger.lnk"
+    target = Path(args.path).expanduser() if args.path else _desktop_dir() / "Jarvis.lnk"
     shortcut = Shortcut(
         path=target,
         target=launcher,
         arguments=f'-m ranger -c "{settings}" open',
         working_directory=root,
         icon=icon,
-        description="Ranger",
+        description="Jarvis",
     )
 
     if not on_windows():
@@ -1962,7 +1962,7 @@ def _retired_shortcut(config: Config, args: Any) -> int:
     print(paint(f"  icon  {icon}", DIM))
     print()
     print("  Right-click it and choose Pin to taskbar.")
-    print(paint(f"  Clicking it starts Ranger if it is not running and opens {config.server.host}"
+    print(paint(f"  Clicking it starts Jarvis if it is not running and opens {config.server.host}"
                 f":{config.server.port} in its own window.", DIM))
     print(paint(f"  Output goes to {ui_log(config)}. 'ranger stop' stops it.", DIM))
     return 0
@@ -1982,7 +1982,7 @@ def _desktop_dir() -> Path:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(prog="ranger", description="Ranger, a voice-first assistant.")
+    parser = argparse.ArgumentParser(prog="ranger", description="Jarvis, a voice-first assistant.")
     parser.add_argument("-c", "--config", help="path to ranger.toml")
     parser.add_argument(
         "--quiet-state",
@@ -1995,7 +1995,7 @@ def main(argv: list[str] | None = None) -> int:
         help="Tier 3d: push to talk instead of typing. The typed path stays available.",
     )
     sub = parser.add_subparsers(dest="command")
-    sub.add_parser("chat", help="talk to Ranger in the terminal (default)")
+    sub.add_parser("chat", help="talk to Jarvis in the terminal (default)")
     sub.add_parser("doctor", help="check the config, the vault and the environment")
     init = sub.add_parser("init", help="create Ranger's own folders in the vault")
     init.add_argument("-y", "--yes", action="store_true", help="skip the confirmation")
@@ -2026,7 +2026,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     transcribe.add_argument("--model", help="override stt.model for this run")
 
-    sub.add_parser("memory", help="Tier 4: show what Ranger remembers")
+    sub.add_parser("memory", help="Tier 4: show what Jarvis remembers")
 
     inbox = sub.add_parser("inbox", help="Tier 5: notices waiting for you")
     inbox.add_argument("dismiss", nargs="?", type=int, help="clear notice N in the vault")
@@ -2060,11 +2060,11 @@ def main(argv: list[str] | None = None) -> int:
     ui.add_argument("--port", type=int, help="override [server] port for this run")
     ui.add_argument("--log", metavar="PATH", help="append everything printed to this file as well")
 
-    opened = sub.add_parser("open", help="open Ranger in its own window, starting it if needed")
+    opened = sub.add_parser("open", help="open Jarvis in its own window, starting it if needed")
     opened.add_argument("--new-window", action="store_true", help="always open another window")
     opened.add_argument("--wait", type=float, default=20, help="seconds to wait for it to come up")
 
-    sub.add_parser("stop", help="stop a Ranger server started by the shortcut")
+    sub.add_parser("stop", help="stop a Jarvis server started by the shortcut")
 
     shortcut = sub.add_parser("shortcut", help="retired: how to install and pin the app instead")
     shortcut.add_argument("path", nargs="?", help=argparse.SUPPRESS)
@@ -2095,7 +2095,7 @@ def main(argv: list[str] | None = None) -> int:
         if name in {"install", "xml", "show"}:
             step.add_argument(
                 "--every", type=int, metavar="MINUTES",
-                help="how often to check. Ranger decides what is due (default 60)",
+                help="how often to check. Jarvis decides what is due (default 60)",
             )
             step.add_argument("--log", metavar="PATH", help="where the output goes")
             step.add_argument(
@@ -2143,7 +2143,7 @@ def main(argv: list[str] | None = None) -> int:
     migrate_cmd.add_argument(
         "--dry-run", action="store_true", help="say what would change and write nothing"
     )
-    drafts = sub.add_parser("drafts", help="the drafts Ranger is holding")
+    drafts = sub.add_parser("drafts", help="the drafts Jarvis is holding")
     drafts_sub = drafts.add_subparsers(dest="drafts_command")
     drafts_sub.add_parser("show", help="what is held right now")
     drafts_sub.add_parser("cleared", help="what has been cleared. Moved, never deleted")

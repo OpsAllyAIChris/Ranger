@@ -1,8 +1,8 @@
 """Draft and hold.
 
-Ranger writes a draft into the vault and stops. It has no way to send anything
+Jarvis writes a draft into the vault and stops. It has no way to send anything
 and will not get one: sending is on the operator's never-without-asking list,
-and the split is that Ranger drafts and the operator sends.
+and the split is that Jarvis drafts and the operator sends.
 
 The writing rules are the operator's, and one of them is enforced here rather
 than left to the system prompt: no em dashes and no en dashes. A prompt rule is
@@ -88,7 +88,7 @@ def hold_draft(
     target = drafts_dir / stem
     counter = 2
     while target.exists():
-        # Ranger never overwrites a note, so a second draft on the same subject
+        # Jarvis never overwrites a note, so a second draft on the same subject
         # on the same day sits beside the first.
         target = drafts_dir / f"{stem[:-3]}-{counter}.md"
         counter += 1

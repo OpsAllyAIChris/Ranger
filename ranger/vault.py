@@ -1,6 +1,6 @@
 """The vault, and the wall around it.
 
-Amendment D. Ranger reads the whole vault and writes only under <root>/Ranger.
+Amendment D. Jarvis reads the whole vault and writes only under <root>/Jarvis.
 That is enforced here, in code, so a confused model cannot talk its way past
 it. There is deliberately no delete method and no rename method anywhere in
 this file. Overwriting an existing note requires an explicit flag and is
@@ -27,7 +27,7 @@ class VaultPathDenied(VaultError):
 
 
 class VaultWriteDenied(VaultError):
-    """The path is readable but Ranger is not allowed to write it."""
+    """The path is readable but Jarvis is not allowed to write it."""
 
 
 def _real(path: Path) -> Path:
@@ -54,7 +54,7 @@ class VaultFile:
 
 
 class Vault:
-    """Every read and write Ranger makes goes through one of these methods."""
+    """Every read and write Jarvis makes goes through one of these methods."""
 
     def __init__(self, config: VaultConfig) -> None:
         self.config = config
@@ -135,7 +135,7 @@ class Vault:
         if self.is_append_only(target):
             raise VaultWriteDenied(f"{target} is in the append-only log folder; use append()")
         if target.exists():
-            raise VaultWriteDenied(f"{target} already exists; Ranger does not overwrite notes")
+            raise VaultWriteDenied(f"{target} already exists; Jarvis does not overwrite notes")
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(text, encoding="utf-8")
         return target
@@ -193,10 +193,10 @@ class Vault:
     def resolve_account(self, path: str | Path) -> Path:
         """An existing account note, and nothing else that exists.
 
-        Amendment D revision 2 lets Ranger append below the marker in
+        Amendment D revision 2 lets Jarvis append below the marker in
         `Accounts/`. This is where that is decided, and it is deliberately not
         an entry in `writable_roots`: everything that reads that tuple would
-        then treat account notes as ordinary Ranger files, which they are not.
+        then treat account notes as ordinary Jarvis files, which they are not.
         Nothing here may create a note, and nothing here may touch a folder.
         """
         candidate = self._absolute(path)

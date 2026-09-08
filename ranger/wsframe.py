@@ -1,6 +1,6 @@
 """RFC 6455 framing, and nothing above it.
 
-Deliberately not a dependency. Ranger runs on two packages, both of which had
+Deliberately not a dependency. Jarvis runs on two packages, both of which had
 to be installed on a Python 3.14 machine where wheel availability has already
 cost a round trip, and the part of the websocket protocol this project actually
 uses is a text frame, a close and a ping. That is a readable amount of code,
@@ -8,7 +8,7 @@ and reading it is the point: `start-here.md` asks for a program small enough to
 read whole.
 
 What this module knows: bytes on a socket. It does not know what a turn is,
-what Ranger is, or what the messages mean. `bridge.py` is where meaning starts.
+what Jarvis is, or what the messages mean. `bridge.py` is where meaning starts.
 
 Frames from a browser are always masked and frames to it never are. That is not
 a nicety in the spec, it is the spec, and a browser will drop the connection
@@ -83,7 +83,7 @@ def read_frame(source: BinaryIO, *, expect_mask: bool = True) -> Frame | None:
 
     Masking is directional and the spec is strict both ways: a client masks,
     a server never does. The default is the server's side of that, which is
-    where Ranger sits; `expect_mask=False` is the reader a client would use,
+    where Jarvis sits; `expect_mask=False` is the reader a client would use,
     and the tests are the only client in this repository.
     """
     header = _read_exact(source, 2)

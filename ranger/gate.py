@@ -101,7 +101,7 @@ class TerminalGate:
     async def ask(self, request: ConfirmationRequest) -> Decision:
         lines = [
             "",
-            "  Ranger wants to do something that needs your yes:",
+            "  Jarvis wants to do something that needs your yes:",
             f"    {request.render()}",
             "",
         ]
@@ -134,7 +134,7 @@ class HoldingGate:
 
         when = self.now()
         body = (
-            f"Ranger wanted to do this and stopped, because it needs your yes:\n\n"
+            f"Jarvis wanted to do this and stopped, because it needs your yes:\n\n"
             f"> {request.render()}\n\n"
             f"Started from: {request.origin}.\n"
             f"Tool: `{request.tool}`\n\n"

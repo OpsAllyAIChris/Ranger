@@ -1,4 +1,4 @@
-"""The event stream Ranger emits while it works.
+"""The event stream Jarvis emits while it works.
 
 Amendment A: the core is a library. Its one entry point yields these events
 as an async stream. The terminal prints them, Tier 3 will speak them, Tier 5
@@ -14,7 +14,7 @@ from typing import Any, ClassVar
 
 
 class State(str, Enum):
-    """What Ranger is doing right now."""
+    """What Jarvis is doing right now."""
 
     IDLE = "idle"
     LISTENING = "listening"

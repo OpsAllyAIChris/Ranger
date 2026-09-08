@@ -383,7 +383,7 @@ async def test_filing_with_no_source_still_records_where_it_came_from(registry, 
     await run(registry, "file_to_account", account="Illes", note="x")
 
     text = (migrated.vault.accounts / "Illes Foods.md").read_text(encoding="utf-8")
-    assert "| x | Ranger" in text
+    assert "| x | Jarvis" in text
 
 
 async def test_the_tool_never_touches_the_export_half(registry, migrated):

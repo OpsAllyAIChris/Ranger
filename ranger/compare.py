@@ -1,4 +1,4 @@
-"""Showing what Ranger thought you said, next to what you said.
+"""Showing what Jarvis thought you said, next to what you said.
 
 start-here.md asks for the transcript beside the reply so that when the answer
 is wrong you can see whether the ears or the brain was at fault. This is the

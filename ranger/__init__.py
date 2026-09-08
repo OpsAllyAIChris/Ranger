@@ -1,4 +1,4 @@
-"""Ranger. A voice-first assistant for one person.
+"""Jarvis. A voice-first assistant for one person.
 
 The core is a library (see core.py). The terminal, the push-to-talk loop, the
 heartbeat and the browser are all callers of it.
@@ -33,7 +33,7 @@ __all__ = [
     "KnowledgeLoader",
     "Notice",
     "Provider",
-    "Ranger",
+    "Jarvis",
     "State",
     "StateChanged",
     "TextDelta",

@@ -43,6 +43,12 @@ from .config import Config
 
 #: What it is called in Task Scheduler. Shown in the library, and the handle
 #: for removing it, so it is stable rather than derived from anything.
+#: Deliberately still "Ranger". A scheduled task name is installed state on the
+#: operator's machine, not an identity string: renaming it would leave the old
+#: task registered and running alongside a new one, which is two things
+#: starting the interface at logon. Same category as the CLI command and the
+#: vault folder, and the same reason -- the rename is cosmetic and the
+#: migration is not.
 TASK_NAME = "Ranger heartbeat"
 
 #: The second task: keep the interface up so a pinned icon only has to open a
@@ -143,7 +149,7 @@ def build_plan(
     log = log_path or default_log(config)
 
     # Always an absolute -c, never a relative one and never none. A scheduled
-    # task can be started from anywhere, and a Ranger that cannot find
+    # task can be started from anywhere, and a Jarvis that cannot find
     # ranger.toml fails with a config error that says nothing about why the
     # working directory was C:\Windows\System32.
     settings = config_path or config.source_path
@@ -245,7 +251,7 @@ def to_xml(plan: Plan) -> str:
 <Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
   <RegistrationInfo>
     <Description>{escape(
-        "Ranger's heartbeat. Surfaces the morning brief and anything else that is due. "
+        "Jarvis's heartbeat. Surfaces the morning brief and anything else that is due. "
         "Registered by 'ranger schedule install'."
     )}</Description>
     <URI>\\{escape(plan.name)}</URI>

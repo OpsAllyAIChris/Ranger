@@ -14,7 +14,7 @@ with a `NonPackaged` subkey for ordinary desktop programs, whose paths are
 mangled with `#` in place of the separators. Each application has
 `LastUsedTimeStart` and `LastUsedTimeStop`; **a stop time of zero means it is
 using the microphone right now.** This is the same source the Windows 11
-taskbar indicator reads, so what Ranger believes and what the operator can see
+taskbar indicator reads, so what Jarvis believes and what the operator can see
 in their own taskbar cannot disagree.
 
 The rule is strict, by the operator's decision: **any other consumer wins.**
@@ -229,7 +229,7 @@ def describe(read: Callable[[], Iterable[tuple[str, bool, int]]] | None = None) 
 
     The whole check is unverifiable from anywhere without a Windows registry,
     so this exists to make it verifiable in one command on the machine that
-    has one: open Teams, run `ranger mic`, and see whether Ranger sees what the
+    has one: open Teams, run `ranger mic`, and see whether Jarvis sees what the
     taskbar sees. A check nobody can confirm is a check nobody should trust.
     """
     try:
@@ -246,7 +246,7 @@ def describe(read: Callable[[], Iterable[tuple[str, bool, int]]] | None = None) 
         lines.append("")
         lines.append("using it right now:")
         lines += [
-            f"  {c.name}{'   (Ranger itself)' if c.is_ours else ''}"
+            f"  {c.name}{'   (Jarvis itself)' if c.is_ours else ''}"
             for c in sorted(live, key=lambda c: c.name.lower())
         ]
     else:

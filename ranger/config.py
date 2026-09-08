@@ -20,7 +20,7 @@ DEFAULT_CONFIG_FILENAME = "ranger.toml"
 
 #: Settings that are the operator's rather than the project's live here, beside
 #: the tracked config and git-ignored. ranger.toml carries the defaults and gets
-#: edited by whoever is working on Ranger; this file carries the voice id, the
+#: edited by whoever is working on Jarvis; this file carries the voice id, the
 #: microphone, and anything else that should survive a pull.
 LOCAL_SUFFIX = ".local.toml"
 
@@ -69,7 +69,7 @@ class VaultConfig:
     drafts: Path
     log: Path
     #: Take a daily git snapshot of the vault. Read-only Accounts/ used to be
-    #: the undo; once Ranger appends there, this is. Local only, never pushed.
+    #: the undo; once Jarvis appends there, this is. Local only, never pushed.
     snapshot: bool = True
     #: Refuse to snapshot any single file larger than this. A ceiling catches
     #: the thing nobody thought to name, which is the failure that actually
@@ -213,7 +213,7 @@ class WakeConfig:
     #: Bring the window forward when the phrase fires.
     surface_on_wake: bool = True
     #: Force it in front with HWND_TOPMOST when Windows refuses foreground.
-    #: Off by default: it works, and it puts Ranger over a screen share.
+    #: Off by default: it works, and it puts Jarvis over a screen share.
     surface_topmost: bool = False
     #: Never force the window in front while another application has the
     #: microphone. The closest thing to "am I in a call" that exists without
@@ -252,7 +252,7 @@ class BriefConfig:
     #: When each account was first reported quiet, so the brief can report a
     #: crossing rather than a state.
     seen_file: str = "quiet-seen.md"
-    #: Accounts the operator has said to stop surfacing. In Ranger's folder
+    #: Accounts the operator has said to stop surfacing. In Jarvis's folder
     #: rather than the note, because build_vault.py overwrites the notes.
     dormant_file: str = "dormant.md"
 
@@ -293,7 +293,7 @@ class MemoryConfig:
     """Tier 4. Durable facts about the operator, in plain markdown."""
 
     #: Memory's guaranteed slice of the standing context. Taken before
-    #: knowledge, because losing a memory fact makes Ranger forget the operator
+    #: knowledge, because losing a memory fact makes Jarvis forget the operator
     #: while losing a knowledge file only makes it less well briefed.
     reserve_chars: int = 8000
     file: str = "facts.md"
@@ -479,7 +479,7 @@ def _repair_windows_paths(text: str) -> tuple[str, list[str]]:
                     out.append(f"{indent}{key}{equals}'{value}'{tail}")
                 notes.append(
                     f"vault.{key} is a Windows path in a double-quoted string, where "
-                    "a backslash means an escape sequence. Ranger read it as a literal "
+                    "a backslash means an escape sequence. Jarvis read it as a literal "
                     f"path. To silence this, use single quotes: {key} = '{value}'"
                 )
                 continue
@@ -546,7 +546,7 @@ KNOWN_KEYS: dict[str, frozenset[str]] = {
 }
 
 
-#: Settings that used to exist. A pointer beats "not a setting Ranger reads".
+#: Settings that used to exist. A pointer beats "not a setting Jarvis reads".
 RETIRED_KEYS: dict[str, str] = {
     "accounts.open_stages": (
         "Replaced by accounts.closed_stages, which lists the stages that mean the deal is "
@@ -580,12 +580,12 @@ def _check_known_keys(table: dict[str, Any]) -> None:
                 if elsewhere
                 else " Remove it, or check the spelling."
             )
-            raise ConfigError(f"{section}.{key} is not a setting Ranger reads.{hint}")
+            raise ConfigError(f"{section}.{key} is not a setting Jarvis reads.{hint}")
 
     for section in table:
         if section not in KNOWN_KEYS:
             raise ConfigError(
-                f"[{section}] is not a section Ranger reads. Known sections: "
+                f"[{section}] is not a section Jarvis reads. Known sections: "
                 + ", ".join(sorted(KNOWN_KEYS))
             )
 
@@ -624,7 +624,7 @@ def _vault_root(raw: str) -> Path:
     """Resolve the vault root, which must be absolute.
 
     A relative root would resolve against the current working directory, so
-    Ranger would quietly build a vault inside whatever folder it was launched
+    Jarvis would quietly build a vault inside whatever folder it was launched
     from. That is never what anyone means, and it is how a stray 'C:\\tmp\\...'
     once got written into this repository on Linux.
     """
@@ -642,7 +642,7 @@ def _vault_root(raw: str) -> Path:
             )
         raise ConfigError(
             f"{source} must be an absolute path, got {value!r}. A relative path "
-            "resolves against whatever directory Ranger was started in, so the vault "
+            "resolves against whatever directory Jarvis was started in, so the vault "
             "would move depending on where you launched it. Use a full path or one "
             "starting with ~."
         )
@@ -664,7 +664,7 @@ def _build_vault(table: dict[str, Any]) -> VaultConfig:
         path = paths[name]
         if path != ranger_root and ranger_root not in path.parents:
             raise ConfigError(
-                f"vault.{name} must sit under vault.ranger; Ranger writes nowhere else"
+                f"vault.{name} must sit under vault.ranger; Jarvis writes nowhere else"
             )
     for name in ("accounts", "knowledge"):
         path = paths[name]

@@ -20,7 +20,7 @@ a transcription service.
 Two things that are not obvious and matter more than they look.
 
 **The pre-roll buffer.** Detection lags the phrase by a few hundred
-milliseconds, and people run the phrase into the request: "Hey Ranger what is
+milliseconds, and people run the phrase into the request: "Hey Jarvis what is
 happening with Illes". Without a rolling buffer the first word after the phrase
 is already gone by the time anything starts recording. So the buffer runs
 continuously while armed and the utterance starts *before* the fire. The phrase
@@ -78,7 +78,7 @@ def available() -> tuple[bool, str]:
 
     An optional extra by the operator's condition seven. They are on Python
     3.14 where wheel availability for onnxruntime cannot be checked from here,
-    and the rest of Ranger has to be unaffected if it will not install.
+    and the rest of Jarvis has to be unaffected if it will not install.
     """
     try:
         import openwakeword  # noqa: F401
@@ -129,7 +129,7 @@ SMALLEST_PLAUSIBLE_MODEL = 100_000
 def models_folder() -> Path:
     """Where openWakeWord looks for models, which is inside its own package.
 
-    Not a Ranger folder and deliberately not configurable. The two feature
+    Not a Jarvis folder and deliberately not configurable. The two feature
     models are found by a hardcoded path inside openWakeWord's preprocessor,
     so a hotword downloaded anywhere else would load and then fail on the
     first frame.
@@ -150,7 +150,7 @@ def find_model(name: str, folder: Path | None = None) -> Path | None:
     `hey_jarvis_v0.1.onnx`, so an exact match is not enough and looking for one
     is why a correct download still reported no model. Highest version wins.
 
-    ONNX only. Ranger's extra installs onnxruntime and not tflite_runtime, and
+    ONNX only. Jarvis's extra installs onnxruntime and not tflite_runtime, and
     handing a `.tflite` to a model built for ONNX raises deep inside
     openWakeWord rather than here.
     """
@@ -394,7 +394,7 @@ class Detector:
             )
         if path.suffix != ".onnx":
             raise WakeUnavailable(
-                f"{path.name} is not an ONNX model. Ranger's wake extra installs "
+                f"{path.name} is not an ONNX model. Jarvis's wake extra installs "
                 "onnxruntime and not tflite_runtime, so a .tflite fails several layers "
                 "down inside openWakeWord rather than here"
             )
@@ -551,7 +551,7 @@ class Hotword:
             return self._utterance(), self._finish(Outcome.TOO_LONG, moment)
         return None, None
 
-    def listen(self, grace_seconds: float | None = None) -> bool:
+    def listen(self, grace_seconds: float | None = None) -> tuple[bool, str]:
         """Wait for speech without the phrase. Conversation mode's one hook.
 
         The same WAITING state a firing produces, entered deliberately instead
@@ -564,12 +564,15 @@ class Hotword:
         exactly the case a check at arming time misses.
         """
         if self.state is not State.ARMED:
-            return False
+            # Not device contention. The state machine is mid-utterance or off,
+            # which is a different problem with a different fix, and the log has
+            # to say which one the operator is looking at.
+            return False, f"the hotword is {self.state.value}, not armed"
 
         verdict = self._verdict()
         if verdict is not None and not verdict.allowed:
             self.disarm("something else took the microphone")
-            return False
+            return False, f"something else has the microphone: {verdict.reason}"
 
         self.state = State.WAITING
         self._fired_at = self.now()
@@ -580,13 +583,13 @@ class Hotword:
         self._grace = self.grace_seconds if grace_seconds is None else grace_seconds
         self._captured = [self._ring.drain()]
         self.touch()
-        return True
+        return True, "listening for a follow-up"
 
     def _fired(self, score: float, moment: float) -> Fire | None:
         """The phrase was heard. Check the microphone again before recording.
 
         Checked twice on purpose: once at arming, and again here. A call that
-        started while Ranger sat armed is the case that matters, and it is the
+        started while Jarvis sat armed is the case that matters, and it is the
         one a check only at arming would miss entirely.
         """
         verdict = self._verdict()
@@ -660,36 +663,86 @@ DISMISSALS = (
 
 _PUNCTUATION = re.compile(r"[^\w\s]+")
 
+#: Sentence enders only. **Not the comma**, deliberately: Deepgram writes
+#: "That's all, Jarvis" and splitting there would tear the phrase in half,
+#: which is one of the three reasons the first version never fired.
+_CLAUSE = re.compile(r"[.?!;]+")
+
+#: Trailing fragments that carry no request. Deepgram ends an utterance on a
+#: hanging word constantly -- one of the operator's real transcripts is
+#: "Jarvis. That's all Jarvis. So" -- and treating that "So" as the final
+#: clause is the difference between the rule working and never firing.
+_TRAILING_FILLER = frozenset(
+    "so um uh er ok okay yeah yep yes no well and but then right anyway thanks "
+    "thank you please alright allright cheers mm mmhmm hmm".split()
+)
+
+#: The most words a trailing fragment may have and still be ignored. Two, so
+#: "thank you" and "ok then" are dropped and anything with content is not.
+_MAX_FILLER_WORDS = 2
+
 
 def dismissals(phrase: str) -> tuple[str, ...]:
-    """Every form of the dismissal, for a given wake phrase."""
+    """Every form of the dismissal, for a given wake phrase.
+
+    Built from the phrase's last word, so a different phrase changes the
+    dismissal without a second edit.
+    """
     name = (phrase or "").split()[-1] if phrase and phrase.split() else "jarvis"
     return tuple(form.format(name=name) for form in DISMISSALS)
 
 
-def is_dismissal(text: str, phrase: str) -> bool:
-    """Is this utterance a dismissal, and nothing else?
+def clauses(text: str) -> list[str]:
+    """The utterance split into clauses, normalised, fillers dropped off the end.
 
-    **A whole-utterance rule, never a substring match.** The counterexample is
-    in the tests and stays there:
-
-        tell Rusty that's all we need from Jarvis
-
-    is a request. It contains "that's all" and it contains "Jarvis", and it must
-    run as a turn and leave the window alone. A substring rule takes it; a
-    whole-utterance rule does not, and whole-utterance rules rot into substring
-    matches under later edits unless a test is standing on them.
-
-    The trade is deliberate: "what's happening with Illes, that's all Jarvis"
-    does not dismiss either. A dismissal that misses costs one click. One that
-    fires wrongly takes the window away mid-sentence.
+    Commas are not separators. Everything else about this function exists
+    because the pipeline never produces a clean utterance.
     """
-    flat = _PUNCTUATION.sub("", " ".join(str(text or "").lower().split())).strip()
-    if not flat:
+    parts = [
+        _PUNCTUATION.sub("", " ".join(part.lower().split())).strip()
+        for part in _CLAUSE.split(str(text or ""))
+    ]
+    parts = [part for part in parts if part]
+
+    while len(parts) > 1:
+        words = parts[-1].split()
+        if len(words) <= _MAX_FILLER_WORDS and all(w in _TRAILING_FILLER for w in words):
+            parts.pop()
+            continue
+        break
+    return parts
+
+
+def is_dismissal(text: str, phrase: str) -> bool:
+    """Is the operator finishing, said as the last thing in the utterance?
+
+    **A trailing-clause rule, not a whole-utterance one and not a substring
+    match.** The first version required the whole utterance to be the
+    dismissal and never fired once in a live session, because the pipeline
+    does not deliver clean utterances:
+
+      - the wake word echoes in as a leading "Jarvis."
+      - conversation mode means the previous reply's tail lands in the next
+        transcript, so there is almost always something in front
+      - Deepgram writes "That's all, Jarvis" with a comma
+
+    Four real transcripts that should have dismissed and did not are fixtures
+    in `tests/test_dismissal.py`, verbatim, trailing "So" included.
+
+    The counterexample survives the change for a reason rather than by luck:
+    `tell Rusty that's all we need from Jarvis` is a single clause and that
+    clause is not a dismissal, so where it sits never comes into it. A
+    substring rule takes it; this does not.
+
+    What did change, deliberately: an utterance ending with the dismissal as
+    its own final clause now fires even when the sentences before it were a
+    request. The operator said it last and meant it.
+    """
+    parts = clauses(text)
+    if not parts:
         return False
-    return flat in {
-        _PUNCTUATION.sub("", form) for form in dismissals(phrase)
-    }
+    forms = {_PUNCTUATION.sub("", form) for form in dismissals(phrase)}
+    return parts[-1] in forms
 
 
 def wav_of(pcm: bytes, rate: int = SAMPLE_RATE) -> bytes:

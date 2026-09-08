@@ -189,7 +189,7 @@ def _explain(response: Any, config: TtsConfig) -> str:
     if status == 403:
         return (
             f"ElevenLabs refused ({status}): {body}. The key may not be scoped to this "
-            "endpoint. Ranger needs Text to Speech and Voices read only, nothing else."
+            "endpoint. Jarvis needs Text to Speech and Voices read only, nothing else."
         )
     if status == 404:
         return (

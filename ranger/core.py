@@ -160,7 +160,7 @@ class Ranger:
         message holding a tool_use that will never get its tool_result, and the
         API rejects the whole conversation from then on. So an interrupted turn
         rewinds to before it started and is replayed as what was actually said:
-        the operator's words, and whatever Ranger managed to say back.
+        the operator's words, and whatever Jarvis managed to say back.
         """
         checkpoint = list(self.messages)
         said: list[str] = []
@@ -360,7 +360,7 @@ class Ranger:
             yield changed
 
         reply = "".join(reply_parts)
-        # What Ranger said, not only what it did. Without this a turn where the
+        # What Jarvis said, not only what it did. Without this a turn where the
         # model chose not to act looks exactly like a turn that broke: the log
         # showed "turn" and then nothing, and there was no way to tell which.
         self._log(

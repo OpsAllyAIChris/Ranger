@@ -1,6 +1,6 @@
 """The model provider seam.
 
-Ranger talks to Claude through the official Anthropic SDK, but the core only
+Jarvis talks to Claude through the official Anthropic SDK, but the core only
 ever sees this interface. Swapping providers, or faking one in a test, is a
 constructor argument and not a rewrite. The model name comes from config and
 is never written down in this file.
@@ -176,7 +176,7 @@ class AnthropicProvider:
             except Exception as exc:
                 error = _classify(exc, self.model.name)
                 # Retrying after part of the reply has already streamed would
-                # repeat it. Once Ranger has started talking, a failure is
+                # repeat it. Once Jarvis has started talking, a failure is
                 # final for this turn.
                 if not error.retryable or spoke or attempt >= self.model.max_retries:
                     raise error from exc

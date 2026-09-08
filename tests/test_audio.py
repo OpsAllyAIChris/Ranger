@@ -314,8 +314,8 @@ def test_check_can_use_the_trigger_instead_of_a_duration(config):
 def test_device_listing_marks_what_ranger_will_use():
     text = format_devices(DEVICES, 1, 4)
     assert "Blue Yeti Stereo Microphone" in text
-    assert "<- Ranger records here" in text
-    assert "<- Ranger plays here" in text
+    assert "<- Jarvis records here" in text
+    assert "<- Jarvis plays here" in text
     assert "system default in" in text
 
 

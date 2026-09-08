@@ -238,7 +238,7 @@ class Window:
     #:   that as hidden would refuse the window most of the times it should
     #:   open.
     #:
-    #: So: a Ranger window fully covered by Teams during a screen share still
+    #: So: a Jarvis window fully covered by Teams during a screen share still
     #: reports visible, and this guard still does not catch it. What changed is
     #: that the signal is now the operating system's rather than the page's,
     #: and that this comment states the boundary instead of pointing at work

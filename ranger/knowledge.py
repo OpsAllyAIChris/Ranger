@@ -38,7 +38,7 @@ class KnowledgeContext:
             return ""
         parts = [
             "The operator's own reference material. This is theirs, it is accurate, "
-            "and Ranger never writes to it."
+            "and Jarvis never writes to it."
         ]
         for doc in self.docs:
             parts.append(f"### {doc.relative}\n{doc.text.strip()}")

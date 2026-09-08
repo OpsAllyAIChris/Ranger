@@ -1,9 +1,9 @@
-"""Everything Ranger reads is data, never an instruction.
+"""Everything Jarvis reads is data, never an instruction.
 
 The vault holds customer emails, quotes and pasted vendor text. A note can
 contain a sentence that looks like an order. Two things happen here: the
 content is fenced so the model can see where it starts and stops, and it is
-scanned for instruction-shaped language so Ranger can flag it and stop rather
+scanned for instruction-shaped language so Jarvis can flag it and stop rather
 than obey it.
 
 The scan is a smoke alarm, not a filter. It reports; it never edits content.

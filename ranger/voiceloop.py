@@ -154,7 +154,7 @@ class VoiceLoop:
 
     async def run(self) -> int:
         self.say(self.paint(f"  {self.trigger.hint}", DIM))
-        self.say(self.paint("  press it again while Ranger is talking to cut in", DIM))
+        self.say(self.paint("  press it again while Jarvis is talking to cut in", DIM))
         self.say()
         try:
             while True:
@@ -311,7 +311,7 @@ class VoiceLoop:
         event: only a real press is a barge-in, and only a real press carries
         forward as the start of the next recording. Treating the trigger's
         "the operator quit" return as an interrupt would report a cut-off turn
-        every time Ranger was shut down mid-sentence.
+        every time Jarvis was shut down mid-sentence.
         """
         press = self._press_task()
         done, _ = await asyncio.wait({speaking, press}, return_when=asyncio.FIRST_COMPLETED)

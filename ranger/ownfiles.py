@@ -28,7 +28,7 @@ from datetime import date
 from pathlib import Path
 from typing import Any
 
-#: The folders Ranger may read back, and what to call them. Deliberately a
+#: The folders Jarvis may read back, and what to call them. Deliberately a
 #: fixed set rather than a path: a folder argument that could name any path is
 #: a directory traversal waiting for a model to be talked into one, and the
 #: vault wall should be the second line of defence here rather than the first.
@@ -54,7 +54,7 @@ class UnknownFolder(Exception):
 
 @dataclass(frozen=True)
 class OwnFile:
-    """One file Ranger wrote, described well enough to pick from a list."""
+    """One file Jarvis wrote, described well enough to pick from a list."""
 
     name: str
     path: Path
@@ -83,7 +83,7 @@ def describe(path: Path, root: Path) -> OwnFile:
     """Read the front matter and the first heading, and nothing more.
 
     Both drafts and notices are written with front matter and a `# Title`, so
-    this covers everything Ranger produces. A memory file has neither, and
+    this covers everything Jarvis produces. A memory file has neither, and
     falls back to its first non-empty line, which is what a list needs anyway.
     """
     try:

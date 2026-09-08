@@ -1,4 +1,4 @@
-"""Putting a Ranger together.
+"""Putting a Jarvis together.
 
 Its own module because three front ends now need it, and assembling the core
 is not the terminal's business. It was in cli.py, where it defaulted the gate

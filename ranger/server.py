@@ -163,7 +163,7 @@ class FrontEndHandler(SimpleHTTPRequestHandler):
         """A websocket is not subject to the same-origin policy. This is.
 
         Nothing stops a page on any website the operator happens to be visiting
-        from opening ws://localhost:8765/ws and asking Ranger about their
+        from opening ws://localhost:8765/ws and asking Jarvis about their
         accounts. CORS does not apply to websockets, so the Origin header has
         to be checked here or not at all. A client that sends no Origin at all
         is not a browser, which is how the tests and curl reach it.
@@ -399,7 +399,7 @@ def serve(config: Config, *, open_browser: bool = False, verbose: bool = False) 
         return 1
 
     url = describe(config, httpd.server_address[1])
-    print(f"Ranger  {url}")
+    print(f"Jarvis  {url}")
     print(f"  the orb        {url}")
     print(f"  the transport  {url}transport.html   (plain, for checking the socket)")
     print(f"  the socket     {url.replace('http://', 'ws://')}ws")

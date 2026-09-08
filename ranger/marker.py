@@ -56,11 +56,11 @@ BLOCK = """\
 """
 
 #: The activity heading shape the account notes already use, so the parsers in
-#: accounts.py keep working over what Ranger writes.
+#: accounts.py keep working over what Jarvis writes.
 ENTRY = "### {when} | {note} | {source}"
 
 #: A heading and blank lines are what the migration itself leaves behind. Only
-#: something past them counts as Ranger having written anything.
+#: something past them counts as Jarvis having written anything.
 _EMPTY_BELOW = re.compile(r"^\s*(##[^\n]*\n)?\s*$")
 
 
@@ -76,12 +76,12 @@ def split(text: str) -> tuple[str, str]:
     """(above, below), or MarkerError saying which way it is wrong.
 
     `below` starts at the token itself, so the marker travels with the half that
-    Ranger owns and rewriting the half above never has to reproduce it.
+    Jarvis owns and rewriting the half above never has to reproduce it.
     """
     found = count(text)
     if found == 0:
         raise MarkerError(
-            f"no {TOKEN!r} marker in this note. Ranger appends below the marker and "
+            f"no {TOKEN!r} marker in this note. Jarvis appends below the marker and "
             "will not create one on the fly: a note with no marker is a note this does "
             "not understand. Run: ranger accounts migrate"
         )
@@ -100,11 +100,11 @@ def marked(text: str) -> bool:
 
 
 def has_context(text: str) -> bool:
-    """Has Ranger written anything into this note yet?
+    """Has Jarvis written anything into this note yet?
 
     A migrated note that nobody has appended to has a marker and a heading and
     nothing else. That is not context, and treating it as such would make the
-    rebuild guard refuse a vault where Ranger has done nothing.
+    rebuild guard refuse a vault where Jarvis has done nothing.
     """
     try:
         _, below = split(text)
@@ -123,7 +123,7 @@ def split_bytes(data: bytes) -> tuple[bytes, bytes]:
     found = data.count(TOKEN_BYTES)
     if found == 0:
         raise MarkerError(
-            f"no {TOKEN!r} marker in this note. Ranger appends below the marker and "
+            f"no {TOKEN!r} marker in this note. Jarvis appends below the marker and "
             "will not create one on the fly: a note with no marker is a note this does "
             "not understand. Run: ranger accounts migrate"
         )
@@ -158,7 +158,7 @@ def newline_of(data: bytes) -> bytes:
     """The line ending this file already uses.
 
     So a CRLF note does not grow LF-only lines. Harmless to render, ugly in
-    every future diff, and avoidable in one line. Ranger matches what is there
+    every future diff, and avoidable in one line. Jarvis matches what is there
     and never converts what is already written.
     """
     if b"\r\n" in data:
@@ -169,7 +169,7 @@ def newline_of(data: bytes) -> bytes:
 
 
 def as_bytes(text: str, newline: bytes = b"\n") -> bytes:
-    """Text Ranger is adding, encoded with the endings the file already uses.
+    """Text Jarvis is adding, encoded with the endings the file already uses.
 
     Only ever applied to newly composed text. Bytes that were already on disk
     are never passed through this.
@@ -321,7 +321,7 @@ class Endings:
 def survey_endings(folder: Path) -> Endings:
     """Every account note, by the line endings it uses.
 
-    Ranger never converts what is already on disk, so this changes nothing and
+    Jarvis never converts what is already on disk, so this changes nothing and
     decides nothing. It is here because the operator asked what they were about
     to migrate, and a mixed count above zero is worth knowing before rather
     than after.

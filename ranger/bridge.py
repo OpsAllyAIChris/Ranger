@@ -193,7 +193,7 @@ class Session:
             if not bool(message.get("interrupt", False)):
                 self.emit("error", message="still working on the last one")
                 return
-            # Barge-in. The operator is talking over Ranger, so what Ranger was
+            # Barge-in. The operator is talking over Jarvis, so what Jarvis was
             # saying stops mattering. The core keeps what it managed to say, so
             # "no, not that one" still has something to refer to.
             self.stop("interrupted")
@@ -237,7 +237,7 @@ class Session:
 
         topmost = wake.surface_topmost
         if topmost and wake.surface_topmost_never_in_call:
-            # HWND_TOPMOST puts Ranger above every ordinary window, and a
+            # HWND_TOPMOST puts Jarvis above every ordinary window, and a
             # screen-share of a whole monitor captures the desktop as composed
             # -- so a forced window lands in what the customer is looking at.
             # The microphone check already knows whether something else has the
@@ -536,7 +536,7 @@ class Session:
 
     # -- conversation mode ---------------------------------------------
     #
-    # The window that stays open after Ranger stops talking. All of it lives
+    # The window that stays open after Jarvis stops talking. All of it lives
     # here, in the caller: nothing about it reaches Ranger.turn(), which does
     # not know whether the words it was handed came from a keyboard, a phrase
     # or a follow-up, and should not.
@@ -572,14 +572,17 @@ class Session:
             return
         self._flush_window(why)
         if opened:
-            if not self.listener.hotword.listen(self.window.seconds):
-                # The hotword refused: it is not armed, or the microphone check
-                # failed inside it. Either way there is nothing to listen with.
+            started, why_not = self.listener.hotword.listen(self.window.seconds)
+            if not started:
+                # Say which. "The hotword would not listen" covered both device
+                # contention and the state machine being mid-utterance, and
+                # those have different fixes.
                 from .conversation import Why
 
-                self.window.close(Why.MIC_CHECK, "the hotword would not listen")
-                self._flush_window("")
+                self.window.close(Why.MIC_CHECK, why_not)
+                self._flush_window(why_not)
                 self._emit_window()
+                self._log_wake("window refused", why_not)
                 return
             self._arm_window_timer()
         self._emit_window()
@@ -789,7 +792,7 @@ class Session:
 
     def close(self) -> None:
         """The socket went away. Nothing is left waiting, and the microphone
-        is put down: a closed tab must never leave Ranger listening."""
+        is put down: a closed tab must never leave Jarvis listening."""
         if self.listener is not None:
             self.listener.hotword.disarm("the interface went away")
             self.listener.stop()

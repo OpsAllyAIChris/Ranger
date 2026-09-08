@@ -36,7 +36,7 @@ from .vault import Vault, VaultError
 #: One obvious way to stop everything proactive at once. A file rather than a
 #: config edit, so it can be flipped from Obsidian on a phone, and so the
 #: reason is written down next to the switch. Conversation is unaffected: the
-#: operator can still talk to Ranger with it engaged.
+#: operator can still talk to Jarvis with it engaged.
 KILL_SWITCH_FILE = "paused.md"
 
 STATUS_NEW = "new"
@@ -347,7 +347,7 @@ class VaultSnapshot:
             body=(
                 result.detail
                 + "\n\nNo snapshot has been taken since this appeared, so there is "
-                "currently no undo for anything Ranger appends to an account note."
+                "currently no undo for anything Jarvis appends to an account note."
             ),
             created=self.now(),
         )
@@ -414,10 +414,10 @@ class KillSwitch:
             f"paused: {'true' if paused else 'false'}\n"
             f"changed: {datetime.now().isoformat(timespec='seconds')}\n"
             "---\n\n"
-            "# Ranger, proactive behaviour\n\n"
+            "# Jarvis, proactive behaviour\n\n"
             + (
                 "Paused. The heartbeat will not run any checks and will surface nothing.\n"
-                "You can still talk to Ranger normally; only the background loop is off.\n\n"
+                "You can still talk to Jarvis normally; only the background loop is off.\n\n"
                 "Resume with `ranger resume`, or change paused to false above.\n"
                 if paused
                 else "Running. The heartbeat is active.\n\nPause with `ranger pause`.\n"

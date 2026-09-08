@@ -392,6 +392,30 @@ the wrong thing on the only machine that runs the software is worse than no
 test, and the skip count going from one to two per platform is the visible cost
 of saying so.
 
+**The assistant is Jarvis; the folders are Ranger.** `docs/naming.md` has the
+split and the reasoning. Renamed: window title, tab, prompt persona, speech and
+text, notices. Not renamed: the `ranger` command, this repository, the vault
+directory, the `Ranger/` folder inside it, the `Ranger` class, and the
+scheduled task names. The folder appears in Amendment D, the snapshot allow
+list, the marker docs and every path-escape test, so renaming it is a migration
+through the safety code; the task names are already registered on the machine,
+so renaming them would start the interface twice at logon. **`naming.ASSISTANT`
+is both the window title and what `focus_window` matches on** — change one
+without the other and surfacing silently stops finding the window.
+
+**The dismissal matches the trailing clause, not the whole utterance.** The
+whole-utterance version never fired once in a live session, because the
+pipeline does not produce clean utterances: the wake word echoes in as a
+leading "Jarvis.", conversation mode drops the previous reply's tail into the
+next transcript, and Deepgram writes "That's all, Jarvis" with a comma.
+`tests/test_dismissal.py` holds four real transcripts verbatim, trailing "So"
+included — **do not tidy them**, synthetic clean input is what let the first
+version pass its tests and fail every real attempt. Commas are not clause
+separators, and a trailing fragment of two filler words is dropped. The
+counterexample survives because it is a single clause that is not the
+dismissal, so where it sits never comes into it; whole-utterance and substring
+variants fail seven and six tests respectively.
+
 **`focus_window` reports which of three things happened.** Restoring and
 foregrounding are two different permissions, which the first version conflated:
 `SW_RESTORE` is not gated by the foreground lock, while `SetForegroundWindow` is

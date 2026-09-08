@@ -431,7 +431,7 @@ def talking(config):
 
         def listen(self, seconds=None):
             self.listened.append(seconds)
-            return True
+            return True, "listening for a follow-up"
 
         def disarm(self, why=""):
             self.armed = False

@@ -55,11 +55,11 @@ _DORMANT_LINE = re.compile(r"^-[ \t]+(?P<name>[^#]+?)[ \t]*(?:#.*)?$")
 SEEN_HEADER = """\
 # Quiet since
 
-When Ranger first reported each account as quiet. It uses this to tell a new
+When Jarvis first reported each account as quiet. It uses this to tell a new
 lapse from one it has already mentioned, so the morning brief can report a
 change rather than repeating a state.
 
-Ranger maintains this. Deleting a line makes that account look newly quiet
+Jarvis maintains this. Deleting a line makes that account look newly quiet
 tomorrow, which is a reasonable way to make it resurface.
 
 """

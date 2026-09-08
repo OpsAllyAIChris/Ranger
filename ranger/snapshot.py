@@ -1,7 +1,7 @@
 """A daily snapshot of the vault, so a bad append is recoverable.
 
-`Accounts/` being read-only was the undo. Ranger now appends there, and
-delete-never means Ranger cannot tidy up its own mistake either, so something
+`Accounts/` being read-only was the undo. Jarvis now appends there, and
+delete-never means Jarvis cannot tidy up its own mistake either, so something
 has to be able to say what the file looked like yesterday. A git repository in
 the vault is the cheapest version of that: invisible until it is needed, and
 the thing the operator will want the one time this goes sideways.
@@ -36,7 +36,7 @@ from pathlib import Path
 #: A deny list can only exclude what somebody thought of. This vault has folders
 #: nobody writing the plan knew about, and it will grow more. So the question is
 #: not "what should be kept out" but "what is this backup for", and the answer
-#: is: what Ranger writes and cannot undo, plus the operator's own notes.
+#: is: what Jarvis writes and cannot undo, plus the operator's own notes.
 INCLUDED = (
     "Accounts/",
     "Knowledge/",
@@ -94,7 +94,7 @@ def ignore_file() -> str:
     folders inside it that matter.
     """
     lines = [
-        "# Written by Ranger. This repository is a local undo for the vault and has",
+        "# Written by Jarvis. This repository is a local undo for the vault and has",
         "# no remote, by design: the vault holds customer email, pricing and",
         "# confidential material. Adding a remote stops the daily snapshot.",
         "#",
@@ -297,7 +297,7 @@ def initialise(root: Path, *, max_file_bytes: int = 5 * 1_048_576,
         raise SnapshotRefused(
             f"the vault repository already has remotes ({', '.join(found)}). "
             "The vault holds customer email and pricing and must never be pushed "
-            "anywhere. Remove them before Ranger will snapshot it."
+            "anywhere. Remove them before Jarvis will snapshot it."
         )
 
     seen = survey(root, max_file_bytes)
@@ -380,7 +380,7 @@ def commit(root: Path, when: date | None = None, *,
         _git(root, "add", "--pathspec-from-file=-", "--pathspec-file-nul",
              stdin="\0".join(name for name, _ in seen.files))
         stamp = (when or date.today()).isoformat()
-        _git(root, "-c", "user.name=Ranger", "-c", "user.email=ranger@localhost",
+        _git(root, "-c", "user.name=Jarvis", "-c", "user.email=ranger@localhost",
              "commit", "-q", "-m", stamp)
     except SnapshotRefused as exc:
         return Snapshot(False, str(exc))

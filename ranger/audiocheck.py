@@ -40,9 +40,9 @@ def format_devices(devices: list, input_index: int | None, output_index: int | N
         if d.is_default_output:
             marks.append("system default out")
         if d.index == input_index:
-            marks.append("<- Ranger records here")
+            marks.append("<- Jarvis records here")
         if d.index == output_index:
-            marks.append("<- Ranger plays here")
+            marks.append("<- Jarvis plays here")
         note = ("   " + ", ".join(marks)) if marks else ""
         lines.append(
             f"  {d.index:>3}  {d.max_input_channels:>2} {d.max_output_channels:>3}  "

@@ -92,7 +92,7 @@ def test_init_stands_up_a_brand_new_vault(config, vault_root, capsys):
     assert "creates the whole layout" in out
     assert "seed it by hand" in out
     # An empty Knowledge folder is a thing worth saying out loud.
-    assert "Ranger knows nothing about the business yet" in out
+    assert "Jarvis knows nothing about the business yet" in out
 
 
 def test_init_on_an_existing_vault_only_touches_rangers_folders(config, vault_root, capsys):

@@ -1,4 +1,4 @@
-"""Making Ranger something you click rather than something you type.
+"""Making Jarvis something you click rather than something you type.
 
 Everything Windows-specific about the taskbar shortcut lives here: creating the
 `.lnk`, opening the interface in its own window, and bringing that window
@@ -19,6 +19,8 @@ import subprocess
 import sys
 from dataclasses import dataclass
 from typing import Any
+
+from .naming import ASSISTANT
 from pathlib import Path
 
 #: Chrome and Edge both take --app, which opens a window with no address bar,
@@ -62,7 +64,7 @@ def open_window(url: str, *, profile_dir: Path | None = None) -> str:
 
     arguments = [str(browser), f"{APP_FLAG}{url}"]
     if profile_dir is not None:
-        # Its own profile keeps Ranger's window out of the operator's work
+        # Its own profile keeps Jarvis's window out of the operator's work
         # browser: no shared session, no restored tabs, and closing their
         # browser does not close this.
         arguments.append(f"--user-data-dir={profile_dir}")
@@ -158,8 +160,8 @@ class FocusResult:
         return f"{self.outcome}: {self.detail}"
 
 
-def focus_window(title_starts_with: str = "Ranger", *, topmost: bool = False) -> FocusResult:
-    """Bring Ranger's window forward, and say which of three things happened.
+def focus_window(title_starts_with: str = "Jarvis", *, topmost: bool = False) -> FocusResult:
+    """Bring Jarvis's window forward, and say which of three things happened.
 
     **Restoring and foregrounding are two different permissions**, which the
     first version of this conflated. `ShowWindow(SW_RESTORE)` is not gated by
@@ -177,7 +179,7 @@ def focus_window(title_starts_with: str = "Ranger", *, topmost: bool = False) ->
     it is probably the common one, and until it is logged honestly nobody knows.
 
     `topmost` forces the window in front by toggling `HWND_TOPMOST`. It works
-    without foreground rights, and it puts Ranger over a screen share, so it is
+    without foreground rights, and it puts Jarvis over a screen share, so it is
     config-only and off by default.
     """
     if not on_windows():
@@ -209,15 +211,15 @@ MINIMISED = "minimised"
 ALREADY = "already_minimised"
 
 
-def minimise_window(title_starts_with: str = "Ranger") -> FocusResult:
-    """Put Ranger's window away. The other direction, and the easy one.
+def minimise_window(title_starts_with: str = "Jarvis") -> FocusResult:
+    """Put Jarvis's window away. The other direction, and the easy one.
 
     `window.blur()` from the page does nothing in Chrome's app mode -- confirmed
     on the operator's machine over several attempts -- so the spoken dismissal
     goes through the same HWND surfacing already resolves.
 
     **`ShowWindow(SW_MINIMIZE)` is not foreground-gated.** That is the whole
-    asymmetry of this feature: Ranger can reliably put its own window away and
+    asymmetry of this feature: Jarvis can reliably put its own window away and
     cannot reliably bring it back. Nothing here touches the hotword or the
     socket -- minimising is a thing that happens to a window, and the microphone
     stays exactly as armed as it was.
@@ -249,8 +251,8 @@ def minimise_window(title_starts_with: str = "Ranger") -> FocusResult:
         return FocusResult(FAILED, f"{type(exc).__name__}: {exc}")
 
 
-def window_state(title_starts_with: str = "Ranger") -> dict[str, Any]:
-    """What Windows will say about Ranger's window, which is less than hoped.
+def window_state(title_starts_with: str = "Jarvis") -> dict[str, Any]:
+    """What Windows will say about Jarvis's window, which is less than hoped.
 
     **There is still no reliable occlusion signal, and this says so rather than
     inventing one.** The comment this replaces said "no page-level occlusion
@@ -426,7 +428,7 @@ class Shortcut:
     arguments: str
     working_directory: Path
     icon: Path
-    description: str = "Ranger"
+    description: str = "Jarvis"
 
     def script(self) -> str:
         return SHORTCUT_SCRIPT.format(

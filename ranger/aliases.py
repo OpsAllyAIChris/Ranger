@@ -48,24 +48,24 @@ HEADER = """\
 # Aliases
 
 Accounts the CRM exports under more than one name. The left name is folded into
-the right one everywhere Ranger reads: resolving a spoken name, the quiet check
+the right one everywhere Jarvis reads: resolving a spoken name, the quiet check
 and the morning brief, and account recall.
 
     - BWI Company -> BWI Companies
 
 Write one of those per line, starting at the left margin. Only lines that
 start at the left margin count, which is why the example above is indented:
-it is an example and Ranger ignores it.
+it is an example and Jarvis ignores it.
 
 This lives here rather than in the account notes because build_vault.py
 regenerates those from the CRM and both halves would come back. The vault stays
-a faithful copy of the export and Ranger stops treating one account as two.
+a faithful copy of the export and Jarvis stops treating one account as two.
 
 Folding two accounts together adds their activity counts, so an account can
 move up the morning brief once it stops being two thin records. That is the
 point of it.
 
-Ranger can suggest pairs with 'ranger alias suggest'. It never merges anything
+Jarvis can suggest pairs with 'ranger alias suggest'. It never merges anything
 on its own: a wrong merge is wrong in both accounts forever and shows up as an
 error in neither.
 
@@ -116,7 +116,7 @@ def parse(text: str, known: Iterable[str] | None = None) -> Aliases:
         # A pair is a list item at column zero. Indented text is a code block
         # by markdown's own rule, and this file's header explains itself with
         # an indented example: reading that as a real alias put a phantom
-        # BWI Company -> BWI Companies into every file Ranger wrote, which
+        # BWI Company -> BWI Companies into every file Jarvis wrote, which
         # then made 'ranger alias remove' report success and change nothing.
         if raw[:1] != "-":
             continue

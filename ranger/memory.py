@@ -36,7 +36,7 @@ _SECTION = re.compile(r"^##[ \t]+(?P<title>.+?)[ \t]*$")
 HEADER = """\
 # Memory
 
-One fact per bullet. Ranger reads this file fresh every turn, so an edit here
+One fact per bullet. Jarvis reads this file fresh every turn, so an edit here
 takes effect immediately and a line deleted here stays deleted.
 
 Facts about companies belong in the account note, not here. This is for things
@@ -143,7 +143,7 @@ def load_memory(vault: Vault, folder: Path, budget_chars: int) -> MemoryContext:
 
     # Hand-written facts first, then newest to oldest.
     # Undated facts are the operator's own edits, so they outrank anything
-    # Ranger wrote; then newest first among the rest.
+    # Jarvis wrote; then newest first among the rest.
     facts.sort(key=lambda f: (f.learned is None, f.learned or date.min), reverse=True)
 
     kept: list[Fact] = []

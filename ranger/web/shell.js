@@ -548,7 +548,7 @@ export function createShell(orb) {
         setState(event.state);
         break;
       case 'text':
-        if (!reply) reply = card('Ranger', '');
+        if (!reply) reply = card('Jarvis', '');
         reply.textContent += event.text;
         break;
       case 'heard': {
