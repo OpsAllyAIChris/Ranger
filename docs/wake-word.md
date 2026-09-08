@@ -67,6 +67,16 @@ calls, and a browser holding the microphone cannot be told apart from a browser
 holding it for a call. Lenient would have left uncovered exactly the case the
 check exists for.
 
+**And it fails closed.** If the check cannot run, hands free refuses to arm and
+says so. A check that cannot run has found nothing, not found nobody. That also
+means hands free does not work on anything but Windows, because there is no
+consent store to read anywhere else.
+
+It runs three times: before arming, on a timer while armed, and again whenever
+the phrase fires. A check only at arming misses a call that starts afterwards.
+A check only at fire time leaves the microphone held for a whole call that
+nothing happens to fire during.
+
 The consequence: **Python owns the microphone while hands free is armed**, so
 the browser does not touch it. While armed, the level the orb follows for input
 arrives over the socket instead of being measured in the page. Playback
