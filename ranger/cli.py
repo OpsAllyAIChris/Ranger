@@ -1828,9 +1828,12 @@ def _open(config: Config, args: Any, log: Path) -> int:
             return 1
 
     elif running.get("sessions", 0) > 0 and not getattr(args, "new_window", False):
-        result = focus_window()
-        if result.focused:
-            print(paint(f"  {result.detail}", DIM))
+        result = focus_window(topmost=config.wake.surface_topmost)
+        if result.surfaced:
+            # A flash is not focus, and saying so is the point: on this machine
+            # the refusal is probably the common path and nobody knows until
+            # it is reported honestly.
+            print(paint(f"  {result.describe()}", DIM))
             return 0
         # Not an error, and not worth mentioning twice: a second window is a
         # much smaller problem than a shortcut that refuses to do anything.

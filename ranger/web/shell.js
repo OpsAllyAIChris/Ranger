@@ -569,6 +569,12 @@ export function createShell(orb) {
         drawHandsFree(event);
         if (!event.armed) el.micHint.textContent = 'hold space to talk';
         break;
+      case 'dismissed_aloud':
+        // Minimise, and say so. The microphone stays on: a spoken phrase never
+        // changes the safety state, only what is on screen.
+        log('-- dismissed: ' + event.text);
+        try { window.blur(); } catch (e) { /* not permitted, and not fatal */ }
+        break;
       case 'window':
         drawWindow(event);
         break;

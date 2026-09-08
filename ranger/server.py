@@ -232,9 +232,34 @@ class FrontEndHandler(SimpleHTTPRequestHandler):
 
         assert self.config is not None
 
+        #: Flipped the first time a write fails, so a closed connection is
+        #: noticed once rather than raised from every later send.
+        gone = False
+
         def send_raw(frame: bytes) -> None:
-            self.wfile.write(frame)
-            self.wfile.flush()
+            """Write a frame, or notice the connection has gone and stop.
+
+            **A send on a closed socket is not an error worth propagating.**
+            Shutting the tab while a confirmation card was open cancelled
+            `gate.ask`, whose `finally` emitted `confirm_closed` into a socket
+            that no longer existed; that raised, and the handler that caught it
+            tried to report the failure down the same dead socket and raised
+            again. An unhandled exception on the way out of a clean shutdown.
+
+            Swallowed here, at the layer that owns the socket, rather than in
+            every caller that might be holding one. Callers above this cannot
+            tell a live connection from a dead one and should not have to.
+            """
+            nonlocal gone
+            if gone:
+                return
+            try:
+                self.wfile.write(frame)
+                self.wfile.flush()
+            except (OSError, ValueError):
+                # ConnectionAbortedError, ConnectionResetError, BrokenPipeError
+                # and "I/O operation on closed file" are all this same event.
+                gone = True
 
         def send(payload: dict[str, Any]) -> None:
             send_raw(text_frame(json.dumps(payload)))

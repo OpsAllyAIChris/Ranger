@@ -376,6 +376,44 @@ rebuild, and `ranger snapshot` giving the vault a local git history, because
 read-only `Accounts/` *was* the undo. Delete-never did not change and neither
 did `Knowledge/`.
 
+**`focus_window` reports which of three things happened.** Restoring and
+foregrounding are two different permissions, which the first version conflated:
+`SW_RESTORE` is not gated by the foreground lock, while `SetForegroundWindow` is
+granted only to a process that owns the foreground, was the foreground, or got
+the last input event — and **speech is not an input event**, so a wake firing
+has less claim than the double-click that used to trigger this. The fallback is
+`FlashWindowEx`, reported as `flashed` and never as success. The old version
+ignored the return value and claimed success unconditionally, which is why
+nobody could say what Windows was really doing. `HWND_TOPMOST` works without
+foreground rights and puts Ranger over a screen share, so it is config-only and
+off.
+
+**Occlusion is still not knowable, and the comment at `Window.sees` says so.**
+Having an HWND improved the answer without closing it: minimised is exact from
+`IsIconic`, another virtual desktop from `DWMWA_CLOAKED`, both now from Windows
+rather than the page. `IsWindowVisible` is about the WS_VISIBLE style, so a
+window entirely behind Teams reports visible; the compositor computes real
+occlusion and exposes it through no documented Win32 call; and not being
+foreground is a different question, because a window beside the foreground one
+is perfectly readable. `desktop.window_state` returns `occluded: None`, never
+`False` — `False` would read as "checked".
+
+**The spoken dismissal is a whole-utterance rule, and one test stands on it.**
+"That's all Jarvis" minimises and stays armed. `tell Rusty that's all we need
+from Jarvis` must not fire, and `test_the_counterexample` exists because
+whole-utterance rules rot into substring matches under later edits: turning the
+`in` into a substring check fails nine tests, which is checked by doing it.
+Dismissal never touches `State` — a phrase that changed the safety state is
+what the operator explicitly did not want — and it spends no reopen budget.
+
+**Sends on a closed socket are swallowed at the server layer.** Closing the tab
+mid-card cancelled `gate.ask`, whose `finally` emitted into a dead socket; that
+raised, and the handler reported the failure down the same dead socket and
+raised again. Callers above the socket cannot tell a live connection from a
+dead one and should not have to. `Session._run`'s error path is separately
+wrapped, because reporting a failure must not assume the thing that failed is
+available to report on.
+
 **Clearing a draft is a move, never a delete.** It goes to
 `Ranger/drafts/cleared/`, still lists on request and still reads by name.
 Delete-never is the property the whole `Accounts/` append design rests on, so

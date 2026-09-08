@@ -56,6 +56,7 @@ class Why(str, Enum):
     MIC_CHECK = "mic_check"    # another application took the microphone
     DISARMED = "disarmed"      # hands free was turned off, or the socket went
     CAP = "cap"                # the reopen budget is spent
+    DISMISSED = "dismissed"    # "that's all Jarvis". Window away, still armed
     HIDDEN = "hidden"          # the interface is not on screen to show it is live
 
 
@@ -217,23 +218,31 @@ class Window:
 
     _visible: bool = True
 
-    #: **This guard is weaker than it looks, and the limitation is here rather
-    #: than in a document because this is where someone will read it.**
+    #: **The limitation, resolved rather than inherited, and it is still a
+    #: limitation.**
     #:
-    #: The browser reports `document.visibilityState`, which is a *tab*-level
-    #: signal: it says whether the page is the active tab and whether the window
-    #: is minimised. It says nothing about whether the window is on screen. A
-    #: Ranger window fully covered by Teams during a screen share reports
-    #: `visible`, and so does one behind any other maximised window. There is no
-    #: page-level occlusion API to use instead — Chrome computes occlusion
-    #: internally and does not expose it to the page.
+    #: This used to say "no page-level occlusion API exists" and point at
+    #: window surfacing, on the reasoning that having an HWND would let us ask
+    #: Windows directly. Surfacing landed, the HWND exists, and the answer is
+    #: better but not complete. `desktop.window_state` has the full account;
+    #: the short version:
     #:
-    #: So this catches minimised and background-tab, and nothing else.
+    #: - **minimised** is known exactly, from `IsIconic`, and is now taken from
+    #:   Windows rather than from `document.visibilityState`.
+    #: - **another virtual desktop** is known, from `DWMWA_CLOAKED`.
+    #: - **occluded is still not known.** `IsWindowVisible` is about the
+    #:   WS_VISIBLE style, so a window entirely behind Teams reports visible.
+    #:   The compositor computes occlusion and exposes it through no documented
+    #:   Win32 call. Not being the foreground window is not the same thing --
+    #:   a window beside the foreground one is perfectly readable, and treating
+    #:   that as hidden would refuse the window most of the times it should
+    #:   open.
     #:
-    #: The real fix belongs to window surfacing, which has an HWND and can ask
-    #: Windows directly (`IsIconic`, and the occlusion the compositor already
-    #: knows). **When surfacing lands, replace this signal and delete this
-    #: comment** rather than inheriting it.
+    #: So: a Ranger window fully covered by Teams during a screen share still
+    #: reports visible, and this guard still does not catch it. What changed is
+    #: that the signal is now the operating system's rather than the page's,
+    #: and that this comment states the boundary instead of pointing at work
+    #: that would move it.
     def sees(self, visible: bool) -> None:
         self._visible = bool(visible)
         if self.open and self.requires_visible and not self._visible:

@@ -210,6 +210,11 @@ class WakeConfig:
     #: thing the design exists to avoid. Turn this off once the window can
     #: bring itself to the front.
     conversation_requires_visible: bool = True
+    #: Bring the window forward when the phrase fires.
+    surface_on_wake: bool = True
+    #: Force it in front with HWND_TOPMOST when Windows refuses foreground.
+    #: Off by default: it works, and it puts Ranger over a screen share.
+    surface_topmost: bool = False
 
     @property
     def idle_disarm_seconds(self) -> float:
@@ -509,6 +514,7 @@ KNOWN_KEYS: dict[str, frozenset[str]] = {
         "enabled", "phrase", "model", "threshold", "grace_seconds", "silence_seconds",
         "max_seconds", "preroll_seconds", "idle_disarm_minutes", "mic_check_seconds",
         "conversation_seconds", "conversation_reopens", "conversation_requires_visible",
+        "surface_on_wake", "surface_topmost",
     }),
     "brief": frozenset({
         "lines", "slipping_max", "deals_max", "cold_after_days", "decision_prompt",
@@ -824,6 +830,8 @@ def load_config(path: str | Path | None = None, *, load_env: bool = True) -> Con
         conversation_requires_visible=bool(
             wake_section.get("conversation_requires_visible", True)
         ),
+        surface_on_wake=bool(wake_section.get("surface_on_wake", True)),
+        surface_topmost=bool(wake_section.get("surface_topmost", False)),
     )
     if len(wake.phrase.split()) < 2:
         raise ConfigError(

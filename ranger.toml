@@ -225,6 +225,20 @@ conversation_reopens = 3
 # window means nothing is indicating anything. Set this false once the window
 # can bring itself to the front on a firing.
 conversation_requires_visible = true
+# Bring the window forward when the phrase fires, so the orb can be seen
+# reacting and the reply can be read.
+#
+# Three outcomes, attempted in order, and the audit log records which one
+# actually happened. SW_RESTORE un-minimises and is not gated. Windows grants
+# SetForegroundWindow only to a process that already owns the foreground, was
+# the foreground, or received the last input event -- speech is none of those,
+# so expect it to be REFUSED often. The fallback is a flashing taskbar button,
+# which is reported as a flash and never as success.
+surface_on_wake = true
+# Force the window in front with HWND_TOPMOST when foreground is refused. It
+# works without foreground rights. It also puts Ranger over a screen share,
+# which is wrong for a tool used in front of customers, so it is off.
+surface_topmost = false
 
 [brief]
 # Tier 5. A morning brief has a size, not a threshold.

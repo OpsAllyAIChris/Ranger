@@ -639,3 +639,103 @@ def test_connecting_and_waiting_have_separate_budgets():
 
     assert CONNECT_TIMEOUT < READ_TIMEOUT
 
+
+# -- the socket going away mid-gate ----------------------------------------
+#
+# A live session produced an unhandled exception on shutdown with a card open.
+# Closing the tab cancelled gate.ask, whose finally emitted confirm_closed into
+# a socket that no longer existed; that raised ConnectionAbortedError, and the
+# handler that caught it tried to report the failure on the same dead socket
+# and raised again. A clean close ended in a traceback.
+
+
+def test_writing_into_a_closed_socket_does_not_kill_the_server(served, capsys):
+    """At the layer that owns the socket, not in every caller holding one.
+
+    Callers above this cannot tell a live connection from a dead one and should
+    not have to: `gate.ask`'s finally block has no business knowing whether the
+    browser is still there.
+    """
+    import time
+
+    client = Client(served)
+    client.until("state")
+    # A turn that will stream several frames back, and a socket that goes away
+    # while it is doing so.
+    client.send({"type": "turn", "text": "where are we on Illes"})
+    client.close()
+    time.sleep(0.5)
+
+    # The server is still serving: a second client connects and gets its hello.
+    survivor = Client(served)
+    try:
+        assert survivor.next()["kind"] == "hello"
+    finally:
+        survivor.close()
+
+    assert "Traceback" not in capsys.readouterr().err
+
+
+async def test_a_disconnect_mid_card_ends_cleanly(served, config, capsys):
+    """The real sequence, end to end: card open, tab closed, nothing escapes.
+
+    The gate holds -- that was already tested -- and this is about the *way* it
+    ends. A traceback on the way out of a clean shutdown teaches the operator
+    to ignore tracebacks.
+    """
+    import time
+
+    client = Client(served)
+    client.until("state")
+    client.send({"type": "turn", "text": "where are we on Illes"})
+    client.until("done")
+    client.send({"type": "turn", "text": "forget that I prefer morning meetings"})
+    client.wait_for("confirm_open")
+
+    client.close()
+    time.sleep(0.5)
+
+    # The action still held, which is the safety property.
+    remaining = (config.vault.memory / "facts.md").read_text(encoding="utf-8")
+    assert "morning meetings" in remaining
+
+    # And nothing was printed on the way out. A ConnectionAbortedError escaping
+    # the handler lands in the server's stderr.
+    noise = capsys.readouterr()
+    assert "ConnectionAbortedError" not in noise.err
+    assert "Traceback" not in noise.err
+
+
+def test_the_error_path_does_not_assume_the_socket_is_alive(config):
+    """`Session._run`'s except block reports the failure on the connection.
+
+    If the turn died *because* the connection went, that emit is the second
+    exception and the one that actually escapes. It is wrapped for that reason
+    and for no other: exceptions on the way in still raise normally, because
+    swallowing those would hide real bugs.
+    """
+    import asyncio
+
+    from ranger.bridge import Session
+
+    class Dead:
+        def __call__(self, payload):
+            raise ConnectionAbortedError("the socket went away")
+
+    class Agent:
+        gate = None
+        registry = None
+        origin = "browser"
+
+        def __init__(self, cfg):
+            self.config = cfg
+
+        async def turn(self, text):
+            raise RuntimeError("the turn failed too")
+            yield  # pragma: no cover - makes this an async generator
+
+    session = Session(agent=Agent(config), send=Dead())
+
+    # Both the failure and the attempt to report it raise. Nothing escapes.
+    asyncio.run(session._run("anything"))
+

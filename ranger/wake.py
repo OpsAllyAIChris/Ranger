@@ -37,6 +37,7 @@ what lets the operator count false fires over a week rather than guess at them.
 from __future__ import annotations
 
 import math
+import re
 import time
 from dataclasses import dataclass, field
 from enum import Enum
@@ -638,6 +639,57 @@ def build_hotword(config: Any, *, check_microphone: Callable[[], Any] | None = N
         idle_disarm_seconds=wake.idle_disarm_seconds,
         check_microphone=check_microphone,
     )
+
+
+#: Ways of saying "we are done here", built from the wake phrase's own last
+#: word so training "hey ranger" changes the dismissal without a second edit.
+DISMISSALS = (
+    "that's all {name}",
+    "thats all {name}",
+    "that is all {name}",
+    "thank you {name}",
+    "thanks {name}",
+    "that's all",
+    "thats all",
+    "that is all",
+    "we're done {name}",
+    "were done {name}",
+    "goodbye {name}",
+    "bye {name}",
+)
+
+_PUNCTUATION = re.compile(r"[^\w\s]+")
+
+
+def dismissals(phrase: str) -> tuple[str, ...]:
+    """Every form of the dismissal, for a given wake phrase."""
+    name = (phrase or "").split()[-1] if phrase and phrase.split() else "jarvis"
+    return tuple(form.format(name=name) for form in DISMISSALS)
+
+
+def is_dismissal(text: str, phrase: str) -> bool:
+    """Is this utterance a dismissal, and nothing else?
+
+    **A whole-utterance rule, never a substring match.** The counterexample is
+    in the tests and stays there:
+
+        tell Rusty that's all we need from Jarvis
+
+    is a request. It contains "that's all" and it contains "Jarvis", and it must
+    run as a turn and leave the window alone. A substring rule takes it; a
+    whole-utterance rule does not, and whole-utterance rules rot into substring
+    matches under later edits unless a test is standing on them.
+
+    The trade is deliberate: "what's happening with Illes, that's all Jarvis"
+    does not dismiss either. A dismissal that misses costs one click. One that
+    fires wrongly takes the window away mid-sentence.
+    """
+    flat = _PUNCTUATION.sub("", " ".join(str(text or "").lower().split())).strip()
+    if not flat:
+        return False
+    return flat in {
+        _PUNCTUATION.sub("", form) for form in dismissals(phrase)
+    }
 
 
 def wav_of(pcm: bytes, rate: int = SAMPLE_RATE) -> bytes:

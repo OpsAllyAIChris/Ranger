@@ -120,9 +120,14 @@ is the argument.
 
 **B. Window surfacing and spoken dismissal**
 
-*Close, do not inherit:* the limitation is written at `Window.sees` in
-`ranger/conversation.py`, with the instruction to replace the signal and delete
-the comment when surfacing lands. Grep for "no page-level occlusion API".
+*Resolved 2026-09-08.* Surfacing landed and the comment at `Window.sees` was
+rewritten rather than inherited. The honest outcome: minimised is now known
+from `IsIconic` and another virtual desktop from `DWMWA_CLOAKED`, both from
+Windows rather than from the page — but **occlusion is still not knowable**.
+The compositor computes it and exposes it through no documented Win32 call, and
+not being the foreground window is a different question. A Ranger window fully
+covered by Teams still reports visible. `desktop.window_state` has the full
+account.
  — already next in Claude Code's queue and
 mid-flight. Restore, attempt foreground, flash if refused, log which of the three
 actually happened. The refused-foreground test matters more than the happy path.

@@ -223,6 +223,54 @@ class Session:
         self.busy = True
         self._turn = asyncio.create_task(self._run_audio(utterance))
 
+    def _surface_window(self, why: str) -> None:
+        """Bring the interface forward on a firing, and log which of the three
+        outcomes actually happened.
+
+        Caller-side, like everything about hands free. Nothing here enters
+        `Ranger.turn()`.
+        """
+        if not self.agent.config.wake.surface_on_wake:
+            return
+        from .desktop import focus_window
+
+        try:
+            result = focus_window(topmost=self.agent.config.wake.surface_topmost)
+        except Exception as exc:  # surfacing must never be why a turn fails
+            self._log_wake("surface failed", f"{type(exc).__name__}: {exc}")
+            return
+        # A flash is not focus. Logged as what it was, so a week of these says
+        # what Windows actually does on this machine.
+        self._log_wake(f"surface {result.outcome}", f"{why}; {result.detail}")
+
+    def _dismissed(self, text: str) -> bool:
+        """"That's all Jarvis": put the window away, stay armed.
+
+        A whole-utterance rule on a completed transcript, not a second hotword.
+        It costs no tokens, never reaches the model, and never touches `State`:
+        the microphone stays on, because a phrase that changed the safety state
+        is exactly what the operator did not want.
+        """
+        from .wake import is_dismissal
+
+        if not is_dismissal(text, self.agent.config.wake.phrase):
+            return False
+
+        from .conversation import Why
+
+        # It closes an open window and spends nothing. The wake word still
+        # refills the budget, as before.
+        if self.window is not None and self.window.open:
+            self.window.close(Why.DISMISSED, text.strip()[:60])
+            self._flush_window("")
+            self._emit_window()
+        self._cancel_window_timer()
+
+        self._log_wake("dismissed", f"{text.strip()[:80]!r}; minimised, still armed")
+        self.emit("dismissed_aloud", text=text.strip())
+        self.emit("notice", level="info", message="minimised. Still listening for the phrase.")
+        return True
+
     async def _run_audio(self, utterance: Any, *, strip: str = "") -> None:
         from .events import State
         from .listen import transcribe
@@ -257,6 +305,12 @@ class Session:
         )
         if not text:
             self.emit("error", message="heard nothing in that")
+            self._finish()
+            return
+
+        # Checked before the turn, so a dismissal costs nothing and never
+        # enters the conversation history.
+        if self._dismissed(text):
             self._finish()
             return
 
@@ -403,6 +457,7 @@ class Session:
         """
         if self.window is not None:
             self.window.woke()
+        self._surface_window("the wake phrase fired")
 
     def _log_fire(self, fire) -> None:
         """Every firing, including the discarded ones.
@@ -618,10 +673,27 @@ class Session:
             # finished before it began.
             raise
         except Exception as exc:  # a failed turn is an event, not a dead socket
-            self.emit("error", message=f"{type(exc).__name__}: {exc}")
-            self._finish()
+            # Reporting the failure must not assume the socket that just failed
+            # is available to report it on. If the turn died *because* the
+            # connection went, emitting here is the second exception and the
+            # one that actually escapes.
+            self._safely(lambda: self.emit("error", message=f"{type(exc).__name__}: {exc}"))
+            self._safely(self._finish)
         else:
             self._finish()
+
+    def _safely(self, action: Callable[[], None]) -> None:
+        """Run an error-path action that must not raise a second time.
+
+        Only for the paths that report a failure. Everything else raises
+        normally: swallowing exceptions on the way *in* would hide real bugs,
+        while swallowing them on the way out of a failure hides nothing that
+        was not already being reported.
+        """
+        try:
+            action()
+        except Exception:
+            pass
 
     def _finish(self) -> None:
         self.busy = False
