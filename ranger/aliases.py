@@ -53,6 +53,10 @@ and the morning brief, and account recall.
 
     - BWI Company -> BWI Companies
 
+Write one of those per line, starting at the left margin. Only lines that
+start at the left margin count, which is why the example above is indented:
+it is an example and Ranger ignores it.
+
 This lives here rather than in the account notes because build_vault.py
 regenerates those from the CRM and both halves would come back. The vault stays
 a faithful copy of the export and Ranger stops treating one account as two.
@@ -109,9 +113,14 @@ def parse(text: str, known: Iterable[str] | None = None) -> Aliases:
     stale: list[str] = []
 
     for raw in text.splitlines():
-        stripped = raw.strip()
-        if not stripped.startswith("-"):
+        # A pair is a list item at column zero. Indented text is a code block
+        # by markdown's own rule, and this file's header explains itself with
+        # an indented example: reading that as a real alias put a phantom
+        # BWI Company -> BWI Companies into every file Ranger wrote, which
+        # then made 'ranger alias remove' report success and change nothing.
+        if raw[:1] != "-":
             continue
+        stripped = raw.strip()
         match = _LINE.match(stripped)
         if not match:
             continue
