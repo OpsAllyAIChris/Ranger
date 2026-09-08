@@ -306,7 +306,9 @@ def test_it_says_why_it_cannot_run_rather_than_failing_obscurely():
     ready, why = available()
     assert isinstance(ready, bool)
     if not ready:
-        assert "ranger[wake]" in why, "the message has to say how to fix it"
+        # The exact command, because "ranger[wake]" resolves the installed
+        # package and succeeds having done nothing.
+        assert 'pip install -e ".[wake]"' in why
 
 
 def test_the_detector_is_reset_between_utterances():

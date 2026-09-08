@@ -84,14 +84,14 @@ def available() -> tuple[bool, str]:
     except Exception as exc:
         return False, (
             f"openwakeword is not installed ({type(exc).__name__}). "
-            'Run: pip install "ranger[wake]"'
+            'Run: pip install -e ".[wake]"'
         )
     try:
         import onnxruntime  # noqa: F401
     except Exception as exc:
         return False, (
             f"onnxruntime is not installed ({type(exc).__name__}), which openwakeword needs. "
-            'Run: pip install "ranger[wake]"'
+            'Run: pip install -e ".[wake]"'
         )
     return True, "openwakeword is installed"
 

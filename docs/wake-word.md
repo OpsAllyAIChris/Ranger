@@ -6,9 +6,17 @@ remembered, so a restart always comes back off.
 ## Installing it
 
 ```powershell
-pip install "ranger[wake]"
+# Stop the server first: a running one holds ranger.exe open.
+ranger stop
+pip install -e ".[wake]"
 ranger doctor          # says whether it imported
 ```
+
+**`pip install "ranger[wake]"` does not work**, and worse, it does not fail. It
+resolves the already-installed package, prints `WARNING: ranger 0.1.0 does not
+provide the extra 'wake'`, and exits successfully having done nothing. The
+extra only exists in this working tree, so the install has to point at it:
+`-e ".[wake]"`.
 
 An optional extra rather than a dependency: `onnxruntime` wheels for new Python
 versions arrive late, and nothing else in Ranger may stop working because a

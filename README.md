@@ -55,6 +55,12 @@ Most of the time a `git pull` is the whole job. The install is editable, so
 Python code, the front end under `ranger/web/` and the vendored assets are all
 read straight from the working tree.
 
+Every install of this project points at the working tree with `-e .`, including
+the optional extras: `pip install -e ".[wake]"`, never
+`pip install "ranger[wake]"`. The latter resolves the already-installed package
+and exits successfully having done nothing, with the reason on a `WARNING` line
+that is easy to read past.
+
 Re-run `pip install -e ".[dev]"` only when one of these changed:
 
 - the dependencies or the optional dev extras

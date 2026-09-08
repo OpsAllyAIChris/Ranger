@@ -809,7 +809,7 @@ the utterance starts before the fire. The phrase is stripped off the front of
 the transcript, never cut out of the audio: that boundary is a guess and
 guessing it wrong eats the first word.
 
-**openWakeWord is an optional extra.** `pip install "ranger[wake]"`. If it will
+**openWakeWord is an optional extra.** `pip install -e ".[wake]"`. If it will
 not install, hands free is not offered and nothing else is affected.
 openWakeWord ships a small fixed set of phrases and "hey ranger" is not one of
 them: `scripts/train_wake_word.py` trains it, and `hey jarvis` is the default
@@ -984,6 +984,10 @@ see. Two rules, both learned by wasting their time:
 - **Anything that changes the environment goes first, before the commands that
   depend on it.** A `pip install` in the middle of a block runs after the tests
   it was supposed to enable.
+- **Extras install from the working tree, `pip install -e ".[wake]"`.** Writing
+  it as `pip install "ranger[wake]"` resolves the already-installed package and
+  succeeds having done nothing, with the reason on a WARNING line. A command
+  that quietly does nothing is worse than one that fails.
 - **Do not ask for a reinstall that is not needed.** The install is editable,
   so new files under `ranger/web/`, new modules and edited code all take effect
   on a plain `git pull`. Only a dependency change, an entry point change or a
