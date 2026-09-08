@@ -259,3 +259,110 @@ async def test_a_dismissal_is_written_to_the_audit_log(session, config):
     written = AuditLog(Vault(config.vault), config.vault.log).read()
     assert "hands-free dismissed" in written
     assert "still armed" in written
+
+
+# -- the minimise itself ----------------------------------------------------
+#
+# `window.blur()` was tried first and is ignored in Chrome's app mode --
+# confirmed on the operator's machine over several attempts. So the dismissal
+# goes through the window handle, and these tests exist because the browser
+# path is now KNOWN not to work here: a regression back to it would look fine
+# in every other test.
+
+
+async def test_the_dismissal_minimises_through_the_window_handle(session, monkeypatch):
+    """Not a browser blur. ShowWindow(SW_MINIMIZE) is not foreground-gated, so
+    it does not hit the refusal that makes surfacing degrade to a flash."""
+    from ranger.desktop import FocusResult
+    from ranger.listen import Utterance
+
+    called: list[str] = []
+
+    def minimise(title="Ranger"):
+        called.append(title)
+        return FocusResult("minimised", "minimised")
+
+    monkeypatch.setattr("ranger.desktop.minimise_window", minimise)
+    built, sent, _ = session
+
+    await built._run_audio(Utterance(audio=b"RIFF", mime="audio/wav", seconds=1.0))
+
+    assert called, "the dismissal did not reach the ctypes minimise"
+
+
+def test_the_browser_no_longer_tries_to_blur_itself():
+    """It does not work in app mode, so it must not look like the mechanism.
+
+    A future edit putting it back would pass every behavioural test in this
+    file, because the browser is not exercised by any of them.
+    """
+    from pathlib import Path as _Path
+
+    shell = _Path(__file__).resolve().parent.parent / "ranger" / "web" / "shell.js"
+    # Comments stripped: the reason it was removed is written there and should
+    # stay, so a future reader does not helpfully add it back.
+    code = "\n".join(
+        line for line in shell.read_text(encoding="utf-8").splitlines()
+        if not line.strip().startswith("//")
+    )
+
+    assert "window.blur()" not in code
+    assert "dismissed_aloud" in code, "the browser stopped hearing about it entirely"
+
+
+async def test_the_log_says_whether_the_minimise_happened(session, monkeypatch, config):
+    """What happened, not what was attempted. The same rule that made
+    focus_window stop reporting unconditional success."""
+    from ranger.audit import AuditLog
+    from ranger.desktop import FocusResult
+    from ranger.listen import Utterance
+    from ranger.vault import Vault
+
+    monkeypatch.setattr(
+        "ranger.desktop.minimise_window",
+        lambda title="Ranger": FocusResult("failed", "ShowWindow was called and the window is still up"),
+    )
+    built, _, _ = session
+
+    await built._run_audio(Utterance(audio=b"RIFF", mime="audio/wav", seconds=1.0))
+
+    written = AuditLog(Vault(config.vault), config.vault.log).read()
+    assert "dismissed failed" in written
+    assert "still up" in written, "the log does not say what actually happened"
+
+
+async def test_a_minimise_that_raises_does_not_break_the_dismissal(session, monkeypatch):
+    """Putting a window away must never be why a turn fails."""
+    from ranger.listen import Utterance
+
+    def explode(title="Ranger"):
+        raise OSError("user32 fell over")
+
+    monkeypatch.setattr("ranger.desktop.minimise_window", explode)
+    built, sent, _ = session
+
+    await built._run_audio(Utterance(audio=b"RIFF", mime="audio/wav", seconds=1.0))
+
+    assert any(event.get("kind") == "dismissed_aloud" for event in sent)
+    assert built.listener.hotword.armed is True
+
+
+async def test_minimising_does_not_disarm_or_close_the_socket(session, monkeypatch):
+    """The two things the operator asked to be held."""
+    from ranger.desktop import FocusResult
+    from ranger.listen import Utterance
+
+    monkeypatch.setattr(
+        "ranger.desktop.minimise_window",
+        lambda title="Ranger": FocusResult("minimised", "minimised"),
+    )
+    built, sent, _ = session
+
+    await built._run_audio(Utterance(audio=b"RIFF", mime="audio/wav", seconds=1.0))
+
+    assert built.listener is not None, "the listener was thrown away"
+    assert built.listener.hotword.armed is True, "the dismissal disarmed the hotword"
+    assert built.window is not None, "the conversation window was destroyed"
+    # And nothing told the front end to go away.
+    assert not any(event.get("kind") == "stopped" for event in sent)
+

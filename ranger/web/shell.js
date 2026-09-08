@@ -570,10 +570,12 @@ export function createShell(orb) {
         if (!event.armed) el.micHint.textContent = 'hold space to talk';
         break;
       case 'dismissed_aloud':
-        // Minimise, and say so. The microphone stays on: a spoken phrase never
-        // changes the safety state, only what is on screen.
-        log('-- dismissed: ' + event.text);
-        try { window.blur(); } catch (e) { /* not permitted, and not fatal */ }
+        // The minimise itself happens in Python, through the window handle.
+        // window.blur() was tried here and is ignored in Chrome's app mode, so
+        // the browser now only reports what happened rather than attempting it.
+        // The microphone stays on: a spoken phrase never changes the safety
+        // state, only what is on screen.
+        log('-- dismissed (' + (event.outcome || 'unknown') + '): ' + event.text);
         break;
       case 'window':
         drawWindow(event);

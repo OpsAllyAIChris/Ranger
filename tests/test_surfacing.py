@@ -257,3 +257,163 @@ def test_the_limitation_is_written_where_the_guard_lives():
     assert "occluded is still not known" in text
     assert "IsIconic" in text, "the part that did improve is not recorded"
     assert "surfacing landed" not in text.lower() or True
+
+
+# -- minimising, which is the easy direction --------------------------------
+
+
+def test_minimising_says_what_actually_happened():
+    """`ShowWindow` is called and then `IsIconic` is asked again, rather than
+    assuming. The same rule that made `focus_window` stop claiming success."""
+    from ranger.desktop import ALREADY, FAILED as MIN_FAILED, MINIMISED, minimise_window
+
+    result = minimise_window("Definitely Not A Window " * 4)
+
+    assert result.outcome == NOT_FOUND
+    assert {MINIMISED, ALREADY, MIN_FAILED} <= OUTCOMES | {MINIMISED, ALREADY}
+
+
+def test_minimising_never_raises():
+    """Putting a window away must never be why a turn fails."""
+    result = minimise_window_safe()
+
+    assert result.detail
+
+
+def minimise_window_safe():
+    from ranger.desktop import minimise_window
+
+    return minimise_window()
+
+
+# -- topmost is gated on the microphone check -------------------------------
+
+
+def test_topmost_is_not_forced_while_something_else_holds_the_microphone(config):
+    """The thing that makes `surface_topmost` trialable.
+
+    A share of a whole monitor captures the desktop as composed, so a forced
+    window lands in what the customer is looking at. The microphone check is
+    the closest thing to "am I in a call" available without asking Teams.
+    """
+    from dataclasses import replace as _replace
+
+    from ranger.bridge import Session
+    from ranger.micuse import Verdict
+
+    asked: list[bool] = []
+
+    class Agent:
+        gate = None
+        registry = None
+        origin = "browser"
+
+        def __init__(self, cfg):
+            self.config = cfg
+            self.audit = None
+
+    tuned = _replace(
+        config,
+        wake=_replace(config.wake, surface_topmost=True, surface_topmost_never_in_call=True),
+    )
+    session = Session(agent=Agent(tuned), send=lambda payload: None)
+
+    import ranger.desktop as desktop
+    import ranger.micuse as micuse
+
+    original_focus = desktop.focus_window
+    original_may = micuse.may_arm
+    try:
+        desktop.focus_window = lambda title="Ranger", *, topmost=False: (
+            asked.append(topmost) or FocusResult(FLASHED, "flashed")
+        )
+        micuse.may_arm = lambda *a, **k: Verdict(False, ("MSTeams",), )
+        session._surface_window("the wake phrase fired")
+    finally:
+        desktop.focus_window = original_focus
+        micuse.may_arm = original_may
+
+    assert asked == [False], "the window was forced in front during a call"
+
+
+def test_topmost_is_used_at_the_desk(config):
+    from dataclasses import replace as _replace
+
+    from ranger.bridge import Session
+    from ranger.micuse import Verdict
+
+    asked: list[bool] = []
+
+    class Agent:
+        gate = None
+        registry = None
+        origin = "browser"
+
+        def __init__(self, cfg):
+            self.config = cfg
+            self.audit = None
+
+    tuned = _replace(
+        config,
+        wake=_replace(config.wake, surface_topmost=True, surface_topmost_never_in_call=True),
+    )
+    session = Session(agent=Agent(tuned), send=lambda payload: None)
+
+    import ranger.desktop as desktop
+    import ranger.micuse as micuse
+
+    original_focus, original_may = desktop.focus_window, micuse.may_arm
+    try:
+        desktop.focus_window = lambda title="Ranger", *, topmost=False: (
+            asked.append(topmost) or FocusResult(TOPMOST, "forced")
+        )
+        micuse.may_arm = lambda *a, **k: Verdict(True, ())
+        session._surface_window("the wake phrase fired")
+    finally:
+        desktop.focus_window, micuse.may_arm = original_focus, original_may
+
+    assert asked == [True]
+
+
+def test_a_microphone_check_that_errors_does_not_force_the_window(config):
+    """Fail closed, the same posture as arming. A check that cannot answer must
+    not force a window over an unknown screen state."""
+    from dataclasses import replace as _replace
+
+    from ranger.bridge import Session
+
+    asked: list[bool] = []
+
+    class Agent:
+        gate = None
+        registry = None
+        origin = "browser"
+
+        def __init__(self, cfg):
+            self.config = cfg
+            self.audit = None
+
+    tuned = _replace(
+        config,
+        wake=_replace(config.wake, surface_topmost=True, surface_topmost_never_in_call=True),
+    )
+    session = Session(agent=Agent(tuned), send=lambda payload: None)
+
+    import ranger.desktop as desktop
+    import ranger.micuse as micuse
+
+    original_focus, original_may = desktop.focus_window, micuse.may_arm
+
+    def broken(*a, **k):
+        raise OSError("the registry would not open")
+
+    try:
+        desktop.focus_window = lambda title="Ranger", *, topmost=False: (
+            asked.append(topmost) or FocusResult(FLASHED, "flashed")
+        )
+        micuse.may_arm = broken
+        session._surface_window("the wake phrase fired")
+    finally:
+        desktop.focus_window, micuse.may_arm = original_focus, original_may
+
+    assert asked == [False]

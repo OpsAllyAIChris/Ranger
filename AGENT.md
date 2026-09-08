@@ -414,6 +414,24 @@ foreground is a different question, because a window beside the foreground one
 is perfectly readable. `desktop.window_state` returns `occluded: None`, never
 `False` — `False` would read as "checked".
 
+**The dismissal minimises through the window handle, not through the browser.**
+`window.blur()` is ignored in Chrome's app mode — confirmed on the operator's
+machine over several attempts — so it goes through `ShowWindow(SW_MINIMIZE)` on
+the same HWND surfacing resolves. **That call is not foreground-gated**, which
+is the asymmetry of this whole feature: Ranger can reliably put its own window
+away and cannot reliably bring it back. Confirmed on that machine:
+`SetForegroundWindow` is refused and the flash is the live path. Minimising
+touches neither the hotword nor the socket, and the outcome is asked for again
+with `IsIconic` rather than assumed, so the log says whether it happened.
+
+**`surface_topmost` is gated on the microphone check.** Forcing the window in
+front works without foreground rights, and a screen-share of a whole monitor
+captures the desktop as composed, so a forced window lands in what the customer
+is looking at. `may_arm` already knows whether something else holds the
+microphone, which is the closest thing to "am I in a call" available without
+asking Teams. A check that errors also declines to force — fail closed, the
+same posture as arming.
+
 **The spoken dismissal is a whole-utterance rule, and one test stands on it.**
 "That's all Jarvis" minimises and stays armed. `tell Rusty that's all we need
 from Jarvis` must not fire, and `test_the_counterexample` exists because

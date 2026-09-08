@@ -239,6 +239,13 @@ surface_on_wake = true
 # works without foreground rights. It also puts Ranger over a screen share,
 # which is wrong for a tool used in front of customers, so it is off.
 surface_topmost = false
+# ...but never while something else holds the microphone. HWND_TOPMOST puts
+# Ranger above every ordinary window, and a share of a whole monitor captures
+# the desktop as composed, so a forced window lands in what the customer sees.
+# The microphone check is the closest thing to "am I in a call" available
+# without asking Teams. With this on, surface_topmost is safe to trial: it
+# forces the window at your desk and falls back to the flash on a call.
+surface_topmost_never_in_call = true
 
 [brief]
 # Tier 5. A morning brief has a size, not a threshold.

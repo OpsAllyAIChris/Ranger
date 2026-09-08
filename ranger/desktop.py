@@ -205,6 +205,50 @@ def focus_window(title_starts_with: str = "Ranger", *, topmost: bool = False) ->
 DWMWA_CLOAKED = 14
 
 
+MINIMISED = "minimised"
+ALREADY = "already_minimised"
+
+
+def minimise_window(title_starts_with: str = "Ranger") -> FocusResult:
+    """Put Ranger's window away. The other direction, and the easy one.
+
+    `window.blur()` from the page does nothing in Chrome's app mode -- confirmed
+    on the operator's machine over several attempts -- so the spoken dismissal
+    goes through the same HWND surfacing already resolves.
+
+    **`ShowWindow(SW_MINIMIZE)` is not foreground-gated.** That is the whole
+    asymmetry of this feature: Ranger can reliably put its own window away and
+    cannot reliably bring it back. Nothing here touches the hotword or the
+    socket -- minimising is a thing that happens to a window, and the microphone
+    stays exactly as armed as it was.
+    """
+    if not on_windows():
+        return FocusResult(NOT_FOUND, "not Windows")
+
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        user32 = ctypes.WinDLL("user32", use_last_error=True)
+        handle = _find_window(user32, ctypes, wintypes, title_starts_with)
+        if handle is None:
+            return FocusResult(NOT_FOUND, "no window with that title")
+
+        if user32.IsIconic(handle):
+            return FocusResult(ALREADY, "it was already minimised")
+
+        SW_MINIMIZE = 6
+        user32.ShowWindow(handle, SW_MINIMIZE)
+        # Asked again rather than assumed. The log has to say whether it
+        # actually happened, not that it was attempted -- the same rule that
+        # made focus_window stop reporting unconditional success.
+        if user32.IsIconic(handle):
+            return FocusResult(MINIMISED, "minimised")
+        return FocusResult(FAILED, "ShowWindow was called and the window is still up")
+    except Exception as exc:
+        return FocusResult(FAILED, f"{type(exc).__name__}: {exc}")
+
+
 def window_state(title_starts_with: str = "Ranger") -> dict[str, Any]:
     """What Windows will say about Ranger's window, which is less than hoped.
 

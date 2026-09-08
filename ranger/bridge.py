@@ -230,12 +230,37 @@ class Session:
         Caller-side, like everything about hands free. Nothing here enters
         `Ranger.turn()`.
         """
-        if not self.agent.config.wake.surface_on_wake:
+        wake = self.agent.config.wake
+        if not wake.surface_on_wake:
             return
         from .desktop import focus_window
 
+        topmost = wake.surface_topmost
+        if topmost and wake.surface_topmost_never_in_call:
+            # HWND_TOPMOST puts Ranger above every ordinary window, and a
+            # screen-share of a whole monitor captures the desktop as composed
+            # -- so a forced window lands in what the customer is looking at.
+            # The microphone check already knows whether something else has the
+            # device, which is the closest thing to "am I in a call" that exists
+            # without asking Teams. Fall back to the flash rather than risk it.
+            from .micuse import may_arm
+
+            try:
+                verdict = may_arm(ignore=("chrome.exe",))
+                if not verdict.allowed:
+                    topmost = False
+                    self._log_wake(
+                        "surface not topmost",
+                        f"something else has the microphone ({verdict.reason}), "
+                        "so the window was not forced over what may be a share",
+                    )
+            except Exception:
+                # A check that cannot answer is a check that failed. Do not
+                # force a window over an unknown screen state.
+                topmost = False
+
         try:
-            result = focus_window(topmost=self.agent.config.wake.surface_topmost)
+            result = focus_window(topmost=topmost)
         except Exception as exc:  # surfacing must never be why a turn fails
             self._log_wake("surface failed", f"{type(exc).__name__}: {exc}")
             return
@@ -266,8 +291,29 @@ class Session:
             self._emit_window()
         self._cancel_window_timer()
 
-        self._log_wake("dismissed", f"{text.strip()[:80]!r}; minimised, still armed")
-        self.emit("dismissed_aloud", text=text.strip())
+        # The ctypes path, not a browser blur. window.blur() is ignored in
+        # Chrome's app mode -- confirmed on the operator's machine over several
+        # attempts -- and ShowWindow(SW_MINIMIZE) is not foreground-gated, so it
+        # does not hit the refusal that makes surfacing degrade to a flash.
+        from .desktop import minimise_window
+
+        try:
+            result = minimise_window()
+        except Exception as exc:  # putting a window away must not fail a turn
+            result = None
+            self._log_wake("dismissed", f"{text.strip()[:80]!r}; minimise raised {exc}")
+
+        if result is not None:
+            # What happened, not what was attempted. Same rule as surfacing.
+            self._log_wake(
+                f"dismissed {result.outcome}",
+                f"{text.strip()[:80]!r}; {result.detail}; still armed",
+            )
+
+        # Nothing here touches the hotword or the socket. Minimising is a thing
+        # that happens to a window; the microphone stays as armed as it was.
+        self.emit("dismissed_aloud", text=text.strip(),
+                  outcome=result.outcome if result is not None else "failed")
         self.emit("notice", level="info", message="minimised. Still listening for the phrase.")
         return True
 

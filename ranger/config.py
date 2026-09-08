@@ -215,6 +215,10 @@ class WakeConfig:
     #: Force it in front with HWND_TOPMOST when Windows refuses foreground.
     #: Off by default: it works, and it puts Ranger over a screen share.
     surface_topmost: bool = False
+    #: Never force the window in front while another application has the
+    #: microphone. The closest thing to "am I in a call" that exists without
+    #: asking Teams, and what makes surface_topmost safe enough to trial.
+    surface_topmost_never_in_call: bool = True
 
     @property
     def idle_disarm_seconds(self) -> float:
@@ -514,7 +518,7 @@ KNOWN_KEYS: dict[str, frozenset[str]] = {
         "enabled", "phrase", "model", "threshold", "grace_seconds", "silence_seconds",
         "max_seconds", "preroll_seconds", "idle_disarm_minutes", "mic_check_seconds",
         "conversation_seconds", "conversation_reopens", "conversation_requires_visible",
-        "surface_on_wake", "surface_topmost",
+        "surface_on_wake", "surface_topmost", "surface_topmost_never_in_call",
     }),
     "brief": frozenset({
         "lines", "slipping_max", "deals_max", "cold_after_days", "decision_prompt",
@@ -832,6 +836,9 @@ def load_config(path: str | Path | None = None, *, load_env: bool = True) -> Con
         ),
         surface_on_wake=bool(wake_section.get("surface_on_wake", True)),
         surface_topmost=bool(wake_section.get("surface_topmost", False)),
+        surface_topmost_never_in_call=bool(
+            wake_section.get("surface_topmost_never_in_call", True)
+        ),
     )
     if len(wake.phrase.split()) < 2:
         raise ConfigError(
