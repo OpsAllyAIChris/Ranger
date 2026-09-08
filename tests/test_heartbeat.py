@@ -270,11 +270,24 @@ async def test_the_morning_surface_reports_a_tool_failure_rather_than_crashing(c
     assert notice is not None and "could not run" in notice.title
 
 
-def test_tier_five_registers_exactly_one_check(config):
+def test_the_heartbeat_registers_the_morning_check_and_the_snapshot(config):
+    """Two, and adding a third is one entry in build_checks."""
     checks = build_checks(config, None)
-    assert [c.name for c in checks] == ["morning"]
+    assert [c.name for c in checks] == ["morning", "snapshot"]
     assert not checks[0].runs_in_quiet_hours
     assert checks[0].hour == config.schedule.morning_hour
+    # The snapshot is not news, so it does not wait for the morning: it is the
+    # undo for account writes and the best time to have one is before the day
+    # starts, not after it.
+    assert checks[1].runs_in_quiet_hours
+
+
+def test_the_snapshot_can_be_turned_off(config):
+    from dataclasses import replace
+
+    off = replace(config, vault=replace(config.vault, snapshot=False))
+
+    assert [c.name for c in build_checks(off, None)] == ["morning"]
 
 
 # -- every outcome says which one it was -----------------------------------

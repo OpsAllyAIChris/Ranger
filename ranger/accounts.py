@@ -331,9 +331,39 @@ def parse_note(text: str, name: str, path: Path | None = None) -> AccountNote:
         path=path,
         metadata=metadata,
         sections=sections,
-        activities=_parse_activities(sections.get("Activity", "")),
+        activities=_all_activities(text, sections),
         size=len(text),
     )
+
+
+def _all_activities(text: str, sections: dict[str, str]) -> tuple[Activity, ...]:
+    """The CRM's activities and Ranger's filed ones, as one timeline.
+
+    `scan_note` already counts both, because it scans headings across the whole
+    note; this is the structured half catching up, so recall shows a call filed
+    yesterday next to the export's own history rather than only in a section
+    nobody reads.
+
+    Split on the **marker**, not on the section heading. The heading is
+    editable prose by design -- the operator reads these in Obsidian and may
+    rename `## Ranger Context` -- and parsing by heading name would work until
+    the first time they did.
+    """
+    from .marker import MarkerError, split
+
+    activities = list(_parse_activities(sections.get("Activity", "")))
+    try:
+        _, below = split(text)
+    except MarkerError:
+        return tuple(activities)
+
+    filed = _parse_activities(below)
+    if not filed:
+        return tuple(activities)
+
+    merged = activities + [a for a in filed if a not in activities]
+    merged.sort(key=lambda a: a.date, reverse=True)
+    return tuple(merged)
 
 
 def _parse_activities(section: str) -> tuple[Activity, ...]:

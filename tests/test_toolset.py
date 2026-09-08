@@ -35,10 +35,12 @@ async def run(registry, name, **payload):
 
 
 def test_the_registry_holds_exactly_the_intended_tools(registry):
-    """Tier 2's three plus Tier 4's two. A sixth is a scope decision."""
+    """Tier 2's three, Tier 4's two, and the account write path's one. A
+    seventh is a scope decision."""
     assert registry.names() == [
         "account_recall",
         "draft_and_hold",
+        "file_to_account",
         "forget",
         "remember",
         "what_went_quiet",
@@ -53,10 +55,18 @@ def test_every_tool_has_a_description_a_model_can_act_on(registry):
 
 def test_only_forget_needs_the_confirmation_gate(registry):
     """Nothing here sends or spends. forget rewrites a file, which does not
-    happen without the operator's yes."""
+    happen without the operator's yes.
+
+    file_to_account writes and deliberately does not gate: filing into an
+    account that already exists happens often enough that a card would become a
+    reflex within a week, and a card clicked without reading manufactures a
+    record of review that did not happen. What makes it safe instead is that it
+    can only add, only below the marker, and only to a note that already exists.
+    """
     assert [t.name for t in registry if t.confirm] == ["forget"]
     assert sorted(t.name for t in registry if t.writes) == [
         "draft_and_hold",
+        "file_to_account",
         "forget",
         "remember",
     ]

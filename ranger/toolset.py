@@ -527,6 +527,120 @@ def _forget(config: Config, vault: Vault) -> Tool:
     )
 
 
+# -- 6. file into an account ------------------------------------------------
+
+
+def _file_to_account(config: Config, vault: Vault, today: Callable[[], date]) -> Tool:
+    """Append Ranger's own context to an account note, below the marker.
+
+    The tool that closes the gap between Ranger having the context and Ranger
+    being able to put it anywhere but a drafts folder the operator pastes from
+    by hand.
+
+    **It does not gate, and that was decided rather than skipped.** Filing a
+    note into an account that already exists happens often enough that a
+    confirmation card would become a reflex inside a week, and a card clicked
+    without reading manufactures a record of review that did not happen.
+    Creating a *new* account is a different act and still gates. What makes the
+    ungated version safe is that this can only ever add, only ever below the
+    marker, and only ever to a note the export already wrote.
+    """
+
+    async def handler(payload: dict[str, Any]) -> ToolResult:
+        from .marker import MarkerError, entry
+        from .vault import VaultError
+
+        account = str(payload.get("account", "")).strip()
+        note = str(payload.get("note", "")).strip()
+        source = str(payload.get("source", "")).strip() or "Ranger"
+
+        if not account:
+            return ToolResult(False, "An account name is needed to file anything.",
+                              "no account named")
+        if not note:
+            return ToolResult(False, "There was no note text to append.", "nothing to file")
+
+        files = _account_files(config, vault)
+        names = [item.path.stem for item in files]
+        aliases = _aliases(config, vault, names)
+        resolution = _resolve(account, names, aliases)
+
+        if resolution.ambiguous:
+            return _ambiguous_result(account, resolution.candidates)
+        if not resolution.found:
+            return ToolResult(
+                ok=True,
+                content=(
+                    f"No account note matches {account!r}, so nothing was filed. There "
+                    f"are {len(names)} accounts in the vault. Say so rather than "
+                    "guessing at which they meant, and never create one to file into."
+                ),
+                summary="no match",
+            )
+
+        item = next(f for f in files if f.path.stem == resolution.match)
+
+        try:
+            vault.append_below_marker(item.path, entry(note, source, today()))
+        except (MarkerError, VaultError) as exc:
+            # Fail closed, and say which refusal it was. A refusal the operator
+            # cannot act on is a refusal they will work around.
+            return ToolResult(False, str(exc), "not filed")
+        except Exception as exc:  # a check that raises counts as denial
+            return ToolResult(
+                False,
+                f"{type(exc).__name__}: {exc}. Nothing was written.",
+                "not filed",
+            )
+
+        return ToolResult(
+            ok=True,
+            content=(
+                f"Filed to {resolution.match}, appended below the marker in "
+                f"{item.path.name}. Nothing above the marker was touched."
+            ),
+            summary=f"filed to {resolution.match}",
+        )
+
+    return Tool(
+        name="file_to_account",
+        description=(
+            "Append a note to an account's own file, below the Ranger Context marker, "
+            "so it becomes part of that account's permanent record. Use this whenever "
+            "the operator tells you something about an account that is worth keeping: "
+            "what was said on a call, what a contact wants, what was agreed, what "
+            "changed. Prefer this over a draft for anything that belongs in the account "
+            "history rather than in an email. Nothing above the marker is ever touched."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "account": {
+                    "type": "string",
+                    "description": "Account name. A partial or spoken name is fine.",
+                },
+                "note": {
+                    "type": "string",
+                    "description": (
+                        "What to record, in one or two sentences. Written for the "
+                        "operator to read in six months, not for you to read back."
+                    ),
+                },
+                "source": {
+                    "type": "string",
+                    "description": (
+                        "Where it came from: 'call', 'email', 'Chris', 'meeting'. "
+                        "Defaults to Ranger."
+                    ),
+                },
+            },
+            "required": ["account", "note"],
+        },
+        handler=handler,
+        writes=True,
+    )
+
+
 def build_registry(
     config: Config, vault: Vault, today: Callable[[], date] | None = None
 ) -> ToolRegistry:
@@ -539,5 +653,6 @@ def build_registry(
             _what_went_quiet(config, vault, today),
             _remember(config, vault),
             _forget(config, vault),
+            _file_to_account(config, vault, today),
         ]
     )

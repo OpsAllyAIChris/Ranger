@@ -68,6 +68,9 @@ class VaultConfig:
     inbox: Path
     drafts: Path
     log: Path
+    #: Take a daily git snapshot of the vault. Read-only Accounts/ used to be
+    #: the undo; once Ranger appends there, this is. Local only, never pushed.
+    snapshot: bool = True
 
     @property
     def writable_roots(self) -> tuple[Path, ...]:
@@ -478,6 +481,7 @@ KNOWN_KEYS: dict[str, frozenset[str]] = {
     }),
     "vault": frozenset({
         "root", "accounts", "knowledge", "ranger", "memory", "inbox", "drafts", "log",
+        "snapshot",
     }),
     "knowledge": frozenset({"priority"}),
     "memory": frozenset({"reserve_chars", "file"}),
@@ -644,7 +648,7 @@ def _build_vault(table: dict[str, Any]) -> VaultConfig:
                 f"vault.{name} is read only and must not sit under vault.ranger"
             )
 
-    return VaultConfig(root=root, **paths)
+    return VaultConfig(root=root, snapshot=bool(section.get("snapshot", True)), **paths)
 
 
 def _validate_schedule(schedule: ScheduleConfig) -> None:

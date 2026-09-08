@@ -217,6 +217,23 @@ class Window:
 
     _visible: bool = True
 
+    #: **This guard is weaker than it looks, and the limitation is here rather
+    #: than in a document because this is where someone will read it.**
+    #:
+    #: The browser reports `document.visibilityState`, which is a *tab*-level
+    #: signal: it says whether the page is the active tab and whether the window
+    #: is minimised. It says nothing about whether the window is on screen. A
+    #: Ranger window fully covered by Teams during a screen share reports
+    #: `visible`, and so does one behind any other maximised window. There is no
+    #: page-level occlusion API to use instead — Chrome computes occlusion
+    #: internally and does not expose it to the page.
+    #:
+    #: So this catches minimised and background-tab, and nothing else.
+    #:
+    #: The real fix belongs to window surfacing, which has an HWND and can ask
+    #: Windows directly (`IsIconic`, and the occlusion the compositor already
+    #: knows). **When surfacing lands, replace this signal and delete this
+    #: comment** rather than inheriting it.
     def sees(self, visible: bool) -> None:
         self._visible = bool(visible)
         if self.open and self.requires_visible and not self._visible:

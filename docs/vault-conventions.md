@@ -149,3 +149,61 @@ correctable in Obsidian.
 | `Ranger/memory/` | Durable facts, one per file | 4 |
 | `Ranger/inbox/` | Notices surfaced and not yet cleared, one file per notice | 5 |
 | `Ranger/log/` | The audit trail, append only | 6 |
+
+## The marker, and what Ranger appends
+
+Every account note carries this line once:
+
+```
+<!-- ranger:below — everything above this line is CRM export, regenerable.
+     Ranger appends only below. Nothing above is ever modified. -->
+
+## Ranger Context
+```
+
+**Only `<!-- ranger:below` is load-bearing.** Everything after it — the rest of
+the comment, the heading, its wording — is prose you can reflow, reword or
+rename in Obsidian without breaking anything. The split is on that token and
+nothing else, and there is a test that reflows the comment four different ways
+and asserts the split lands in the same byte.
+
+Put it in with:
+
+```powershell
+ranger accounts migrate --dry-run    # says what would change
+ranger accounts migrate
+```
+
+Idempotent. A second run finds a marker everywhere and changes nothing. A note
+that somehow has two markers is refused rather than repaired, because there is
+no way to know which one you meant.
+
+### What Ranger writes below it
+
+`### YYYY-MM-DD | note | source` — the same activity format the export uses, so
+both parsers see one timeline. `ranger account_recall` shows a call filed
+yesterday next to the export's own history, and the morning brief counts it, so
+filing "spoke to Rod today" stops that account looking quiet.
+
+### Before you ever rebuild
+
+```powershell
+ranger vault-guard
+```
+
+Exit 0 means a rebuild would destroy nothing. Exit 1 means it would, and it
+names the notes. `build_vault.py` should call this before it writes.
+
+### The undo
+
+```powershell
+ranger snapshot init     # once
+ranger snapshot show     # is it set up, and has it a remote
+ranger snapshot now      # take one by hand
+```
+
+The heartbeat commits daily with the date as the message. **Local only.** The
+snapshot refuses to run if the repository has a remote, and says why: this vault
+holds customer email, pricing and material under NDA, and it never leaves the
+machine. `Ranger/log/` is git-ignored because it grows every turn and is already
+the thing that survives.

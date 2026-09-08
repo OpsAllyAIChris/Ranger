@@ -70,6 +70,15 @@ memory = "Ranger/memory"    # Tier 4, read + write
 inbox = "Ranger/inbox"      # Tier 5, read + write
 drafts = "Ranger/drafts"    # Tier 2, read + write
 log = "Ranger/log"          # Tier 6, append only
+# A daily git snapshot of the vault, committed by the heartbeat with the date
+# as the message. Accounts/ being read-only used to be the undo; now that Ranger
+# appends its own context there, and deletes nothing anywhere, this is the only
+# way back from a bad write.
+#
+# Local only. The repository has no remote and the snapshot REFUSES to run if
+# one appears, because this vault holds customer email, pricing and material
+# under NDA. Set up with: ranger snapshot init
+snapshot = true
 
 [context]
 # The whole standing allowance: memory plus knowledge, resent every turn.

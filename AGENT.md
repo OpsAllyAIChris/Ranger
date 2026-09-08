@@ -366,6 +366,26 @@ edit, so it can be flipped from Obsidian on a phone and the reason sits next to
 the switch. It stops the heartbeat and nothing else: conversation works
 normally while it is engaged, with a test asserting that.
 
+**Amendment D is at revision 2 as of 2026-09-08,** and `docs/amendments.md` is
+where it lives with the reasoning. The change: Ranger may append below the
+`<!-- ranger:below` marker in `Accounts/`, and modify nothing above it. That is
+one narrow hole in a wall that was solid, and it depends on four things being
+true together — the marker, the hash-checked atomic append in
+`Vault.append_below_marker`, `ranger vault-guard` refusing a destructive
+rebuild, and `ranger snapshot` giving the vault a local git history, because
+read-only `Accounts/` *was* the undo. Delete-never did not change and neither
+did `Knowledge/`.
+
+**The split token is `<!-- ranger:below`, counted by occurrence, and everything
+from that byte onward is the below-half.** The rest of the comment and the
+`## Ranger Context` heading are editable prose. Deliberately: the operator reads
+these notes in Obsidian and will reflow or reword that comment eventually, and a
+split that depended on the surrounding text would break silently the first time
+they did. Producer and consumer sharing a constant is fine; sharing an
+assumption about the text around it is the bug that flattened the training
+notebook. `parse_note` merges filed entries into the activity timeline by
+splitting on the marker for the same reason, never by looking for the heading.
+
 **One vault rule was widened.** `writable_roots` listed the four named folders,
 which was tighter than Amendment D asks and refused the kill switch at the
 Ranger root. It is now the whole `Ranger/` tree, exactly as Amendment D states,

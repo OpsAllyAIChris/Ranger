@@ -160,6 +160,89 @@ class Vault:
             handle.write(text)
         return target
 
+    # -- the one exception, and it is narrow ---------------------------
+
+    def resolve_account(self, path: str | Path) -> Path:
+        """An existing account note, and nothing else that exists.
+
+        Amendment D revision 2 lets Ranger append below the marker in
+        `Accounts/`. This is where that is decided, and it is deliberately not
+        an entry in `writable_roots`: everything that reads that tuple would
+        then treat account notes as ordinary Ranger files, which they are not.
+        Nothing here may create a note, and nothing here may touch a folder.
+        """
+        candidate = self._absolute(path)
+        if not _contains(self.config.root, candidate):
+            raise VaultPathDenied(
+                f"append refused: {candidate} is outside the vault ({self.config.root})"
+            )
+        if not _contains(self.config.accounts, candidate):
+            raise VaultWriteDenied(
+                f"append refused: {candidate} is not under {self.config.accounts}. "
+                "Appending below the marker is allowed in account notes and nowhere else"
+            )
+        if candidate.suffix.lower() != ".md":
+            raise VaultWriteDenied(f"append refused: {candidate} is not a note")
+        if not candidate.is_file():
+            raise VaultWriteDenied(
+                f"append refused: {candidate} does not exist. This may only add to a "
+                "note the export already wrote; it never creates one"
+            )
+        return candidate
+
+    def append_below_marker(self, path: str | Path, text: str) -> Path:
+        """Add to an account note under the marker. The only write into Accounts/.
+
+        Everything above the marker is hashed before and after. Not because a
+        bug here is expected, but because the promise being made to the operator
+        is that a CRM export is never modified, and a promise worth making is
+        worth checking rather than asserting.
+
+        The write is atomic: a new file is composed in full and moved over the
+        old one, so an interrupted write leaves the original byte-identical
+        rather than half of each. A partially rewritten account note is worse
+        than a failed append, because it looks like a note.
+        """
+        from .marker import MarkerError, digest, split
+
+        target = self.resolve_account(path)
+        original = target.read_bytes()
+        try:
+            before, below = split(original.decode("utf-8"))
+        except UnicodeDecodeError as exc:
+            raise MarkerError(f"{target} is not UTF-8 text: {exc}") from exc
+
+        was = digest(before)
+        composed = before + below.rstrip("\n") + "\n" + text
+        after, _ = split(composed)
+        if digest(after) != was:
+            # Unreachable by construction, which is the point of checking: the
+            # cost of being wrong here is a silently rewritten export.
+            raise MarkerError(
+                f"append refused: composing the new {target.name} changed the bytes "
+                "above the marker. Nothing was written."
+            )
+
+        scratch = target.with_name(target.name + ".ranger-tmp")
+        try:
+            scratch.write_text(composed, encoding="utf-8")
+            written = scratch.read_text(encoding="utf-8")
+            settled, _ = split(written)
+            if digest(settled) != was:
+                raise MarkerError(
+                    f"append refused: {target.name} did not survive being written. "
+                    "Nothing was changed."
+                )
+            scratch.replace(target)
+        except Exception:
+            scratch.unlink(missing_ok=True)
+            if target.read_bytes() != original:
+                # Belt and braces. If this ever fires, the atomic move is not
+                # atomic on this filesystem and that is worth knowing loudly.
+                target.write_bytes(original)
+            raise
+        return target
+
     # -- setup ---------------------------------------------------------
 
     def layout_dirs(self) -> list[Path]:

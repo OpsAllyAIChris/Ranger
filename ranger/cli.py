@@ -1423,6 +1423,106 @@ def cmd_dormant(config: Config, args: Any) -> int:
     return 0
 
 
+def cmd_snapshot(config: Config, args: Any) -> int:
+    """Set up the vault's local history, or take today's snapshot by hand."""
+    from .snapshot import SnapshotRefused, commit, initialise, is_repository, last_snapshot, remotes
+
+    paint = _colour(sys.stdout.isatty())
+    root = config.vault.root
+    action = getattr(args, "snapshot_command", None) or "show"
+
+    if action == "init":
+        try:
+            state = initialise(root)
+        except SnapshotRefused as exc:
+            print(paint(f"  {exc}", YELLOW))
+            return 1
+        print(paint(f"  {root}: {state}", TEAL))
+        print(paint("  no remote, and the daily snapshot refuses to run if one appears", DIM))
+        return 0
+
+    if action == "now":
+        result = commit(root, datetime.now().date())
+        print(paint(f"  {result.describe()}", TEAL if result.taken else YELLOW))
+        return 0 if result.taken else 1
+
+    if not is_repository(root):
+        print(paint(f"  {root} is not a git repository. Run: ranger snapshot init", YELLOW))
+        return 1
+    try:
+        found = remotes(root)
+    except SnapshotRefused as exc:
+        print(paint(f"  {exc}", YELLOW))
+        return 1
+    if found:
+        print(paint(f"  REMOTE PRESENT: {', '.join(found)}. Snapshots are refused.", YELLOW))
+        print("  The vault holds customer email and pricing. Remove the remote.")
+        return 1
+    last = last_snapshot(root)
+    print(paint(f"  ok  {root} is a local repository with no remote", TEAL))
+    print(f"      last snapshot: {last or 'none yet'}")
+    return 0
+
+
+def cmd_accounts_migrate(config: Config, args: Any) -> int:
+    """Put the marker in every account note, once.
+
+    Idempotent by construction: a note is migrated only when it has exactly
+    zero markers, so a second run finds one everywhere and changes nothing.
+    """
+    from .marker import migrate
+
+    paint = _colour(sys.stdout.isatty())
+    folder = config.vault.accounts
+    if not folder.is_dir():
+        print(f"  no accounts folder at {folder}", file=sys.stderr)
+        return 1
+
+    dry = bool(getattr(args, "dry_run", False))
+    report = migrate(None, folder, dry_run=dry)
+
+    if dry:
+        print(paint("  dry run, nothing written", DIM))
+    print(f"  {len(report.migrated)} migrated, {len(report.already)} already marked")
+    for name, why in report.refused:
+        print(paint(f"  refused {name}: {why}", YELLOW))
+    if report.migrated and not dry:
+        print(paint(f"  {folder}", DIM))
+    return 1 if report.refused else 0
+
+
+def cmd_vault_guard(config: Config, args: Any) -> int:
+    """What a rebuild of the vault would destroy.
+
+    build_vault.py regenerates account notes from the CRM export. Everything
+    above the marker is its to replace; everything below is Ranger's and is not
+    regenerable from anything. This is the check that script has to make before
+    it writes, runnable on its own until it can be wired in.
+
+    Exit code 1 means a rebuild would destroy something, so a script can use it
+    directly: `ranger vault-guard || exit 1`.
+    """
+    from .marker import notes_with_context, rebuild_refusal
+
+    paint = _colour(sys.stdout.isatty())
+    folder = config.vault.accounts
+    if not folder.is_dir():
+        print(f"  no accounts folder at {folder}", file=sys.stderr)
+        return 1
+
+    refusal = rebuild_refusal(folder)
+    if not refusal:
+        total = len(list(folder.rglob("*.md")))
+        print(paint(f"  ok  no account note holds Ranger context ({total} notes)", TEAL))
+        print(paint("      a rebuild would destroy nothing", DIM))
+        return 0
+
+    print(paint(refusal, YELLOW))
+    print()
+    print(paint(f"  {len(notes_with_context(folder))} notes, in {folder}", DIM))
+    return 1
+
+
 def cmd_accounts_survey(config: Config, args: Any) -> int:
     """What is actually in the vault, so nobody has to guess at the vocabulary.
 
@@ -1941,6 +2041,25 @@ def main(argv: list[str] | None = None) -> int:
 
     accounts = sub.add_parser("accounts", help="what is in the account notes")
     accounts_sub = accounts.add_subparsers(dest="accounts_command")
+    migrate_cmd = accounts_sub.add_parser(
+        "migrate", help="put the ranger:below marker in every account note, once"
+    )
+    migrate_cmd.add_argument(
+        "--dry-run", action="store_true", help="say what would change and write nothing"
+    )
+    snapshot = sub.add_parser(
+        "snapshot", help="the vault's local history: the undo for account writes"
+    )
+    snapshot_sub = snapshot.add_subparsers(dest="snapshot_command")
+    snapshot_sub.add_parser("show", help="whether the vault has a repository, and a remote")
+    snapshot_sub.add_parser("init", help="make the vault a local git repository. No remote")
+    snapshot_sub.add_parser("now", help="take today's snapshot by hand")
+
+    sub.add_parser(
+        "vault-guard",
+        help="what a rebuild of the vault would destroy. Exit 1 if anything would",
+    )
+
     accounts_sub.add_parser(
         "survey", help="the Tier values and opportunity stages actually in the vault"
     )
@@ -1997,10 +2116,16 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_mic(config, args)
     if args.command == "dormant":
         return cmd_dormant(config, args)
+    if args.command == "snapshot":
+        return cmd_snapshot(config, args)
+    if args.command == "vault-guard":
+        return cmd_vault_guard(config, args)
     if args.command == "accounts":
         if args.accounts_command == "survey":
             return cmd_accounts_survey(config, args)
-        print("usage: ranger accounts survey", file=sys.stderr)
+        if args.accounts_command == "migrate":
+            return cmd_accounts_migrate(config, args)
+        print("usage: ranger accounts survey|migrate", file=sys.stderr)
         return 2
     if args.command == "open":
         return cmd_open(config, args)

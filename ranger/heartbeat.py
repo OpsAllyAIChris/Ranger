@@ -296,6 +296,59 @@ ALREADY_RUNNING = "already_running"
 TIMED_OUT = "timed_out"
 FAILED = "failed"
 
+@dataclass
+class VaultSnapshot:
+    """A daily commit in the vault, so a bad append is recoverable.
+
+    Silent when it works. `Accounts/` being read-only was the undo; this
+    replaces it, and an undo that announces itself every morning is an undo the
+    operator learns to ignore. It writes a notice in exactly one case: the
+    repository has grown a remote, which means the vault is one push away from
+    leaving the machine and the snapshot has stopped running.
+    """
+
+    root: Path
+    audit: Any = None
+    name: str = "snapshot"
+    runs_in_quiet_hours: bool = True
+    now: Callable[[], datetime] = datetime.now
+
+    def status(self, now: datetime, inbox: Inbox) -> Dueness:
+        from .snapshot import is_repository, last_snapshot
+
+        if not is_repository(self.root):
+            return Dueness(False, "the vault is not a git repository yet")
+        today = now.date().isoformat()
+        if last_snapshot(self.root) == today:
+            return Dueness(False, f"already snapshotted {today}")
+        return Dueness(True, "no snapshot today yet")
+
+    def due(self, now: datetime, inbox: Inbox) -> bool:
+        return self.status(now, inbox).due
+
+    async def run(self, *, record: bool = True) -> Notice | None:
+        from .snapshot import commit
+
+        result = commit(self.root, self.now().date())
+        if self.audit is not None:
+            try:
+                self.audit.write("vault snapshot", result.describe(), origin="heartbeat")
+            except Exception:
+                pass
+        if result.taken or "REFUSING" not in result.detail:
+            return None
+        return Notice(
+            kind=self.name,
+            title="The vault repository has a remote",
+            body=(
+                result.detail
+                + "\n\nNo snapshot has been taken since this appeared, so there is "
+                "currently no undo for anything Ranger appends to an account note."
+            ),
+            created=self.now(),
+        )
+
+
 _EXECUTED = frozenset({SURFACED, NOTHING, TIMED_OUT, FAILED})
 
 
@@ -571,7 +624,7 @@ def build_checks(config: Config, registry: Any, vault: Any = None) -> list[Check
                 dormant=store.dormant(),
             )
 
-    return [
+    checks: list[Check] = [
         MorningSurface(
             registry=registry,
             hour=config.schedule.morning_hour,
@@ -579,3 +632,6 @@ def build_checks(config: Config, registry: Any, vault: Any = None) -> list[Check
             scan=scan,
         )
     ]
+    if config.vault.snapshot:
+        checks.append(VaultSnapshot(root=config.vault.root))
+    return checks
