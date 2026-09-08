@@ -65,8 +65,9 @@ Only the notebook. Everything else downloads itself.
 | 7. Generate | Piper speaks "hey ranger" 20,000 times, and the adversarial negatives too. **The long one** | ~1 hour |
 | 8. Augment | Plays every clip through a room, mixes in noise, computes features | 15–30 min |
 | 9. Train | 50,000 steps | 20–40 min |
-| 10. Acceptance test | Scores the model. Not upstream's | 5–10 min |
-| 11. Download | Puts the .onnx in your downloads | seconds |
+| 10. Held-out audio | One more hour of music, continuing the stream past where cell 4 stopped. Not upstream's | 5 min |
+| 11. Acceptance test | Scores the model against it. Not upstream's | 5–10 min |
+| 12. Download | Puts the .onnx in your downloads | seconds |
 
 **If cell 7 dies part way through, run it again.** It counts the clips already
 on disk and carries on. Nothing is wasted. Same for the downloads.
@@ -138,8 +139,11 @@ ranger ui
 
 ## 6. Knowing it worked before trusting it around customers
 
-The last notebook cell prints this, over two hours of music and noise that
-contains no instance of the phrase:
+The acceptance cell prints this, over an hour of music the model has never
+seen and that contains no instance of the phrase. Held out on purpose: the
+background audio from cell 4 was mixed into the training negatives, so counting
+false fires against it would flatter the model, which has already been trained
+not to fire on those exact clips.
 
 ```
  threshold   detected   false/hr

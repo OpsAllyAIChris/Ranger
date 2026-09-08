@@ -211,6 +211,33 @@ FEATURES = """\
 """
 
 
+HOLDOUT = """\
+# Step 7 of 7, part one. An hour of music the model has never seen. Five minutes.
+#
+# The audio downloaded in step 4 was mixed into the training negatives, so
+# counting false fires against it flatters the model: it has already been
+# trained not to fire on those exact clips. This continues the same stream past
+# where step 4 stopped, so what comes out is genuinely held out.
+
+import itertools
+
+BACKGROUND_HOURS = 2  # must match n_hours in step 4
+HOLDOUT_HOURS = 1
+
+os.makedirs("./holdout_16k", exist_ok=True)
+stream = datasets.load_dataset("rudraml/fma", name="small", split="train", streaming=True)
+stream = stream.cast_column("audio", datasets.Audio(sampling_rate=16000))
+already = BACKGROUND_HOURS * 3600 // 30
+for row in tqdm(itertools.islice(iter(stream), already, already + HOLDOUT_HOURS * 3600 // 30)):
+    name = row["audio"]["path"].split("/")[-1].replace(".mp3", ".wav")
+    scipy.io.wavfile.write(
+        os.path.join("./holdout_16k", name), 16000, (row["audio"]["array"] * 32767).astype(np.int16)
+    )
+
+print(len(os.listdir("./holdout_16k")), "held out clips")
+"""
+
+
 def config_cell(phrase: str, name: str, negatives: list[str]) -> str:
     negative_lines = "\n".join(f"    {word!r}," for word in negatives)
     return f'''\
@@ -294,15 +321,16 @@ def train_cell(name: str) -> str:
 
 def verify_cell(name: str, phrase: str) -> str:
     return f'''\
-# Step 7 of 7. Does it work? Not upstream's cell. This is the acceptance test.
+# Step 7 of 7, part two. Does it work? Not upstream's cell. The acceptance test.
 #
 # Two measurements at every threshold:
 #
 #   detected   - the fraction of held out clips of {phrase!r} it fires on.
 #                These are synthetic and a different voice from yours, so treat
 #                this as an upper bound rather than a promise.
-#   false/hr   - fires per hour across the music and noise downloaded earlier.
-#                Nothing in it says {phrase!r}, so every one of these is wrong.
+#   false/hr   - fires per hour across the held out music from part one.
+#                Nothing in it says {phrase!r}, so every one of these is wrong,
+#                and the model has never been trained against these clips.
 #
 # Pick the lowest threshold whose false/hr you can live with. Anything under
 # about 0.5 per hour is liveable; above 2 per hour it will interrupt you often
@@ -332,9 +360,13 @@ def scores_for(path):
     return np.array(out), len(data) / rate
 
 
-positives = sorted(Path("./{name}/positive_test").glob("*.wav"))
-background = sorted(Path("./audioset_16k").glob("*.wav")) + sorted(Path("./fma").glob("*.wav"))
-print(f"{{len(positives)}} held out positives, {{len(background)}} background clips")
+# The trainer nests its output: output_dir/model_name/positive_test, and the
+# exported model at output_dir/model_name.onnx. Not the same level.
+positives = sorted(Path("./{name}/{name}/positive_test").glob("*.wav"))
+background = sorted(Path("./holdout_16k").glob("*.wav"))
+assert positives, "no held out positives found. Did step 6 part one finish?"
+assert background, "no held out background found. Run step 7 part one first."
+print(f"{{len(positives)}} held out positives, {{len(background)}} held out background clips")
 
 positive_peaks = []
 for path in positives[:500]:
@@ -398,6 +430,7 @@ def notebook_for(phrase: str, name: str, negatives: list[str]) -> dict:
         _code(generate_cell(name)),
         _code(augment_cell(name)),
         _code(train_cell(name)),
+        _code(HOLDOUT),
         _code(verify_cell(name, phrase)),
         _code(download_cell(name)),
         _markdown(
