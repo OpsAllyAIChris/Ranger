@@ -145,11 +145,16 @@ correctable in Obsidian.
 
 | Folder | Holds | Tier |
 | ------ | ----- | ---- |
-| `Ranger/drafts/` | Drafts written and held, never sent | 2 |
+| `Ranger/drafts/` | Drafts written and held, never sent. Markdown, and generated .docx/.xlsx/.pdf | 2, D |
 | `Ranger/memory/` | Durable facts, one per file | 4 |
 | `Ranger/inbox/` | Notices surfaced and not yet cleared, one file per notice | 5 |
 | `Ranger/log/` | The audit trail, append only | 6 |
 | `Ranger/gp/` | Gross profit figures, one create-only note per entry | C |
+
+Generated documents live in `Ranger/drafts/` with the markdown ones, because a
+generated document is a draft that happens not to be text: same folder, same
+listing, same clearing, never sent and never overwritten. `ranger drafts
+preview` renders one as text from the file itself. See `docs/documents.md`.
 
 `Ranger/gp/` is the first dashlet's store. One note per figure, named for the
 month it is for and the moment it was entered:

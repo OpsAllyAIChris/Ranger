@@ -297,6 +297,20 @@ def cmd_doctor(config: Config) -> int:
         print("  todo     tts.voice_id is not set. Run 'ranger voices', then put the id in")
         print(f"           {_local_config_path(config)}, which is git-ignored and survives a pull.")
 
+    from .documents import KINDS as _KINDS, available as _document_writer
+
+    installed = [k for k in _KINDS if _document_writer(k)]
+    if len(installed) == len(_KINDS):
+        print(f"  ok       document writers installed: {', '.join(installed)}")
+    else:
+        absent = [k for k in _KINDS if k not in installed]
+        print(
+            f"  todo     no writer for {', '.join(absent)}. "
+            "Install with: pip install python-docx openpyxl reportlab"
+        )
+        print("           Everything else works without them; write_document refuses "
+              "that format and says so.")
+
     from .aliases import AliasFile as _AliasFile
 
     try:
@@ -1481,6 +1495,47 @@ def cmd_drafts(config: Config, args: Any) -> int:
             print(paint("  moved, not deleted. 'ranger drafts cleared' lists it", DIM))
         return 0
 
+    if action == "preview":
+        # The same preview the window draws, in the terminal. Same parser, same
+        # caveat, same file: it is here so the operator can check a generated
+        # document without opening a browser, and so the two can be compared.
+        from .ownfiles import find
+        from .preview import preview as render
+
+        name = " ".join(getattr(args, "name", []) or []).strip()
+        files = [f for f in listing(vault, config, "drafts") if f.is_document]
+        files += [f for f in listing(vault, config, "drafts", cleared=True) if f.is_document]
+        found, candidates = find(files, name) if name else (None, files)
+        if found is None:
+            if candidates:
+                print(paint(f"  {name or 'which one'}: {len(candidates)} documents", YELLOW))
+                for item in candidates[:10]:
+                    print(f"    {item.name}")
+            else:
+                print(paint("  no generated documents in drafts", DIM))
+            return 1
+        rendered = render(
+            found.path,
+            root=config.vault.root,
+            max_blocks=config.documents.preview_blocks,
+            max_rows=config.documents.preview_rows,
+        )
+        print(paint(f"  {found.name}", BOLD))
+        print(paint(f"  {rendered.caveat}", DIM))
+        if rendered.error:
+            print(paint(f"  could not read it: {rendered.error}", YELLOW))
+            return 1
+        if rendered.kind == "pdf":
+            pages = rendered.pages if rendered.pages else "an unknown number of"
+            print(paint(f"  {pages} page(s). Open the file itself to read it.", DIM))
+            return 0
+        print()
+        for line in rendered.as_text().splitlines():
+            print(f"  {line}")
+        if rendered.truncated:
+            print(paint("\n  (truncated. The file has more in it.)", DIM))
+        return 0
+
     cleared = action == "cleared"
     files = listing(vault, config, "drafts", cleared=cleared)
     where = "cleared" if cleared else "held"
@@ -1493,6 +1548,8 @@ def cmd_drafts(config: Config, args: Any) -> int:
         print(f"  {when}{item.name}")
         if item.title:
             print(paint(f"      {item.title}", DIM))
+        if item.is_document:
+            print(paint(f"      {item.summary}. 'ranger drafts preview' renders it", DIM))
     return 0
 
 
@@ -1537,6 +1594,22 @@ def cmd_gp(config: Config, args: Any) -> int:
             ))
         if entry.path:
             print(paint(f"  {entry.path.name}", DIM))
+        return 0
+
+    if action == "export":
+        from .documents import DocumentError, MissingLibrary
+
+        kind = str(getattr(args, "format", "") or "xlsx").lower().lstrip(".")
+        try:
+            made = gp.export(config, vault, today, kind)
+        except MissingLibrary as exc:
+            print(paint(f"  {exc}", YELLOW), file=sys.stderr)
+            return 2
+        except DocumentError as exc:
+            print(paint(f"  {exc}", YELLOW), file=sys.stderr)
+            return 2
+        print(paint(f"  {made.relative}  ({made.size // 1024 or 1} KB)", TEAL))
+        print(paint("  values only, no formulas. Held in drafts, nothing was sent.", DIM))
         return 0
 
     ledger, total = gp.summary(config, vault, today)
@@ -2280,6 +2353,10 @@ def main(argv: list[str] | None = None) -> int:
     drafts_sub = drafts.add_subparsers(dest="drafts_command")
     drafts_sub.add_parser("show", help="what is held right now")
     drafts_sub.add_parser("cleared", help="what has been cleared. Moved, never deleted")
+    preview_cmd = drafts_sub.add_parser(
+        "preview", help="render a generated document as text, from the file itself"
+    )
+    preview_cmd.add_argument("name", nargs="*", help="part of the file name")
     clear_cmd = drafts_sub.add_parser(
         "clear", help="move a draft out of the panel. It is not deleted"
     )
@@ -2296,6 +2373,13 @@ def main(argv: list[str] | None = None) -> int:
         "--period", default="", help="the month it is for, as 2026-09. Defaults to this month"
     )
     gp_add.add_argument("--note", default="", help="anything worth remembering about it")
+    gp_export = gp_sub.add_parser(
+        "export", help="write the ledger into drafts as a document. Values only"
+    )
+    gp_export.add_argument(
+        "--format", default="xlsx", choices=["xlsx", "docx", "pdf"],
+        help="xlsx by default, because a ledger is a spreadsheet",
+    )
     gp_history = gp_sub.add_parser(
         "history", help="every entry ever made, superseded ones included"
     )

@@ -234,6 +234,190 @@ export function createOrb(canvas) {
   }));
   scene.add(stars);
 
+  // ------------------------------------------------------- assembly (D2)
+  //
+  // Particles leaving the starfield and coalescing into the shape of a page.
+  // Three rules it is built around, all of them the operator's:
+  //
+  //   It never gates the content. The preview opens at the same moment this
+  //   starts, so nothing is waiting on it. Any click ends it immediately.
+  //
+  //   It never lies about state. This is only ever called for a file that is
+  //   already on disk; the shell calls it from the `document` event, which the
+  //   server sends after the write returned a path that exists. A generation
+  //   that failed draws nothing at all.
+  //
+  //   It is not orange. Orange is the live microphone and keeps one meaning.
+  //   These are the blues and greens already in the nebula.
+  //
+  // The count is capped here as well as in config: this window sits open
+  // during customer calls and screen shares, and an unbounded particle count
+  // is a frame rate nobody chose.
+  const ASSEMBLY_CAP = 600;
+  const ASSEMBLY_COLOURS = [
+    [0.176, 0.831, 0.659], // the nebula's teal
+    [0.20, 0.42, 0.92],    // its blue
+    [0.45, 0.72, 0.95],    // a pale blue, so the shape does not read flat
+  ];
+
+  let assembly = null;
+
+  function pageTargets(count, cx, cy, halfW, halfH) {
+    // A page outline with a few lines of text in it. Recognisable in under a
+    // second, which is all it gets.
+    const points = [];
+    const edge = Math.max(8, Math.round(count * 0.55));
+    for (let i = 0; i < edge; i++) {
+      const t = (i / edge) * 4;
+      const side = Math.floor(t);
+      const f = t - side;
+      if (side === 0) points.push([cx - halfW + f * halfW * 2, cy + halfH]);
+      else if (side === 1) points.push([cx + halfW, cy + halfH - f * halfH * 2]);
+      else if (side === 2) points.push([cx + halfW - f * halfW * 2, cy - halfH]);
+      else points.push([cx - halfW, cy - halfH + f * halfH * 2]);
+    }
+    const lines = 5;
+    const perLine = Math.max(1, Math.round((count - points.length) / lines));
+    for (let l = 0; l < lines; l++) {
+      const y = cy + halfH * (0.55 - l * 0.28);
+      const width = halfW * (l === lines - 1 ? 0.45 : 0.72);
+      for (let i = 0; i < perLine && points.length < count; i++) {
+        points.push([cx - width + (i / Math.max(1, perLine - 1)) * width * 2, y]);
+      }
+    }
+    while (points.length < count) points.push([cx, cy]);
+    return points;
+  }
+
+  function worldFromPixels(px, py) {
+    const height = 2 * Math.tan((camera.fov * Math.PI) / 360) * camera.position.z;
+    const width = height * camera.aspect;
+    return [
+      (px / window.innerWidth - 0.5) * width,
+      -(py / window.innerHeight - 0.5) * height,
+    ];
+  }
+
+  function assemble(options = {}) {
+    const count = Math.min(ASSEMBLY_CAP, Math.max(0, Math.round(Number(options.count) || 0)));
+    if (!count) return null;
+    if (assembly) assembly.done = true;
+
+    const seconds = Math.min(6, Math.max(0.2, Number(options.seconds) || 1.1));
+    const rect = options.rect || {
+      x: window.innerWidth * 0.3,
+      y: window.innerHeight * 0.3,
+      width: window.innerWidth * 0.25,
+      height: window.innerHeight * 0.4,
+    };
+    const [cx, cy] = worldFromPixels(rect.x + rect.width / 2, rect.y + rect.height / 2);
+    const [ex, ey] = worldFromPixels(rect.x + rect.width, rect.y);
+    const halfW = Math.abs(ex - cx);
+    const halfH = Math.abs(ey - cy);
+
+    const from = new Float32Array(count * 3);
+    const to = new Float32Array(count * 3);
+    const position = new Float32Array(count * 3);
+    const colour = new Float32Array(count * 3);
+    const delay = new Float32Array(count);
+    const targets = pageTargets(count, cx, cy, halfW, halfH);
+
+    for (let i = 0; i < count; i++) {
+      // Start on an actual star, so they read as the starfield moving rather
+      // than as a new thing appearing.
+      const star = Math.floor(Math.random() * STAR_COUNT);
+      from[i * 3 + 0] = starPos[star * 3 + 0] * 0.35;
+      from[i * 3 + 1] = starPos[star * 3 + 1] * 0.35;
+      from[i * 3 + 2] = Math.max(-14, starPos[star * 3 + 2] * 0.25);
+      to[i * 3 + 0] = targets[i][0];
+      to[i * 3 + 1] = targets[i][1];
+      to[i * 3 + 2] = 0;
+      position.set([from[i * 3], from[i * 3 + 1], from[i * 3 + 2]], i * 3);
+      const tone = ASSEMBLY_COLOURS[i % ASSEMBLY_COLOURS.length];
+      colour.set(tone, i * 3);
+      delay[i] = Math.random() * 0.35;
+    }
+
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.BufferAttribute(position, 3));
+    geometry.setAttribute('aColor', new THREE.BufferAttribute(colour, 3));
+    const material = new THREE.ShaderMaterial({
+      transparent: true,
+      depthWrite: false,
+      depthTest: false,
+      blending: THREE.AdditiveBlending,
+      uniforms: {
+        uFade: { value: 0 },
+        uPixelRatio: { value: renderer.getPixelRatio() },
+      },
+      vertexShader: `
+        attribute vec3 aColor;
+        varying vec3 vColor;
+        uniform float uPixelRatio;
+        void main() {
+          vColor = aColor;
+          vec4 mv = modelViewMatrix * vec4(position, 1.0);
+          gl_PointSize = 2.4 * uPixelRatio * (70.0 / -mv.z);
+          gl_Position = projectionMatrix * mv;
+        }
+      `,
+      fragmentShader: `
+        precision highp float;
+        varying vec3 vColor;
+        uniform float uFade;
+        void main() {
+          float d = length(gl_PointCoord - 0.5) * 2.0;
+          float a = pow(max(0.0, 1.0 - d), 2.0) * uFade;
+          gl_FragColor = vec4(vColor * a, a);
+        }
+      `,
+    });
+    const points = new THREE.Points(geometry, material);
+    scene.add(points);
+
+    assembly = {
+      points, geometry, material, from, to, delay, count,
+      seconds, started: clock.getElapsedTime(), done: false, fading: 0,
+    };
+    return {
+      /** End it now. Any click, any key, or a second document arriving. */
+      skip() { if (assembly) assembly.fading = Math.max(assembly.fading, 0.0001); },
+      get running() { return assembly !== null && !assembly.done; },
+    };
+  }
+
+  function stepAssembly(t, dt) {
+    if (!assembly) return;
+    const a = assembly;
+    const elapsed = t - a.started;
+    const array = a.geometry.attributes.position.array;
+    for (let i = 0; i < a.count; i++) {
+      const p = Math.min(1, Math.max(0, (elapsed - a.delay[i]) / a.seconds));
+      // Ease out cubic: fast away from the starfield, settling into the page.
+      const e = 1 - Math.pow(1 - p, 3);
+      array[i * 3 + 0] = a.from[i * 3 + 0] + (a.to[i * 3 + 0] - a.from[i * 3 + 0]) * e;
+      array[i * 3 + 1] = a.from[i * 3 + 1] + (a.to[i * 3 + 1] - a.from[i * 3 + 1]) * e;
+      array[i * 3 + 2] = a.from[i * 3 + 2] + (a.to[i * 3 + 2] - a.from[i * 3 + 2]) * e;
+    }
+    a.geometry.attributes.position.needsUpdate = true;
+
+    const holding = elapsed < a.seconds + 0.25;
+    if (!holding && !a.fading) a.fading = 0.0001;
+    if (a.fading) {
+      a.fading += dt;
+      a.material.uniforms.uFade.value = Math.max(0, 1 - a.fading / 0.4);
+    } else {
+      a.material.uniforms.uFade.value = Math.min(1, elapsed / 0.25);
+    }
+
+    if (a.done || (a.fading && a.material.uniforms.uFade.value <= 0)) {
+      scene.remove(a.points);
+      a.geometry.dispose();
+      a.material.dispose();
+      assembly = null;
+    }
+  }
+
   // ---------------------------------------------------------------- orb
 
   const orb = new THREE.Group();
@@ -305,6 +489,8 @@ export function createOrb(canvas) {
   let fps = 0;
   let fpsSince = 0;
   let onFrame = null;
+  let offsetTarget = 0;
+  let offsetNow = 0;
 
   function step() {
     if (!running) return;
@@ -331,8 +517,14 @@ export function createOrb(canvas) {
     atmosphere.material.uniforms.uPulse.value = idle * 0.35;
 
     // A touch of drift so the whole frame is never perfectly still.
-    orb.position.x = Math.sin(t * 0.11) * 0.10;
+    // `offset` is where the preview sheet asks the orb to stand: the orb is
+    // the one thing that says what state Jarvis is in, so nothing is allowed
+    // to cover it. It steps aside instead.
+    offsetNow += (offsetTarget - offsetNow) * (1 - Math.exp(-dt / 0.22));
+    orb.position.x = Math.sin(t * 0.11) * 0.10 + offsetNow;
     orb.position.y = Math.cos(t * 0.09) * 0.08;
+
+    stepAssembly(t, dt);
 
     composer.render();
 
@@ -388,6 +580,20 @@ export function createOrb(canvas) {
       return { name: preset, attack, release };
     },
     get presets() { return Object.keys(PRESETS); },
+    /**
+     * Coalesce particles into the shape of a page at `rect` (CSS pixels).
+     * Returns a handle with skip(), or null when the count is zero.
+     */
+    assemble,
+    /**
+     * Slide the orb sideways in world units, so the preview sheet never has to
+     * cover it. Smoothed, so it moves rather than teleports.
+     */
+    setOffset(units) {
+      const v = Number(units);
+      offsetTarget = Number.isFinite(v) ? Math.max(-12, Math.min(12, v)) : 0;
+    },
+    get offset() { return offsetTarget; },
     /** Bloom strength, for tuning against a real screen. */
     setBloom(strength) { bloom.strength = Number(strength); },
     get bloom() { return bloom.strength; },

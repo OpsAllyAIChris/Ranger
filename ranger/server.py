@@ -33,6 +33,13 @@ from .config import Config
 #: there is one URL to remember and one thing to unblock in a firewall.
 WS_PATH = "/ws"
 
+#: Serves one generated document out of the drafts folder, by vault-relative
+#: path. The PDF preview is the browser's own viewer pointed at the real file,
+#: and "get the file out" is a link, so both need a URL. Nothing else in the
+#: vault is reachable through it: the path is resolved and then required to sit
+#: inside the drafts folder and to be one of the three generated kinds.
+FILE_PATH = "/document/"
+
 #: Answers "is it already running, and is anyone looking at it". Written for
 #: the taskbar shortcut, which must not start a second server or open a second
 #: window, and useful on its own when nothing seems to be happening.
@@ -138,6 +145,8 @@ class FrontEndHandler(SimpleHTTPRequestHandler):
             return self._websocket()
         if path == STATUS_PATH.rstrip("/"):
             return self._status()
+        if path.startswith(FILE_PATH):
+            return self._document(path[len(FILE_PATH):])
         return super().do_GET()
 
     def _status(self) -> None:
@@ -156,6 +165,62 @@ class FrontEndHandler(SimpleHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
+
+    def _document(self, encoded: str) -> None:
+        """One generated document, by vault-relative path.
+
+        Three checks, in this order, and a 404 for every failure so that a
+        probe learns nothing about what exists: the path resolves inside the
+        vault, it sits inside the drafts folder, and it is one of the kinds
+        Jarvis generates. The drafts folder also holds markdown that quotes
+        customer email, and none of that is served here.
+        """
+        from urllib.parse import unquote
+
+        config = type(self).config
+        if config is None:
+            self.send_error(404, "not found")
+            return
+        query = self.path.split("?", 1)[1] if "?" in self.path else ""
+        wanted = unquote(encoded)
+
+        try:
+            from .preview import KINDS
+            from .vault import Vault, VaultError
+
+            vault = Vault(config.vault)
+            target = vault.resolve_read(config.vault.root / wanted)
+            drafts = config.vault.drafts.resolve()
+            if drafts not in target.resolve().parents:
+                raise VaultError("outside the drafts folder")
+            if target.suffix.lower().lstrip(".") not in KINDS or not target.is_file():
+                raise VaultError("not a generated document")
+        except Exception:
+            self.log_error("refused a document request for %r", wanted)
+            self.send_error(404, "not found")
+            return
+
+        payload = target.read_bytes()
+        kinds = {
+            ".pdf": "application/pdf",
+            ".docx": ("application/vnd.openxmlformats-officedocument"
+                      ".wordprocessingml.document"),
+            ".xlsx": ("application/vnd.openxmlformats-officedocument"
+                      ".spreadsheetml.sheet"),
+        }
+        # Word and Excel files are never displayed inline by a browser, so they
+        # are always a download. A PDF is displayed unless the operator asked
+        # for the file itself.
+        download = "download" in query or target.suffix.lower() != ".pdf"
+        self.send_response(200)
+        self.send_header("Content-Type", kinds.get(target.suffix.lower(), "application/octet-stream"))
+        self.send_header("Content-Length", str(len(payload)))
+        self.send_header(
+            "Content-Disposition",
+            f'{"attachment" if download else "inline"}; filename="{target.name}"',
+        )
+        self.end_headers()
+        self.wfile.write(payload)
 
     # -- the websocket -------------------------------------------------
 

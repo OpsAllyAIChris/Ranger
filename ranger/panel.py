@@ -32,7 +32,7 @@ from .dashlets import readings
 from .dates import human_datetime
 from .heartbeat import Inbox, Notice
 from .vault import Vault, VaultError
-from .ownfiles import CLEARED
+from .ownfiles import CLEARED, SUFFIXES, describe
 
 #: HoldingGate writes these when there is nobody at a keyboard: voice turns and
 #: anything the heartbeat starts. They are the panel's Awaiting Confirmation
@@ -52,9 +52,18 @@ class Item:
     title: str
     detail: str
     when: str
+    #: "md" for a note, or docx/xlsx/pdf for a generated document. The panel
+    #: shows a badge and offers a preview on the strength of this.
+    kind: str = "md"
 
     def as_dict(self) -> dict[str, Any]:
-        return {"id": self.id, "title": self.title, "detail": self.detail, "when": self.when}
+        return {
+            "id": self.id,
+            "title": self.title,
+            "detail": self.detail,
+            "when": self.when,
+            "kind": self.kind,
+        }
 
 
 def _preview(text: str) -> str:
@@ -103,11 +112,29 @@ def snapshot(config: Config, vault: Vault) -> dict[str, Any]:
 
     drafts: list[Item] = []
     try:
-        for item in vault.list_markdown(config.vault.drafts):
+        # Markdown and generated documents together: a generated document is a
+        # draft that happens not to be text, and it belongs in the same list
+        # for the same reason it belongs in the same folder.
+        for item in vault.list_files(config.vault.drafts, SUFFIXES):
             # Cleared drafts are moved into drafts/cleared/, not deleted. The
             # panel is the reason clearing exists, so it is the one place that
             # must not show them.
             if CLEARED in item.path.parts:
+                continue
+            when = human_datetime(datetime.fromtimestamp(item.path.stat().st_mtime))
+            if item.path.suffix.lower() != ".md":
+                # Never opened as text. A .docx is a zip file, and the panel is
+                # not the place to find that out.
+                described = describe(item.path, config.vault.root)
+                drafts.append(
+                    Item(
+                        id=_identify(vault, item.path),
+                        title=described.title or item.path.stem,
+                        detail=described.summary,
+                        when=when,
+                        kind=described.kind,
+                    )
+                )
                 continue
             try:
                 text = vault.read_text(item.path)
@@ -118,7 +145,7 @@ def snapshot(config: Config, vault: Vault) -> dict[str, Any]:
                     id=_identify(vault, item.path),
                     title=_draft_title(text, item.path.stem),
                     detail=_preview(text.split("---")[-1]),
-                    when=human_datetime(datetime.fromtimestamp(item.path.stat().st_mtime)),
+                    when=when,
                 )
             )
     except VaultError:

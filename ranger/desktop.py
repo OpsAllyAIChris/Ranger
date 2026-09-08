@@ -128,6 +128,48 @@ def start_server(config_path: Path, log_path: Path) -> subprocess.Popen:
 #: this enum is that the code knows which one it got: the previous version
 #: called SetForegroundWindow, ignored its return value, and reported success
 #: unconditionally, so nobody could say what Windows was really doing.
+#: Showing a generated document where it lives, so the operator can drag it
+#: into an email. Three outcomes, and "unsupported" is one of them rather than
+#: a silent no-op: this is the half of "get the file out" that only exists on a
+#: desktop, and the download link is the half that always works.
+REVEALED = "revealed"
+REVEAL_UNSUPPORTED = "unsupported"
+REVEAL_FAILED = "failed"
+
+
+def reveal_file(path: Path) -> str:
+    """Open the file manager with this file selected. Never opens the file.
+
+    Deliberately not `os.startfile` and not `xdg-open` on the file itself:
+    opening a generated document means launching Word, which is the operator's
+    decision to make by double-clicking, not something a button in a browser
+    does to them. This shows them where it is.
+
+    `explorer /select` is documented to return a non-zero exit code on success,
+    so its return code is not checked -- checking it would report a failure
+    every time it worked.
+    """
+    target = Path(path)
+    if not target.is_file():
+        return REVEAL_FAILED
+    try:
+        if on_windows():
+            subprocess.Popen(["explorer", f"/select,{target}"])
+            return REVEALED
+        if sys.platform == "darwin":
+            subprocess.Popen(["open", "-R", str(target)])
+            return REVEALED
+        opener = shutil.which("xdg-open")
+        if not opener:
+            return REVEAL_UNSUPPORTED
+        # The folder, not the file: xdg-open on a .docx would launch whatever
+        # is registered for it, which is the thing this must not do.
+        subprocess.Popen([opener, str(target.parent)])
+        return REVEALED
+    except Exception:
+        return REVEAL_FAILED
+
+
 NOT_FOUND = "not_found"
 RESTORED = "restored"      # SW_RESTORE only. Un-minimised, not necessarily in front
 FOREGROUND = "foreground"  # SetForegroundWindow was granted. The good case

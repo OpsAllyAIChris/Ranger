@@ -43,6 +43,22 @@ CLEARED = "cleared"
 #: twenty drafts in full would spend the context the answer needs.
 SUMMARY_CHARS = 120
 
+#: What lives in Ranger's own folders. **A generated document is a draft that
+#: happens not to be text**, so it lists here with the markdown ones and clears
+#: with them. Listing only `.md` would have made documents invisible to the
+#: panel, to `clear_draft` and to the model, which is the write-only shape this
+#: module was written to fix.
+SUFFIXES = (".md", ".docx", ".xlsx", ".pdf")
+
+#: What to call each one when there is no front matter to read.
+DOCUMENT_NAMES = {
+    ".docx": "Word document",
+    ".xlsx": "Excel workbook",
+    ".pdf": "PDF",
+}
+
+_DATED = re.compile(r"^(?P<date>\d{4}-\d{2}-\d{2})")
+
 _FRONT_MATTER = re.compile(r"\A---\n(?P<body>.*?)\n---\n", re.DOTALL)
 _FIELD = re.compile(r"^(?P<key>[a-z_]+):[ \t]*(?P<value>.*?)[ \t]*$", re.MULTILINE)
 _HEADING = re.compile(r"^#[ \t]+(?P<title>.+?)[ \t]*$", re.MULTILINE)
@@ -63,6 +79,13 @@ class OwnFile:
     created: str
     summary: str
     size: int
+    #: "md" for a note, or the extension for a generated document. The panel
+    #: and the preview both key on this rather than re-deriving it.
+    kind: str = "md"
+
+    @property
+    def is_document(self) -> bool:
+        return self.kind != "md"
 
     def line(self) -> str:
         when = f"{self.created}  " if self.created else ""
@@ -85,7 +108,33 @@ def describe(path: Path, root: Path) -> OwnFile:
     Both drafts and notices are written with front matter and a `# Title`, so
     this covers everything Jarvis produces. A memory file has neither, and
     falls back to its first non-empty line, which is what a list needs anyway.
+
+    A generated document has none of that and is not text at all, so it is
+    described from its name and its size. **It is never opened as text**: a
+    .docx is a zip file, and decoding one as UTF-8 either raises or produces
+    nonsense that would end up in a listing the model reads.
     """
+    suffix = path.suffix.lower()
+    if suffix in DOCUMENT_NAMES:
+        try:
+            size = path.stat().st_size
+        except OSError:
+            size = 0
+        dated = _DATED.match(path.stem)
+        title = path.stem
+        if dated:
+            title = path.stem[len(dated.group("date")) + 1:].replace("-", " ").strip() or title
+        return OwnFile(
+            name=path.name,
+            path=path,
+            relative=path.relative_to(root).as_posix(),
+            title=title,
+            created=dated.group("date") if dated else "",
+            summary=f"{DOCUMENT_NAMES[suffix]}, {max(1, round(size / 1024))} KB",
+            size=size,
+            kind=suffix.lstrip("."),
+        )
+
     try:
         text = path.read_text(encoding="utf-8")
     except OSError as exc:
@@ -126,7 +175,7 @@ def listing(vault: Any, config: Any, folder: str, *, cleared: bool = False) -> l
     moving a file and deleting one, and it is the whole point.
     """
     root = folder_path(config, folder)
-    files = vault.list_markdown(root, recursive=True)
+    files = vault.list_files(root, SUFFIXES, recursive=True)
     described = [
         describe(item.path, config.vault.root)
         for item in files
@@ -190,6 +239,17 @@ def read(vault: Any, config: Any, folder: str, name: str) -> tuple[OwnFile | Non
         found, candidates = find(listing(vault, config, folder, cleared=True), name)
     if found is None:
         return None, "", candidates
+    if found.is_document:
+        # A generated document is read back the same way the panel previews it:
+        # from the file on disk, parsed with the stdlib. Not from whatever the
+        # model said it was writing, which is the same rule the preview lives
+        # by and for the same reason -- the artifact is the truth.
+        from .preview import preview
+
+        rendered = preview(found.path, root=config.vault.root)
+        if rendered.error:
+            return found, f"[{found.name} could not be read: {rendered.error}]", candidates
+        return found, f"[{rendered.caveat}]\n\n{rendered.as_text()}", candidates
     return found, vault.read_text(found.path), candidates
 
 

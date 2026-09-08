@@ -274,6 +274,35 @@ class DraftsConfig:
 
 
 @dataclass(frozen=True)
+class DocumentsConfig:
+    """Generated documents, and the preview that renders them back.
+
+    Nothing here changes what a document contains. These are about the machine
+    the window is running on: how much of a long document to draw, and how much
+    of a flourish to spend on a screen that is often being shared.
+    """
+
+    #: A4 or letter. Wrong page size is the kind of thing nobody notices until
+    #: a customer prints it.
+    page_size: str = "A4"
+    #: Draw the assembly animation when a document lands. Off is a supported
+    #: answer: the preview is the point and the particles are not.
+    assembly: bool = True
+    #: How many particles converge. They are drawn in the existing scene, so
+    #: this is the number to bring down first if the window costs frames while
+    #: a call is being screen shared.
+    assembly_particles: int = 220
+    #: How long the flourish lasts. It never gates the preview, which opens at
+    #: the same moment, so this is only how long the particles are in flight.
+    assembly_seconds: float = 1.1
+    #: How many paragraphs, tables and rows the preview draws before it says
+    #: how much more there is. A forty page document is real, and so is a
+    #: browser that has to stay responsive during a customer call.
+    preview_blocks: int = 400
+    preview_rows: int = 300
+
+
+@dataclass(frozen=True)
 class GpConfig:
     """The gross profit tracker. Entered by hand, computed in Python.
 
@@ -444,6 +473,7 @@ class Config:
     wake: WakeConfig
     recall: RecallConfig
     drafts: DraftsConfig
+    documents: DocumentsConfig
     gp: GpConfig
     voice: VoiceConfig
     stt: SttConfig
@@ -553,6 +583,10 @@ KNOWN_KEYS: dict[str, frozenset[str]] = {
         "activities", "detail_activities", "section_chars", "body_chars", "max_chars",
     }),
     "drafts": frozenset({"filename_format"}),
+    "documents": frozenset({
+        "page_size", "assembly", "assembly_particles", "assembly_seconds",
+        "preview_blocks", "preview_rows",
+    }),
     "gp": frozenset({"currency", "year_starts_month", "stale_after_days"}),
     "voice": frozenset({
         "push_to_talk", "wake_word", "trigger", "key", "input_device", "output_device",
@@ -919,6 +953,28 @@ def load_config(path: str | Path | None = None, *, load_env: bool = True) -> Con
         )
     )
 
+    documents_section = table.get("documents", {})
+    documents = DocumentsConfig(
+        page_size=str(documents_section.get("page_size", "A4")),
+        assembly=bool(documents_section.get("assembly", True)),
+        assembly_particles=int(documents_section.get("assembly_particles", 220)),
+        assembly_seconds=float(documents_section.get("assembly_seconds", 1.1)),
+        preview_blocks=int(documents_section.get("preview_blocks", 400)),
+        preview_rows=int(documents_section.get("preview_rows", 300)),
+    )
+    if documents.page_size.upper() not in ("A4", "LETTER"):
+        raise ConfigError(
+            f"documents.page_size is {documents.page_size!r}. It must be A4 or letter."
+        )
+    if not 0 <= documents.assembly_particles <= 2000:
+        raise ConfigError(
+            "documents.assembly_particles must be between 0 and 2000. This window "
+            "sits open during customer calls; an unbounded particle count is a "
+            "frame rate nobody chose."
+        )
+    if documents.preview_blocks < 1 or documents.preview_rows < 1:
+        raise ConfigError("documents.preview_blocks and preview_rows must be at least 1")
+
     gp_section = table.get("gp", {})
     gp = GpConfig(
         currency=str(gp_section.get("currency", "$")),
@@ -1048,6 +1104,7 @@ def load_config(path: str | Path | None = None, *, load_env: bool = True) -> Con
         wake=wake,
         recall=recall,
         drafts=drafts,
+        documents=documents,
         gp=gp,
         voice=voice,
         stt=stt,

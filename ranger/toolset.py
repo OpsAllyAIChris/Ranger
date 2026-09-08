@@ -24,6 +24,7 @@ from .config import Config
 from .drafts import DraftRejected, hold_draft
 from .memory import append_fact, find_fact, load_memory
 from .tools import Tool, ToolRegistry, ToolResult
+from .documents import KINDS as KINDS_FOR_SCHEMA
 from .ownfiles import FOLDERS
 from .untrusted import fence, scan
 from .vault import Vault, VaultError
@@ -890,6 +891,174 @@ def _clear_draft(config: Config, vault: Vault, audit: Any = None) -> Tool:
     )
 
 
+def _write_document(config: Config, vault: Vault, today: Callable[[], date]) -> Tool:
+    """Item D. A .docx, .xlsx or .pdf, into the drafts folder.
+
+    The same shape as `draft_and_hold` and deliberately so: it writes into
+    `Ranger/drafts/`, it holds, it never sends, and it is **not gated**. A
+    document that goes nowhere is not a consequential act, and the preview that
+    opens the moment it lands is the review.
+
+    The content model is a list of blocks rather than a string of markdown,
+    because the model choosing where a table starts is the model doing the job;
+    parsing markdown back into tables here would be a second, worse parser
+    guessing at it.
+    """
+
+    async def handler(payload: dict[str, Any]) -> ToolResult:
+        from . import documents as docs
+
+        kind = str(payload.get("format", "")).strip().lower().lstrip(".")
+        title = str(payload.get("title", "")).strip()
+        if not title:
+            return ToolResult(False, "A document needs a title; it becomes the file name.",
+                              "no title")
+        if kind not in docs.KINDS:
+            return ToolResult(
+                False,
+                f"{kind!r} is not a format Jarvis writes. Choose one of: "
+                + ", ".join(docs.KINDS),
+                "unknown format",
+            )
+
+        blocks: list[docs.Block] = []
+        for raw in payload.get("blocks", []) or []:
+            if not isinstance(raw, dict):
+                continue
+            shape = str(raw.get("kind", "text")).strip().lower()
+            body = str(raw.get("text", ""))
+            try:
+                if shape == "heading":
+                    blocks.append(docs.heading(body, int(raw.get("level", 1) or 1)))
+                elif shape == "bullet":
+                    blocks.append(docs.bullet(body))
+                elif shape == "table":
+                    blocks.append(
+                        docs.table(
+                            raw.get("header", []) or [],
+                            raw.get("rows", []) or [],
+                            name=str(raw.get("name", "") or body),
+                        )
+                    )
+                else:
+                    blocks.append(docs.text(body))
+            except docs.DocumentError as exc:
+                return ToolResult(False, str(exc), "refused")
+
+        if not blocks:
+            return ToolResult(
+                False,
+                "A document needs at least one block. Send blocks as a list of "
+                '{"kind": "heading"|"text"|"bullet"|"table", ...}.',
+                "empty document",
+            )
+
+        spec = docs.Spec(
+            title=title,
+            subtitle=str(payload.get("subtitle", "")).strip(),
+            blocks=tuple(blocks),
+            source=docs.provenance(str(payload.get("source", "")).strip() or "this conversation"),
+        )
+        try:
+            made = docs.generate(
+                vault,
+                config.vault.drafts,
+                spec,
+                kind,
+                today=today(),
+                page_size=config.documents.page_size,
+            )
+        except docs.MissingLibrary as exc:
+            return ToolResult(False, str(exc), f"{kind} writer not installed")
+        except docs.DocumentError as exc:
+            return ToolResult(False, str(exc), "refused")
+        except VaultError as exc:
+            return ToolResult(False, str(exc), "refused by the vault")
+
+        lines = [
+            f"Written to {made.relative} ({made.size // 1024 or 1} KB). It is held in the "
+            "drafts folder and has not been sent; Jarvis cannot send it. The preview "
+            "in the window is rendered from the file itself.",
+        ]
+        if made.formulas_as_text:
+            lines.append(
+                f"{made.formulas_as_text} cell(s) started with a character Excel reads "
+                "as a formula and were written as text. Tell the operator."
+            )
+        if made.findings:
+            lines.append(
+                "The content contains instruction-shaped language, which was written "
+                "verbatim and not acted on: " + "; ".join(made.findings[:3])
+            )
+        return ToolResult(ok=True, content="\n".join(lines), summary=made.relative)
+
+    return Tool(
+        name="write_document",
+        description=(
+            "Write a Word document, an Excel workbook or a PDF into the operator's "
+            "drafts folder and hold it there. Use this when they ask for a document, a "
+            "spreadsheet, a report or a one pager as a file rather than as text. It is "
+            "never sent and never overwrites: writing again makes a new file. Build it "
+            "from blocks -- headings, paragraphs, bullets and tables -- and put real "
+            "numbers in tables rather than describing them in a sentence. Never write a "
+            "figure you were not given: if a number is not in the conversation or in a "
+            "tool result, leave it out and say so."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "format": {
+                    "type": "string",
+                    "enum": list(KINDS_FOR_SCHEMA),
+                    "description": "docx for Word, xlsx for Excel, pdf for a PDF.",
+                },
+                "title": {
+                    "type": "string",
+                    "description": "The document's title. It becomes the file name.",
+                },
+                "subtitle": {"type": "string", "description": "One line under the title."},
+                "source": {
+                    "type": "string",
+                    "description": (
+                        "Where the content came from, printed at the foot of the "
+                        "document: 'the Illes account note', 'the GP ledger'."
+                    ),
+                },
+                "blocks": {
+                    "type": "array",
+                    "description": "The document, in order.",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "kind": {
+                                "type": "string",
+                                "enum": ["heading", "text", "bullet", "table"],
+                            },
+                            "text": {"type": "string"},
+                            "level": {"type": "integer", "description": "Heading depth, 1 to 4."},
+                            "header": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": "Table column names.",
+                            },
+                            "rows": {
+                                "type": "array",
+                                "items": {"type": "array", "items": {"type": "string"}},
+                                "description": "Table rows. In an .xlsx each table is a sheet.",
+                            },
+                            "name": {"type": "string", "description": "Sheet name for a table."},
+                        },
+                        "required": ["kind"],
+                    },
+                },
+            },
+            "required": ["format", "title", "blocks"],
+        },
+        handler=handler,
+        writes=True,
+    )
+
+
 def _gross_profit(config: Config, vault: Vault, today: Callable[[], date]) -> Tool:
     """Read the GP figures. **Read.** Every number here was computed in Python.
 
@@ -1010,5 +1179,6 @@ def build_registry(
             _read_own_file(config, vault),
             _clear_draft(config, vault, audit),
             _gross_profit(config, vault, today),
+            _write_document(config, vault, today),
         ]
     )

@@ -291,6 +291,35 @@ max_chars = 4000
 # Tier 2 "draft and hold". Ranger writes here and never sends.
 filename_format = "{date}-{slug}.md"
 
+[documents]
+# Item D. Generated .docx, .xlsx and .pdf land in Ranger/drafts/ beside the
+# markdown drafts: same folder, same listing, same clearing. A generated
+# document is a draft that happens not to be text. Nothing is ever overwritten,
+# so regenerating produces a new file beside the old one.
+#
+# Writing them needs three libraries that are not core dependencies:
+#     pip install python-docx openpyxl reportlab
+# 'ranger doctor' says which of the three are present.
+#
+# A4 or letter. Nobody notices this until a customer prints it.
+page_size = "A4"
+# The assembly flourish: particles in the starfield converging as a document
+# lands. It never gates the preview, which opens at the same moment, and it
+# plays once per document. Set it to false and nothing else changes.
+assembly = true
+# How many particles. This is the first number to bring down if the window
+# costs frames while a call is being screen shared: watch the frame rate with
+# ?debug in the URL, and watch whether Teams starts dropping frames when a
+# document lands mid-share.
+assembly_particles = 220
+# Seconds the particles are in flight. The preview is already readable.
+assembly_seconds = 1.1
+# How much of a long document the preview draws before it says how much more
+# there is. A forty page document scrolls; it does not all get built into the
+# page at once, because this window has to stay responsive during a call.
+preview_blocks = 400
+preview_rows = 300
+
 [gp]
 # The gross profit tracker: the first dashlet. Figures are entered by hand, in
 # the panel or with "ranger gp add", and land in Ranger/gp/ as create-only

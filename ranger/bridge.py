@@ -44,6 +44,13 @@ CLEAR_DRAFT = "clear_draft"
 #: The page became visible or hidden. The window will not open behind a
 #: minimised window, because the only sign the microphone is live is on it.
 VISIBLE = "visible"
+#: Open the preview for a document already in the drafts folder. Sent when the
+#: operator clicks one in the panel, which is a reopen and therefore never
+#: replays the assembly animation.
+PREVIEW = "preview"
+#: Show a generated document in the operator's file manager. The other half of
+#: getting the file out; the download link is the half that always works.
+REVEAL = "reveal"
 #: A gross profit figure typed into the panel. The operator's own keystrokes,
 #: not an agent action: the model is not in this path and must not be. See
 #: dashlets.py for why the whole command centre works this way.
@@ -177,6 +184,10 @@ class Session:
             return self._visibility(message)
         if kind == GP_ENTRY:
             return self._gp_entry(message)
+        if kind == PREVIEW:
+            return self._preview(message)
+        if kind == REVEAL:
+            return self._reveal(message)
         if kind == STOP:
             if not self.stop():
                 self.emit("error", message="nothing was running")
@@ -729,6 +740,116 @@ class Session:
         )
         self.push_panel()
 
+    # -- documents -----------------------------------------------------
+
+    def _find_document(self, name: str):
+        """One generated document in the drafts folder, by name or by path."""
+        from .ownfiles import find, listing
+
+        wanted = str(name or "").strip()
+        if not wanted:
+            return None
+        files = [f for f in listing(self.agent.vault, self.agent.config, "drafts")
+                 if f.is_document]
+        found, _ = find(files, wanted)
+        if found is None:
+            cleared = [f for f in listing(self.agent.vault, self.agent.config, "drafts",
+                                          cleared=True) if f.is_document]
+            found, _ = find(cleared, wanted)
+        return found
+
+    def _send_document(self, path, *, assembly: bool) -> bool:
+        """The preview, built from the file on disk. Nothing else is previewed.
+
+        Returns whether it went. **The event is what starts the assembly
+        animation in the browser, so it is only ever emitted for a file that is
+        on disk right now.** Particles forming over a generation that failed,
+        or that is still running, would be the empty ring over a live
+        microphone again: an interface saying something happened because it was
+        told to, rather than because it did.
+        """
+        from .preview import preview
+
+        try:
+            rendered = preview(
+                path,
+                root=self.agent.config.vault.root,
+                max_blocks=self.agent.config.documents.preview_blocks,
+                max_rows=self.agent.config.documents.preview_rows,
+            )
+        except Exception as exc:
+            self.emit("error", message=f"could not preview {path.name}: {exc}")
+            return False
+
+        from urllib.parse import quote
+
+        from .server import FILE_PATH
+
+        url = FILE_PATH + quote(rendered.relative)
+        payload = rendered.as_dict()
+        # `kind` on the wire is the message type -- every frame the browser
+        # receives is keyed on it -- so the document's own kind travels as
+        # `format`. Sending both under one name made the preview arrive
+        # claiming to be a "document" file, which is nothing.
+        payload["format"] = payload.pop("kind")
+        self.emit(
+            "document",
+            assembly=bool(assembly) and self.agent.config.documents.assembly,
+            particles=self.agent.config.documents.assembly_particles,
+            seconds=self.agent.config.documents.assembly_seconds,
+            url=url,
+            download=url + "?download=1",
+            **payload,
+        )
+        return True
+
+    def _document_landed(self, event: Any) -> None:
+        """A write_document tool call that succeeded. Open the preview.
+
+        The tool reports the vault-relative path it wrote, and this resolves
+        that path and checks the file is there before saying anything to the
+        browser. A tool that failed reports `ok=False` and nothing happens
+        here, which is the whole of "a failure renders as a failure".
+        """
+        if getattr(event, "name", "") != "write_document" or not getattr(event, "ok", False):
+            return
+        relative = str(getattr(event, "summary", "") or "").strip()
+        if not relative:
+            return
+        try:
+            target = self.agent.vault.resolve_read(self.agent.config.vault.root / relative)
+        except Exception:
+            return
+        if not target.is_file():
+            return
+        self._send_document(target, assembly=True)
+        self.push_panel()
+
+    def _preview(self, message: dict[str, Any]) -> None:
+        """Reopen a preview from the panel. Never replays the animation."""
+        found = self._find_document(str(message.get("name", "")))
+        if found is None:
+            self.emit("error", message="no generated document by that name")
+            return
+        self._send_document(found.path, assembly=False)
+
+    def _reveal(self, message: dict[str, Any]) -> None:
+        """Show the file in the operator's file manager. Never opens it."""
+        from .desktop import REVEAL_FAILED, REVEAL_UNSUPPORTED, reveal_file
+
+        found = self._find_document(str(message.get("name", "")))
+        if found is None:
+            self.emit("error", message="no generated document by that name")
+            return
+        outcome = reveal_file(found.path)
+        if outcome == REVEAL_UNSUPPORTED:
+            self.emit("notice", level="warn",
+                      message="no file manager to open here. Use the download button.")
+        elif outcome == REVEAL_FAILED:
+            self.emit("notice", level="warn", message=f"could not show {found.name}")
+        else:
+            self.emit("notice", level="info", message=f"showing {found.name}")
+
     def _dismiss(self, message: dict[str, Any]) -> None:
         from .panel import dismiss
 
@@ -754,6 +875,7 @@ class Session:
             async for event in self.agent.turn(text):
                 if isinstance(event, ToolFinished):
                     self._remember_tool(event)
+                    self._document_landed(event)
                 self.send(event.as_dict())
                 if speaking is not None and isinstance(event, TextDelta):
                     for sentence in speaking.feed(event.text):

@@ -37,6 +37,7 @@ export function createShell(orb) {
     mic: $('mic'),
     micHint: $('mic-hint'),
     liveEdge: $('live-edge'),
+    preview: $('preview'),
     handsFree: $('handsfree'),
     handsFreeLabel: $('handsfree-label'),
     banner: $('live-banner'),
@@ -116,6 +117,18 @@ export function createShell(orb) {
       button.textContent = '×';
       button.onclick = () => send({ type: 'dismiss', id: item.id });
       node.append(button);
+    }
+    // A generated document opens its preview. Reopening never replays the
+    // assembly animation: it is played once per document, by the server not
+    // marking a reopen for it and by seenDocuments here.
+    if (item.kind && item.kind !== 'md') {
+      node.classList.add('document');
+      const open = document.createElement('button');
+      open.className = 'preview-open clickable';
+      open.textContent = 'preview';
+      open.title = 'render this file. The preview is built from the file itself';
+      open.onclick = () => send({ type: 'preview', name: item.id });
+      node.append(open);
     }
     if (clearable && item.id) {
       // The same tool the model calls. The browser decides nothing here: it
@@ -334,6 +347,218 @@ export function createShell(orb) {
     );
   }
 
+  // ------------------------------------------------------------ the preview
+  //
+  // Where it lives, and why here: a sheet on the left, over the starfield,
+  // never over the orb. The orb is the one thing that says what state Jarvis
+  // is in, so it steps aside (orb.setOffset) rather than being covered. The
+  // activity panel keeps its place on the right; a document does not belong in
+  // a 260px column.
+  //
+  // Everything drawn here came out of the file on disk. The server parsed the
+  // .docx and .xlsx with the standard library and sent the parts; the PDF is
+  // the browser's own viewer pointed at the real bytes. Nothing here renders
+  // what the model said it was going to write.
+
+  const seenDocuments = new Set();
+  const reducedMotion =
+    window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  let assembling = null;
+  let previewOpen = null;
+
+  function endAssembly() {
+    if (assembling) {
+      assembling.skip();
+      assembling = null;
+    }
+  }
+
+  function closePreview() {
+    endAssembly();
+    previewOpen = null;
+    el.preview.hidden = true;
+    el.preview.replaceChildren();
+    document.body.classList.remove('previewing');
+    if (orb && orb.setOffset) orb.setOffset(0);
+  }
+
+  // `event.kind` is the frame type ('document') for every message on this
+  // socket, so a document's own format arrives as `event.format`.
+  function previewChrome(event) {
+    const head = document.createElement('div');
+    head.className = 'preview-head';
+
+    const name = document.createElement('div');
+    name.className = 'preview-name';
+    const badge = document.createElement('span');
+    badge.className = 'preview-badge ' + event.format;
+    badge.textContent = event.format;
+    const label = document.createElement('span');
+    label.textContent = event.name;
+    name.append(badge, label);
+
+    const actions = document.createElement('div');
+    actions.className = 'preview-actions';
+
+    // Both ways out of the window, because they are different acts. Reveal
+    // shows the operator where the file is so they can drag it into an email;
+    // download hands them a copy through the browser. Neither opens Word.
+    const reveal = document.createElement('button');
+    reveal.className = 'ghost clickable';
+    reveal.textContent = 'show in folder';
+    reveal.title = 'open the folder with this file selected. Does not open Word';
+    reveal.onclick = () => send({ type: 'reveal', name: event.relative });
+
+    const download = document.createElement('a');
+    download.className = 'ghost clickable';
+    download.textContent = 'download';
+    download.href = event.download;
+    download.setAttribute('download', event.name);
+
+    const close = document.createElement('button');
+    close.className = 'ghost clickable';
+    close.textContent = 'close';
+    close.onclick = closePreview;
+
+    actions.append(reveal, download, close);
+    head.append(name, actions);
+
+    // The caveat is chrome, not a footnote. A .docx preview that did not say
+    // it was an approximation would be a claim about Word that this cannot
+    // make.
+    const caveat = document.createElement('div');
+    caveat.className = 'preview-caveat';
+    caveat.textContent = event.caveat;
+
+    return [head, caveat];
+  }
+
+  function previewBody(event) {
+    const body = document.createElement('div');
+    body.className = 'preview-body ' + event.format;
+
+    if (event.error) {
+      const bad = document.createElement('div');
+      bad.className = 'preview-error';
+      bad.textContent = 'could not read this file: ' + event.error;
+      body.append(bad);
+      return body;
+    }
+
+    if (event.format === 'pdf') {
+      // The real PDF, in the browser's own viewer. Exact, and it scrolls every
+      // page: a forty page document is forty pages here.
+      const frame = document.createElement('iframe');
+      frame.className = 'preview-pdf';
+      frame.src = event.url;
+      frame.title = event.name;
+      body.append(frame);
+      return body;
+    }
+
+    if (event.format === 'xlsx') {
+      for (const sheet of event.sheets || []) {
+        const block = document.createElement('div');
+        block.className = 'preview-sheet';
+        const title = document.createElement('div');
+        title.className = 'preview-sheet-name';
+        title.textContent = sheet.name;
+        block.append(title);
+        if (sheet.formulas) {
+          const note = document.createElement('div');
+          note.className = 'preview-note';
+          note.textContent =
+            sheet.formulas + ' cell(s) hold a formula. Formulas are not shown here.';
+          block.append(note);
+        }
+        block.append(grid(sheet.rows, true));
+        if (sheet.truncated) block.append(more(sheet.rows.length, sheet.total_rows, 'rows'));
+        body.append(block);
+      }
+      return body;
+    }
+
+    for (const item of event.blocks || []) {
+      if (item.kind === 'table') {
+        body.append(grid(item.rows || [], true));
+      } else if (item.kind === 'heading') {
+        const node = document.createElement('div');
+        node.className = 'preview-h preview-h' + Math.min(4, item.level || 1);
+        node.textContent = item.text;
+        body.append(node);
+      } else if (item.kind === 'bullet') {
+        const node = document.createElement('div');
+        node.className = 'preview-bullet';
+        node.textContent = item.text;
+        body.append(node);
+      } else {
+        const node = document.createElement('div');
+        node.className = 'preview-p';
+        node.textContent = item.text;
+        body.append(node);
+      }
+    }
+    if (event.truncated) {
+      body.append(more((event.blocks || []).length, event.total_blocks, 'blocks'));
+    }
+    return body;
+  }
+
+  function grid(rows, header) {
+    const wrap = document.createElement('div');
+    wrap.className = 'preview-grid-wrap';
+    const table = document.createElement('table');
+    table.className = 'preview-grid';
+    rows.forEach((row, index) => {
+      const tr = document.createElement('tr');
+      for (const cell of row) {
+        const td = document.createElement(header && index === 0 ? 'th' : 'td');
+        td.textContent = cell;
+        tr.append(td);
+      }
+      table.append(tr);
+    });
+    wrap.append(table);
+    return wrap;
+  }
+
+  function more(shown, total, what) {
+    const node = document.createElement('div');
+    node.className = 'preview-note';
+    node.textContent =
+      'showing ' + shown + ' of ' + total + ' ' + what +
+      '. Open the file itself for the rest.';
+    return node;
+  }
+
+  function openPreview(event) {
+    // The content is drawn first and the flourish plays over it. The animation
+    // never gates the document: if the particles are switched off, or the
+    // machine prefers reduced motion, this is exactly the same screen.
+    endAssembly();
+    previewOpen = event.relative;
+    el.preview.replaceChildren(...previewChrome(event), previewBody(event));
+    el.preview.hidden = false;
+    document.body.classList.add('previewing');
+    if (orb && orb.setOffset) orb.setOffset(4.2);
+
+    const first = !seenDocuments.has(event.relative);
+    seenDocuments.add(event.relative);
+    if (event.assembly && first && !reducedMotion && orb && orb.assemble) {
+      const rect = el.preview.getBoundingClientRect();
+      assembling = orb.assemble({
+        count: event.particles,
+        seconds: event.seconds,
+        rect: { x: rect.left, y: rect.top, width: rect.width, height: rect.height },
+      });
+    }
+  }
+
+  // Click to skip, anywhere, on the first event of any kind. The particles are
+  // a flourish and a flourish that has to be waited out is a tax.
+  window.addEventListener('pointerdown', endAssembly, { capture: true });
+  window.addEventListener('wheel', endAssembly, { capture: true, passive: true });
+
   // ------------------------------------------------------- the confirmation
 
   function openCard(event) {
@@ -409,7 +634,13 @@ export function createShell(orb) {
       toast('hands free off');
       return;
     }
-    if (!openToken) return;
+    if (!openToken) {
+      // Third in the order, so escape never takes the preview instead of the
+      // microphone or a card that is waiting for an answer.
+      if (e.key === 'Escape' && previewOpen) { e.preventDefault(); closePreview(); }
+      if (e.key === 'Escape') endAssembly();
+      return;
+    }
     if (e.key === 'Escape') { e.preventDefault(); answer(false); }
     // Enter is deliberately not bound. Approving is a decision, not a reflex.
   });
@@ -728,6 +959,11 @@ export function createShell(orb) {
         break;
       case 'panel':
         drawPanel(event);
+        break;
+      case 'document':
+        // Sent only for a file that is on disk. The animation starts here and
+        // nowhere else, so it cannot begin over a generation that failed.
+        openPreview(event);
         break;
       case 'confirm_open':
         openCard(event);

@@ -12,6 +12,19 @@ dependencies = [
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.24",
+    # Reads PDFs. Test-only, and deliberately not the library that writes them:
+    # reportlab reading back what reportlab wrote proves nothing about the file.
+    "pypdf>=4.0",
+]
+# Item D. Generating .docx, .xlsx and .pdf. An extra rather than a dependency,
+# for the same reason hands free is one: nothing in the assistant should stop
+# working because a document writer would not install. `ranger doctor` says
+# which of the three are present, and write_document refuses a format it cannot
+# write rather than producing a file that is not one.
+documents = [
+    "python-docx>=1.1",
+    "openpyxl>=3.1",
+    "reportlab>=4.0",
 ]
 # Hands free. An extra rather than a dependency: onnxruntime wheels for new
 # Python versions arrive late, and nothing else in Ranger may stop working

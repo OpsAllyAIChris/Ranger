@@ -1296,6 +1296,48 @@ enter one it inferred from a conversation.
 Full write-up, including the entry format and the year and month boundaries:
 `docs/dashlets.md`.
 
+## Items D and D2: documents, and previewing the artifact
+
+`.docx`, `.xlsx` and `.pdf` are generated from one content model into
+`Ranger/drafts/`. **A generated document is a draft that happens not to be
+text**: same folder, same listing, same clearing, never sent, never
+overwritten. Ungated, like `draft_and_hold`, because nothing leaves the
+machine and the preview is the review.
+
+Two rules carry the weight.
+
+**Preview the artifact, not the intention.** `preview.py` opens the file that
+was written and reads what is in it. Nothing previews the content the model
+produced before it became a document, because a preview built upstream of
+generation agrees with the export right up until it does not, and that
+disagreement surfaces in front of a customer. A PDF is rendered by the browser
+from the real bytes and is exact; a `.docx` preview is an approximation and
+says so on screen at all times; an `.xlsx` preview shows values and says
+formulas are not shown.
+
+**You cannot validate with the library that wrote the file.** The consumers are
+Word and Excel and neither runs here. The tests unzip the OOXML and assert on
+the parts, `pypdf` reads what reportlab wrote, and `preview.py` is stdlib only
+so that its agreement with a file is evidence about the file. A test walks its
+import graph to keep it that way. The operator opening a document in the real
+application is the only green light, once per template.
+
+Three holes in this path are real and each has a test: Excel evaluating a
+formula that came out of a customer email (every cell is written as text, and
+the count is reported), reportlab loading a file off disk because a paragraph
+contained `<img>` (everything is escaped, and a test demonstrates the hazard),
+and Word field codes in pasted text (asserted absent).
+
+The assembly animation starts from the `document` event and nothing else, and
+that event is only sent for a file that is on disk: particles over a failed
+generation would be the empty ring over a live microphone again. It never gates
+the preview, plays once per document, respects `prefers-reduced-motion`, and is
+drawn in the nebula's blues and greens — never orange, which means the
+microphone is live and keeps one meaning.
+
+Full write-up, including where the preview sits and why the orb steps aside
+rather than being covered: `docs/documents.md`.
+
 ## Closing out a session
 
 Every session ends with a debrief written to `docs/sessions/<date>.md`, and it

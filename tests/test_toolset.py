@@ -53,6 +53,7 @@ def test_the_registry_holds_exactly_the_intended_tools(registry):
         "read_own_file",
         "remember",
         "what_went_quiet",
+        "write_document",
     ]
 
 
@@ -75,6 +76,10 @@ def test_only_forget_needs_the_confirmation_gate(registry):
     reflex within a week, and a card clicked without reading manufactures a
     record of review that did not happen. What makes it safe instead is that it
     can only add, only below the marker, and only to a note that already exists.
+
+    write_document writes and does not gate, consistent with draft_and_hold:
+    the file lands in the drafts folder, nothing sends it, and the preview that
+    opens from the file on disk is the review.
     """
     assert [t.name for t in registry if t.confirm] == ["forget"]
     assert sorted(t.name for t in registry if t.writes) == [
@@ -83,6 +88,7 @@ def test_only_forget_needs_the_confirmation_gate(registry):
         "file_to_account",
         "forget",
         "remember",
+        "write_document",
     ]
 
 

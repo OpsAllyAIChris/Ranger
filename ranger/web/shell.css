@@ -300,6 +300,137 @@ html, body {
 .tool-mark { font-size: 11px; color: var(--accent); }
 .tool-mark.bad { color: rgba(255, 255, 255, 0.45); }
 
+/* ----------------------------------------------------- the document preview */
+/*
+ * A sheet on the left, over the starfield. It deliberately does not cover the
+ * orb, which shifts right in the scene while this is open, and it does not
+ * cover the activity panel. A document does not fit in a 260px column and the
+ * orb is the only thing on screen that says what state Jarvis is in.
+ */
+#preview {
+  position: absolute;
+  left: 0;
+  top: var(--header);
+  bottom: 0;
+  width: min(46vw, 720px);
+  display: flex;
+  flex-direction: column;
+  background: rgba(14, 15, 19, 0.86);
+  backdrop-filter: blur(var(--glass-blur));
+  -webkit-backdrop-filter: blur(var(--glass-blur));
+  border-right: 1px solid var(--hairline);
+  pointer-events: auto;
+  animation: preview-in 320ms var(--ease) both;
+}
+@keyframes preview-in {
+  from { opacity: 0; transform: translateX(-18px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+/* The response cards sit on the left too, so they move out of the way. */
+body.previewing #cards { transform: translateX(calc(min(46vw, 720px) - 26px + 18px)); }
+#cards { transition: transform 320ms var(--ease); }
+
+.preview-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 14px 8px;
+  border-bottom: 1px solid var(--hairline);
+}
+.preview-name { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+.preview-badge {
+  font-family: var(--mono);
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  padding: 2px 5px;
+  border-radius: 5px;
+  border: 1px solid var(--hairline);
+  color: var(--ink-dim);
+}
+.preview-badge.pdf { color: #7FB3F5; }
+.preview-badge.docx { color: #8FC6F0; }
+.preview-badge.xlsx { color: var(--accent); }
+.preview-actions { display: flex; gap: 6px; }
+.preview-actions .ghost {
+  height: 24px;
+  padding: 0 9px;
+  font-size: 11px;
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+}
+/* The honesty line. Always visible, never a tooltip: a .docx preview that did
+   not say it was an approximation would be a claim about Word. */
+.preview-caveat {
+  padding: 7px 14px;
+  font-size: 10.5px;
+  line-height: 1.4;
+  color: var(--ink-faint);
+  border-bottom: 1px solid var(--hairline);
+  background: rgba(255, 255, 255, 0.02);
+}
+.preview-body {
+  flex: 1 1 auto;
+  overflow: auto;
+  padding: 16px 18px 40px;
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--ink);
+}
+.preview-body.pdf { padding: 0; overflow: hidden; }
+.preview-pdf { width: 100%; height: 100%; border: 0; background: #1b1c22; }
+.preview-h { font-weight: 600; margin: 14px 0 4px; }
+.preview-h1 { font-size: 17px; }
+.preview-h2 { font-size: 15px; }
+.preview-h3, .preview-h4 { font-size: 13px; color: var(--ink-dim); }
+.preview-p { margin: 0 0 8px; }
+.preview-bullet { margin: 0 0 5px 14px; position: relative; }
+.preview-bullet::before {
+  content: '';
+  position: absolute;
+  left: -11px; top: 8px;
+  width: 4px; height: 4px;
+  border-radius: 50%;
+  background: var(--ink-faint);
+}
+.preview-sheet + .preview-sheet { margin-top: 18px; }
+.preview-sheet-name {
+  font-family: var(--mono);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--ink-faint);
+  margin-bottom: 5px;
+}
+.preview-grid-wrap { overflow-x: auto; margin: 6px 0 10px; }
+.preview-grid { border-collapse: collapse; font-size: 11.5px; }
+.preview-grid th, .preview-grid td {
+  border: 1px solid var(--hairline);
+  padding: 4px 8px;
+  text-align: left;
+  white-space: nowrap;
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.preview-grid th { background: rgba(255, 255, 255, 0.04); font-weight: 600; }
+.preview-note { font-size: 10.5px; color: var(--ink-faint); margin: 6px 0; font-style: italic; }
+.preview-error { font-size: 12px; color: #E8B84B; }
+
+.entry .preview-open {
+  margin-top: 7px;
+  padding: 3px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--hairline);
+  background: transparent;
+  color: var(--ink-dim);
+  font-size: 10.5px;
+  cursor: pointer;
+}
+.entry .preview-open:hover { background: rgba(255, 255, 255, 0.06); color: var(--ink); }
+
 /* ------------------------------------------------- floating response cards */
 
 #cards {

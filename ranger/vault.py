@@ -140,6 +140,53 @@ class Vault:
         target.write_text(text, encoding="utf-8")
         return target
 
+    def write_new_bytes(self, path: str | Path, payload: bytes) -> Path:
+        """Create a file that is not text. Refuses if something is already there.
+
+        Generated documents are binary, and text mode would mangle them on
+        Windows exactly as it mangled the account notes: `\n` inside a zip
+        container is data, not a line ending. Same wall, same refusal to
+        overwrite, no encoding anywhere near it.
+        """
+        target = self.resolve_write(path)
+        if self.is_append_only(target):
+            raise VaultWriteDenied(f"{target} is in the append-only log folder; use append()")
+        if target.exists():
+            raise VaultWriteDenied(f"{target} already exists; Jarvis does not overwrite files")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(payload)
+        return target
+
+    def list_files(
+        self, folder: str | Path, suffixes: tuple[str, ...], *, recursive: bool = True
+    ) -> list[VaultFile]:
+        """Every file in a folder with one of these suffixes.
+
+        `list_markdown` is this with one suffix, and stayed as it was because
+        every caller of it means markdown. Drafts are the folder that now holds
+        both: a generated document is a draft that happens not to be text, so
+        the listing has to see it or the panel and the clearing would quietly
+        stop at the ones that are.
+        """
+        root = self.resolve_read(folder)
+        if not root.is_dir():
+            return []
+        wanted = tuple(s.lower() for s in suffixes)
+        files: list[VaultFile] = []
+        for path in sorted(root.glob("**/*" if recursive else "*")):
+            if not path.is_file() or path.suffix.lower() not in wanted:
+                continue
+            stat = path.stat()
+            files.append(
+                VaultFile(
+                    path=path,
+                    relative=path.relative_to(self.config.root).as_posix(),
+                    modified=datetime.fromtimestamp(stat.st_mtime),
+                    size=stat.st_size,
+                )
+            )
+        return files
+
     def overwrite(self, path: str | Path, text: str, *, allow_overwrite: bool = False) -> Path:
         """Replace one of Ranger's own notes. Never used on operator notes."""
         target = self.resolve_write(path)

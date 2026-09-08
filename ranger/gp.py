@@ -418,3 +418,87 @@ def reading(config: Any, vault: Any, *, today: date, now: datetime | None = None
         empty="",
         extra={"period": total.month, "currency": symbol},
     )
+
+
+# -- out of the vault -------------------------------------------------------
+
+
+def export_spec(config: Any, vault: Any, today: date):
+    """The ledger as a document spec. Values only, no formulas.
+
+    The first thing item D gets used for, and deliberately the simplest: a
+    workbook of numbers Python has already added up. **No formulas**, so the
+    preview's "formulas are not shown" caveat cannot bite on the first document
+    the operator opens -- what the preview shows is the whole of what is in the
+    file.
+
+    Superseded entries are in their own sheet rather than dropped. A figure
+    that was corrected is part of the record, and a spreadsheet that quietly
+    omitted it would be the one place in this repository where something got
+    thrown away.
+    """
+    from . import documents as docs
+
+    ledger, total = summary(config, vault, today)
+    symbol = config.gp.currency
+    current = ledger.current()
+
+    months = docs.table(
+        ["Period", "Gross profit", "Recorded"],
+        [
+            [period, money(entry.amount, symbol),
+             entry.recorded.strftime("%Y-%m-%d %H:%M")]
+            for period, entry in sorted(current.items())
+        ],
+        name="By month",
+    )
+
+    figures = [["Year", total.year],
+               ["Year to date",
+                money(total.ytd, symbol) if total.ytd is not None else "nothing entered"],
+               ["Months entered", str(total.months_counted)],
+               ["This month", total.month],
+               ["Month to date",
+                money(total.mtd, symbol) if total.mtd is not None else "not entered"]]
+    if total.last_year_total is not None:
+        figures.append([f"{total.last_year} total", money(total.last_year_total, symbol)])
+    if total.as_of:
+        figures.append(["Newest entry", total.as_of.strftime("%Y-%m-%d %H:%M")])
+    summary_table = docs.table([], figures, name="Summary")
+
+    blocks = [summary_table, months]
+
+    superseded = [e for e in ledger.entries if e.path not in {c.path for c in current.values()}]
+    if superseded:
+        blocks.append(
+            docs.table(
+                ["Period", "Gross profit", "Recorded"],
+                [[e.period, money(e.amount, symbol), e.recorded.strftime("%Y-%m-%d %H:%M")]
+                 for e in sorted(superseded, key=lambda e: (e.period, order(e)))],
+                name="Superseded",
+            )
+        )
+
+    return docs.Spec(
+        title=f"Gross profit {total.year}",
+        subtitle=(
+            "Every figure entered by hand and added up in Python. "
+            "Values only: nothing in this file is a formula."
+        ),
+        blocks=tuple(blocks),
+        source=docs.provenance("Ranger/gp"),
+    )
+
+
+def export(config: Any, vault: Any, today: date, kind: str = "xlsx"):
+    """Write the ledger into the drafts folder, through the document seam."""
+    from . import documents as docs
+
+    return docs.generate(
+        vault,
+        config.vault.drafts,
+        export_spec(config, vault, today),
+        kind,
+        today=today,
+        page_size=config.documents.page_size,
+    )
