@@ -105,15 +105,25 @@ def _markdown(source: str) -> dict:
 
 
 SETUP = """\
-# Step 1 of 7. Environment. About ten minutes, and it prints a lot.
+# Step 1 of 7. Environment. Fifteen minutes, and it prints a lot.
 #
-# Upstream's notebook installs with !pip, and a shell magic's exit code does
-# not stop a cell. So a failed install prints an error into the scrollback and
-# the notebook carries on as though it worked — which is how step 6 came to
-# die on ModuleNotFoundError: openwakeword, three cells and forty minutes
-# later. Every install here runs through subprocess and is checked, and the
-# cell ends by loading openwakeword in a fresh interpreter, which is how the
-# trainer will find out.
+# This is not upstream's setup cell. Upstream's cannot run on today's Colab,
+# and the reason is one thing rather than eight: Colab now runs Python 3.13,
+# and three libraries in this chain publish wheels that stop at cp312 with no
+# source distribution to build from. speexdsp-ns, piper-phonemize and
+# tflite-runtime are all uninstallable there, and no pin fixes a wheel that
+# does not exist.
+#
+# So training runs in its own Python 3.11, built by uv, and the notebook's own
+# kernel is only used to orchestrate and to download data. Every one of those
+# libraries installs cleanly on 3.11.
+#
+# The second thing upstream gets wrong is which sample generator to clone. Its
+# notebook clones rhasspy/piper-sample-generator, which has since been
+# restructured into a package and no longer contains generate_samples.py at
+# all. openWakeWord's own config file names dscripka's fork instead, and that
+# one still has the module train.py imports. The notebook and the config
+# disagree; the config is right.
 
 import os
 import subprocess
@@ -121,124 +131,122 @@ import sys
 import urllib.request
 
 REPO = "./openwakeword"
+PIPER = "./piper-sample-generator"
+PY = os.path.abspath("./py311/bin/python")
 
 
 def run(*command, must_work=True):
-    print("$", " ".join(command))
-    result = subprocess.run(command, capture_output=True, text=True)
+    print("$", " ".join(str(part) for part in command))
+    result = subprocess.run([str(part) for part in command], capture_output=True, text=True)
     if result.returncode != 0:
         print(result.stdout[-2000:])
         print(result.stderr[-2000:])
         if must_work:
-            raise RuntimeError(f"failed ({result.returncode}): {' '.join(command)}")
-        print(f"!! FAILED, continuing: {' '.join(command)}")
+            raise RuntimeError(f"failed ({result.returncode}): {' '.join(str(c) for c in command)}")
+        print(f"!! FAILED, continuing: {' '.join(str(c) for c in command)}")
     return result.returncode == 0
 
 
-def pip(*packages, must_work=True):
-    return run(sys.executable, "-m", "pip", "install", *packages, must_work=must_work)
+def fetch(url, path, at_least=1000):
+    \"\"\"Download, and refuse to accept a 404 written to disk as a file.
+
+    wget and urlretrieve both save whatever came back under the name they were
+    given. A 404 page, or a zero byte file, looks exactly like a download that
+    worked, and the failure surfaces hours later as an empty directory.
+    \"\"\"
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    urllib.request.urlretrieve(url, path)
+    size = os.path.getsize(path)
+    print(f"{path}: {size / 1e6:.1f} MB")
+    if size < at_least:
+        os.remove(path)
+        raise RuntimeError(
+            f"{url} returned {size} bytes, which is an error page and not a file. "
+            "Nothing downstream would have noticed."
+        )
+    return path
 
 
-# -- the pieces training cannot run without --------------------------------
+# -- a Python the pins can actually be installed on ------------------------
 
-if not os.path.exists("piper-sample-generator"):
-    run("git", "clone", "https://github.com/rhasspy/piper-sample-generator")
-urllib.request.urlretrieve(
-    "https://github.com/rhasspy/piper-sample-generator/releases/download/v2.0.0/en_US-libritts_r-medium.pt",
-    "piper-sample-generator/models/en_US-libritts_r-medium.pt",
-)
-pip("piper-phonemize")
-pip("webrtcvad")
+run(sys.executable, "-m", "pip", "install", "-q", "uv")
+run(sys.executable, "-m", "uv", "venv", "--python", "3.11", "py311")
+print("training interpreter:", subprocess.run([PY, "-V"], capture_output=True, text=True).stdout.strip())
 
-if not os.path.exists(REPO):
-    run("git", "clone", "https://github.com/dscripka/openwakeword")
 
-# --no-deps, and the reason matters. openWakeWord depends on speexdsp-ns,
-# which publishes manylinux wheels for cp37 to cp312 and no source
-# distribution at all, so on a newer Python there is nothing for pip to
-# install and nothing to build from. The whole install fails on it. It is an
-# optional noise suppressor that training never touches.
-pip("-e", REPO, "--no-deps")
+def uvpip(*packages, must_work=True):
+    return run(sys.executable, "-m", "uv", "pip", "install", "--python", PY, *packages,
+               must_work=must_work)
 
-# What --no-deps then skipped and training does need. onnxruntime is the one
-# that matters: AudioFeatures defaults to the ONNX framework, so the trainer
-# fails on its first line without it. tflite-runtime is deliberately absent —
-# everything here runs through ONNX, and it has the same missing-wheel problem.
-pip("onnxruntime", "scikit-learn", "tqdm", "scipy", "requests")
 
-pip("mutagen==1.47.0", "torchinfo==1.8.0", "torchmetrics==1.2.0", "speechbrain==0.5.14")
-# torch-audiomentations 0.11.0 is upstream's pin and it calls
-# torchaudio.set_audio_backend, which torchaudio removed in 2.1. Colab ships a
-# torchaudio far newer than that, so upstream's pin cannot import at all on
-# today's image. 0.11.1 dropped the call; 0.11.2 is the last of that line and
-# still exports every transform openwakeword/data.py uses.
-pip("audiomentations==0.33.0", "torch-audiomentations==0.11.2", "acoustics==0.2.6")
-pip("pronouncing==0.2.0", "datasets==2.14.6", "deep-phonemizer==0.0.19")
-
-# -- tflite, which Ranger does not use -------------------------------------
+# -- espeak, which the sample generator phonemises with --------------------
 #
-# train.py converts the trained model to tflite immediately after writing the
-# .onnx. Ranger loads the .onnx, so the conversion is cosmetic here, and these
-# are old pins that are the likeliest thing in this cell to stop resolving.
-# Best effort: if they fail, training still produces the file we want and the
-# very last line of step 6 will raise on the conversion. That is survivable
-# and step 6 says so.
-tflite_ok = pip(
-    "tensorflow-cpu==2.8.1", "tensorflow_probability==0.16.0", "onnx_tf==1.10.0",
-    must_work=False,
+# dscripka's fork imports espeak_phonemizer, which is a binding to a system
+# library rather than a self-contained wheel. Upstream's notebook installs
+# piper-phonemize instead, which the fork does not use and which has no wheel
+# for Colab's Python anyway.
+
+run("apt-get", "install", "-y", "-qq", "espeak-ng", "libespeak-ng1", must_work=False)
+
+# -- the repositories ------------------------------------------------------
+
+if not os.path.exists(PIPER):
+    run("git", "clone", "--depth", "1", "https://github.com/dscripka/piper-sample-generator", PIPER)
+if not os.path.exists(REPO):
+    run("git", "clone", "--depth", "1", "https://github.com/dscripka/openwakeword", REPO)
+
+# The model the fork actually defaults to, from the release it was built
+# against. Upstream's notebook downloads en_US-libritts_r-medium.pt from
+# v2.0.0, which belongs to the restructured repo and is not what this fork
+# loads.
+fetch(
+    "https://github.com/rhasspy/piper-sample-generator/releases/download/v1.0.0/en-us-libritts-high.pt",
+    os.path.join(PIPER, "models", "en-us-libritts-high.pt"),
+    at_least=10_000_000,
 )
+
+# -- everything training needs, into the 3.11 environment ------------------
+
+uvpip("torch", "torchaudio", "numpy", "scipy", "pyyaml", "tqdm", "requests", "scikit-learn")
+uvpip("espeak-phonemizer", "webrtcvad")
+uvpip("-e", REPO, "--no-deps")
+uvpip("onnxruntime", "mutagen==1.47.0", "torchinfo==1.8.0", "torchmetrics==1.2.0")
+uvpip("speechbrain==0.5.14", "audiomentations==0.33.0", "acoustics==0.2.6")
+
+# torch-audiomentations 0.11.0 is openWakeWord's pin and it calls
+# torchaudio.set_audio_backend, removed in torchaudio 2.1. 0.11.1 dropped the
+# call and 0.11.2 still exports every transform openwakeword/data.py uses.
+uvpip("torch-audiomentations==0.11.2")
+
+uvpip("pronouncing==0.2.0", "datasets==2.14.6", "deep-phonemizer==0.0.19")
+
+# tflite conversion. train.py runs it immediately after writing the .onnx, so
+# a failure here costs nothing that matters: the file Ranger loads is already
+# on disk. tensorflow 2.8.1 has no wheel past cp310, so this is expected to
+# fail and step 6 says so.
+tflite_ok = uvpip("tensorflow-cpu==2.8.1", "tensorflow_probability==0.16.0",
+                  "onnx_tf==1.10.0", must_work=False)
+
+# -- the same, into the notebook's own kernel ------------------------------
+#
+# The download and acceptance cells run here rather than in the 3.11 venv,
+# because they only need to read audio and score a model.
+
+run(sys.executable, "-m", "pip", "install", "-q", "-e", REPO, "--no-deps")
+run(sys.executable, "-m", "pip", "install", "-q", "onnxruntime", "datasets==2.14.6")
 
 # -- the feature models, which the wheel does not ship ---------------------
-#
-# The same files 'ranger wake install' fetches, from the same release.
 
 RELEASE = "https://github.com/dscripka/openWakeWord/releases/download/v0.5.1/"
 target = os.path.join(REPO, "openwakeword", "resources", "models")
-os.makedirs(target, exist_ok=True)
 for feature in ["embedding_model.onnx", "embedding_model.tflite",
                 "melspectrogram.onnx", "melspectrogram.tflite"]:
-    path = os.path.join(target, feature)
-    urllib.request.urlretrieve(RELEASE + feature, path)
-    size = os.path.getsize(path)
-    if size < 100_000:
-        raise RuntimeError(f"{feature} came back as {size} bytes, which is an error page")
-    print(f"{feature}: {size // 1024} KB")
-
-# -- prove it, the way the trainer will find out ---------------------------
-#
-# train.py is run as a script by path, so `import openwakeword` resolves
-# through the install rather than through the repo it sits in. Checking it in
-# this kernel would not prove that: check it in a subprocess of the same
-# interpreter the trainer is launched with. PYTHONPATH is set as a belt and
-# braces so the import works even if the editable install did not take.
-
-os.environ["PYTHONPATH"] = os.path.abspath(REPO)
-proof = subprocess.run(
-    [
-        sys.executable,
-        "-c",
-        "import openwakeword, torch, onnxruntime;"
-        "from openwakeword.utils import AudioFeatures;"
-        "AudioFeatures(device='cpu');"
-        "print(openwakeword.__file__)",
-    ],
-    capture_output=True, text=True,
-)
-if proof.returncode != 0:
-    print(proof.stderr)
-    raise RuntimeError(
-        "openwakeword does not load in a fresh interpreter, so step 6 would fail the "
-        "same way, forty minutes from now. Read the pip output above rather than "
-        "continuing."
-    )
+    fetch(RELEASE + feature, os.path.join(target, feature), at_least=100_000)
 
 print()
-print("openwakeword:", proof.stdout.strip())
-import torch
-print("GPU:", torch.cuda.get_device_name(0) if torch.cuda.is_available() else "NONE")
-print("If that says NONE, stop. Runtime > Change runtime type > T4 GPU, then run this again.")
+print("Setup done. Run the preflight before downloading anything.")
 if not tflite_ok:
-    print("tflite conversion deps did not install. Harmless: the .onnx is written first.")
+    print("tflite conversion deps did not install, as expected. The .onnx is written first.")
 """
 
 
@@ -252,20 +260,27 @@ PREFLIGHT = """\
 # train.py imports torch, torchinfo, torchmetrics and openwakeword.data, which
 # pulls in audiomentations, torch_audiomentations, speechbrain, torchaudio and
 # acoustics. Any of those can be incompatible with the Colab image of the day.
-# Import the whole chain now, in a subprocess of the interpreter the trainer is
+# Import the whole chain now, in the Python 3.11 environment the trainer is
 # launched with, before a single byte is downloaded.
 #
 # If this cell passes, step 6 will start. It cannot promise it will finish.
 
+import os
 import subprocess
 import sys
+
+PY = os.path.abspath("./py311/bin/python")
 
 CHECKS = [
     ("the trainer and everything it imports", "import openwakeword.train"),
     ("the wake word model loader", "from openwakeword.model import Model"),
     ("the augmentation chain", "import openwakeword.data"),
     (
-        "the sample generator",
+        # The exact name train.py imports, not the package around it.
+        # rhasspy's repo has a piper_sample_generator package and no
+        # generate_samples module, so importing the package would pass here and
+        # step 6 would still fail. dscripka's fork has the module.
+        "the sample generator (generate_samples, by that name)",
         "import sys; sys.path.insert(0, 'piper-sample-generator');"
         " from generate_samples import generate_samples",
     ),
@@ -273,7 +288,7 @@ CHECKS = [
 
 failed = []
 for label, statement in CHECKS:
-    result = subprocess.run([sys.executable, "-c", statement], capture_output=True, text=True)
+    result = subprocess.run([PY, "-c", statement], capture_output=True, text=True)
     print(("ok    " if result.returncode == 0 else "FAIL  ") + label)
     if result.returncode != 0:
         failed.append(label)
@@ -294,9 +309,16 @@ print("Preflight clear. Everything step 6 imports is importable.")
 
 IMPORTS = """\
 import os
+import subprocess
 import sys
+import urllib.request
 import uuid
 from pathlib import Path
+
+#: The training interpreter, in case this cell is the first one re-run after a
+#: kernel restart. Everything that touches openwakeword's trainer goes through
+#: it; the notebook's own kernel only downloads data and scores the result.
+PY = os.path.abspath("./py311/bin/python")
 
 import numpy as np
 import scipy
@@ -304,6 +326,29 @@ import torch
 import yaml
 import datasets
 from tqdm import tqdm
+
+
+def fetch(url, path, at_least=1000):
+    \"\"\"Download, and refuse a 404 written to disk as though it were a file.
+
+    This is failure four. The AudioSet URL returned 404, wget saved the error
+    body under the name it was given, tar found nothing in it, the conversion
+    loop ran over an empty list, and the training config went on pointing at an
+    empty directory. Every step reported success.
+    \"\"\"
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    try:
+        urllib.request.urlretrieve(url, path)
+    except Exception as exc:
+        raise RuntimeError(f"{url} could not be downloaded: {exc}") from exc
+    size = os.path.getsize(path)
+    print(f"{path}: {size / 1e6:.1f} MB")
+    if size < at_least:
+        os.remove(path)
+        raise RuntimeError(
+            f"{url} returned {size} bytes, which is an error page and not a file."
+        )
+    return path
 
 
 def produced(folder, at_least=1, what="files"):
@@ -352,6 +397,7 @@ BACKGROUND = """\
 # compromise against the free tier's session length.
 
 n_hours = 2
+ALLOW_MUSIC_ONLY = False  # see the AudioSet block below
 
 # -- AudioSet --------------------------------------------------------------
 #
@@ -361,12 +407,26 @@ n_hours = 2
 # wrote no files, silently. Whatever the tar's internal layout is, the files
 # are somewhere under ./audioset, so look there and say what turned up.
 
-os.makedirs("audioset", exist_ok=True)
 fname = "bal_train09.tar"
+link = "https://huggingface.co/datasets/agkphysics/AudioSet/resolve/main/data/" + fname
 if not os.path.exists(f"audioset/{fname}"):
-    link = "https://huggingface.co/datasets/agkphysics/AudioSet/resolve/main/data/" + fname
-    !wget -O audioset/{fname} {link}
-!cd audioset && tar -xf bal_train09.tar
+    try:
+        fetch(link, f"audioset/{fname}", at_least=50_000_000)
+    except RuntimeError as exc:
+        print(exc)
+        print()
+        print("AudioSet is not reachable at that URL. This is survivable: it is one of")
+        print("two background sources and the other is music. Expect somewhat more")
+        print("false fires. To go on without it, set ALLOW_MUSIC_ONLY = True above and")
+        print("re-run. To do better, point background_paths at any folder of ordinary")
+        print("speech and noise you have.")
+        if not globals().get("ALLOW_MUSIC_ONLY"):
+            raise
+
+if os.path.exists(f"audioset/{fname}"):
+    run_tar = subprocess.run(["tar", "-xf", fname], cwd="audioset", capture_output=True, text=True)
+    if run_tar.returncode != 0:
+        raise RuntimeError(f"tar failed: {run_tar.stderr[-500:]}")
 
 clips = [
     str(path)
@@ -377,15 +437,16 @@ if not clips:
     print("Nothing audio-shaped under ./audioset. What is there:")
     for path in sorted(Path("audioset").rglob("*"))[:40]:
         print("   ", path)
-    raise RuntimeError(
-        "the AudioSet tar extracted no audio files this cell can find. Look at the "
-        "listing above and widen the search, rather than continuing without them."
-    )
+    if not ALLOW_MUSIC_ONLY:
+        raise RuntimeError(
+            "the AudioSet tar extracted no audio files this cell can find. Look at the "
+            "listing above and widen the search, rather than continuing without them."
+        )
 print(f"found {len(clips)} AudioSet clips")
 
 output_dir = "./audioset_16k"
 os.makedirs(output_dir, exist_ok=True)
-audioset_dataset = datasets.Dataset.from_dict({"audio": clips})
+audioset_dataset = datasets.Dataset.from_dict({"audio": clips or []})
 audioset_dataset = audioset_dataset.cast_column("audio", datasets.Audio(sampling_rate=16000))
 for row in tqdm(audioset_dataset):
     name = Path(row["audio"]["path"]).stem + ".wav"
@@ -393,7 +454,8 @@ for row in tqdm(audioset_dataset):
         os.path.join(output_dir, name), 16000, (row["audio"]["array"] * 32767).astype(np.int16)
     )
 
-produced(output_dir, at_least=100, what="converted AudioSet clips")
+if clips:
+    produced(output_dir, at_least=100, what="converted AudioSet clips")
 
 # -- Free Music Archive ----------------------------------------------------
 
@@ -417,8 +479,14 @@ FEATURES = """\
 # train against, and ~11 hours held out to count false fires. About 4 GB, five
 # to ten minutes.
 
-!wget -q --show-progress https://huggingface.co/datasets/davidscripka/openwakeword_features/resolve/main/openwakeword_features_ACAV100M_2000_hrs_16bit.npy
-!wget -q --show-progress https://huggingface.co/datasets/davidscripka/openwakeword_features/resolve/main/validation_set_features.npy
+FEATURES_BASE = ("https://huggingface.co/datasets/davidscripka/openwakeword_features/"
+                 "resolve/main/")
+for feature_file, smallest in [
+    ("openwakeword_features_ACAV100M_2000_hrs_16bit.npy", 1_000_000_000),
+    ("validation_set_features.npy", 10_000_000),
+]:
+    if not os.path.exists(feature_file):
+        fetch(FEATURES_BASE + feature_file, feature_file, at_least=smallest)
 
 # wget writes whatever came back, including an error page, under the name it
 # was given. Opening each as a memory-mapped array reads the header only, so
@@ -543,7 +611,7 @@ def generate_cell(name: str) -> str:
 # If it dies part way, run it again. It counts what is already on disk and
 # carries on from there, so nothing is wasted.
 
-!{{sys.executable}} openwakeword/openwakeword/train.py --training_config {name}.yaml --generate_clips
+!{{PY}} openwakeword/openwakeword/train.py --training_config {name}.yaml --generate_clips
 '''
 
 
@@ -552,7 +620,7 @@ def augment_cell(name: str) -> str:
 # Step 6 of 7, part two. Play every clip through a room and mix in noise, then
 # turn it all into features. Fifteen to thirty minutes.
 
-!{{sys.executable}} openwakeword/openwakeword/train.py --training_config {name}.yaml --augment_clips
+!{{PY}} openwakeword/openwakeword/train.py --training_config {name}.yaml --augment_clips
 '''
 
 
@@ -564,7 +632,7 @@ def train_cell(name: str) -> str:
 # number the whole run is optimising, and it is the number that decides whether
 # this is usable.
 
-!{{sys.executable}} openwakeword/openwakeword/train.py --training_config {name}.yaml --train_model
+!{{PY}} openwakeword/openwakeword/train.py --training_config {name}.yaml --train_model
 '''
 
 

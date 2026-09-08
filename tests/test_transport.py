@@ -592,3 +592,50 @@ def test_stopping_nothing_says_so(served):
         assert "nothing was running" in client.wait_for("error")["message"]
     finally:
         client.close()
+
+
+def test_a_silent_server_fails_with_what_was_being_waited_for():
+    """A bare socket timeout named nothing and read as a failing assertion.
+
+    This test's own suite had one occasionally-lying test because of it: a
+    scripted turn that was merely slow on a loaded machine looked exactly like
+    a broken one.
+    """
+    import socket
+    import threading
+
+    from ranger.testing import Waited, WebSocketClient
+
+    listener = socket.socket()
+    listener.bind(("127.0.0.1", 0))
+    listener.listen(1)
+    port = listener.getsockname()[1]
+    held: list = []
+
+    def accept_and_say_nothing():
+        connection, _ = listener.accept()
+        connection.sendall(
+            b"HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\n\r\n"
+        )
+        held.append(connection)  # kept open, and deliberately silent
+
+    thread = threading.Thread(target=accept_and_say_nothing, daemon=True)
+    thread.start()
+    try:
+        client = WebSocketClient(port)
+        client.sock.settimeout(0.2)  # the wait itself is not what is under test
+        with pytest.raises(Waited, match="the hello"):
+            client.next("the hello")
+    finally:
+        for connection in held:
+            connection.close()
+        listener.close()
+
+
+def test_connecting_and_waiting_have_separate_budgets():
+    """They were one number, so patience for a slow turn also meant patience
+    for a port nobody is listening on."""
+    from ranger.testing import CONNECT_TIMEOUT, READ_TIMEOUT
+
+    assert CONNECT_TIMEOUT < READ_TIMEOUT
+

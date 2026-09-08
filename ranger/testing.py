@@ -79,11 +79,28 @@ def _chunks(text: str, size: int = 12) -> list[str]:
     return [text[i : i + size] for i in range(0, len(text), size)] if text else []
 
 
+#: How long a test waits for the server to say something. Generous on purpose.
+#:
+#: This was one number doing two jobs, and it made the suite lie: connecting and
+#: waiting for a scripted turn shared a ten second budget, so on a loaded
+#: machine a turn that was only slow read as a failure, and the failure was a
+#: bare socket timeout that named nothing. Connecting to a port on this machine
+#: either works at once or is not going to; waiting for a turn is where the
+#: patience belongs. Raise it with RANGER_TEST_TIMEOUT if a machine needs more.
+CONNECT_TIMEOUT = 5.0
+READ_TIMEOUT = float(os.environ.get("RANGER_TEST_TIMEOUT", "60"))
+
+
+class Waited(AssertionError):
+    """The server said nothing in time. Says what was being waited for."""
+
+
 class WebSocketClient:
     """The smallest websocket client that can hold a conversation."""
 
     def __init__(self, port: int, origin: str | None = None) -> None:
-        self.sock = socket.create_connection(("127.0.0.1", port), timeout=10)
+        self.sock = socket.create_connection(("127.0.0.1", port), timeout=CONNECT_TIMEOUT)
+        self.sock.settimeout(READ_TIMEOUT)
         self.file = self.sock.makefile("rb")
         key = base64.b64encode(os.urandom(16)).decode()
         request = (
@@ -112,15 +129,22 @@ class WebSocketClient:
     def send(self, payload: dict) -> None:
         self.sock.sendall(client_frame(TEXT, json.dumps(payload).encode()))
 
-    def next(self) -> dict | None:
+    def next(self, waiting_for: str = "the next message") -> dict | None:
         # expect_mask=False: this is the client's side, and a server never masks.
-        message = read_message(self.file, expect_mask=False)
+        try:
+            message = read_message(self.file, expect_mask=False)
+        except (TimeoutError, socket.timeout) as exc:
+            raise Waited(
+                f"nothing arrived within {READ_TIMEOUT:.0f}s while waiting for "
+                f"{waiting_for}. A bare socket timeout here used to look like a "
+                "failing assertion; this is a hang or a very slow machine."
+            ) from exc
         return None if message is None else json.loads(message)
 
     def wait_for(self, kind: str, limit: int = 60) -> dict:
         """The next event of this kind, skipping whatever else arrives first."""
         for _ in range(limit):
-            event = self.next()
+            event = self.next(f"an event of kind {kind!r}")
             if event is None:
                 break
             if event.get("kind") == kind:
@@ -131,7 +155,7 @@ class WebSocketClient:
         """Collect events up to and including the first of `kind`."""
         seen: list[dict] = []
         for _ in range(limit):
-            event = self.next()
+            event = self.next(f"everything up to {kind!r}")
             if event is None:
                 break
             seen.append(event)

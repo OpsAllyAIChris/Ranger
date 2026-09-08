@@ -26,6 +26,48 @@ step. Nothing is trained on your machine and nothing can be: openWakeWord's
 automated training runs on Linux only, because Piper, the text to speech
 library it generates samples with, does not work on Windows.
 
+## Does openWakeWord's training still work on Colab?
+
+**Not as upstream ships it, no.** That is the honest answer, and it is not a
+close call. Eight distinct things stop it, and they are all upstream's:
+
+- **Colab now runs Python 3.13.** Three libraries in the chain — `speexdsp-ns`,
+  `piper-phonemize` and `tflite-runtime` — publish wheels that stop at cp312
+  with **no source distribution at all**. No pin fixes a wheel that does not
+  exist.
+- **`torch-audiomentations==0.11.0`**, openWakeWord's own pin, calls
+  `torchaudio.set_audio_backend`, removed in torchaudio 2.1.
+- **`tensorflow-cpu==2.8.1`** has no wheel past cp310.
+- **Its notebook clones the wrong repository.** It clones
+  `rhasspy/piper-sample-generator`, which has since been restructured into a
+  `piper_sample_generator` package and no longer contains `generate_samples.py`
+  anywhere — the exact module `train.py` imports. openWakeWord's own config file
+  names `dscripka/piper-sample-generator`, which still has it. The notebook and
+  the config disagree, and the notebook is the one that is wrong.
+- **It downloads the wrong voice model**, `en_US-libritts_r-medium.pt` from
+  v2.0.0, which belongs to the restructured repo. The fork loads
+  `en-us-libritts-high.pt` from v1.0.0.
+- **The AudioSet URL 404s**, and `wget` writes the error body to disk under the
+  name it was given.
+
+The notebook this script writes repairs all of it, and the repair is one
+structural change rather than eight patches: **training runs in its own Python
+3.11**, built by `uv` inside the Colab session, and the notebook's own kernel is
+only used to download data and score the result. Every missing-wheel failure
+above is a Python-version problem, and `piper-phonemize`, `speexdsp-ns` and
+`torch-audiomentations` all install cleanly on 3.11 — checked, not assumed.
+
+**What I cannot tell you** is whether it runs end to end, because I cannot
+execute Colab. Everything here is verified against source I fetched and wheels I
+downloaded: the repositories were cloned and their contents listed, the wheels
+were opened and grepped, the release URLs were requested, and the 3.11
+environment was actually built and the packages installed into it. That is a
+much stronger position than the last eight attempts, and it is still not the
+same as a green run.
+
+`hey jarvis` works today and costs nothing. Treat this as worth an afternoon
+when you want the real phrase, not as a blocker.
+
 ## 2. In Colab: which notebook
 
 It is **openWakeWord's own** `automatic_model_training.ipynb`, with three

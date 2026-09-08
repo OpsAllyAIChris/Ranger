@@ -266,16 +266,63 @@ def test_openwakeword_installs_without_its_own_dependencies(notebook):
     assert '"onnxruntime"' in text
 
 
-def test_the_environment_cell_proves_the_trainer_can_import_it(notebook):
-    """Checked in a subprocess of the same interpreter the trainer is launched
-    with. Importing it in the notebook's own kernel would not prove that."""
+def test_training_runs_on_its_own_python(notebook):
+    """Colab runs Python 3.13, where speexdsp-ns, piper-phonemize and
+    tflite-runtime all publish wheels stopping at cp312 with no source
+    distribution. No pin fixes a wheel that does not exist, so training gets
+    its own 3.11 and the notebook's kernel only orchestrates.
+    """
+    setup = next(c for c in notebook["cells"] if "py311" in joined(c))
+    text = joined(setup)
+
+    assert '"--python", "3.11"' in text
+    assert "py311/bin/python" in text
+
+    for cell in notebook["cells"]:
+        if "train.py --training_config" in joined(cell):
+            assert "{PY}" in joined(cell), "the trainer must not run on the kernel's Python"
+
+
+def test_the_sample_generator_comes_from_the_fork_that_has_it(notebook):
+    """This is failure seven, and it is upstream contradicting itself.
+
+    openWakeWord's notebook clones rhasspy/piper-sample-generator, which has
+    been restructured into a piper_sample_generator package with no
+    generate_samples module. openWakeWord's own config file names dscripka's
+    fork, which still has the module train.py imports. The config is right.
+    """
     setup = next(c for c in notebook["cells"] if "piper-sample-generator" in joined(c))
     text = joined(setup)
 
-    assert "sys.executable" in text
-    assert "import openwakeword" in text
-    assert "AudioFeatures" in text, "loading the feature models is the real check"
-    assert "PYTHONPATH" in text
+    assert "dscripka/piper-sample-generator" in text
+    assert "rhasspy/piper-sample-generator releases" not in text
+    # The fork's own default model, from the release it was built against. The
+    # notebook downloads v2.0.0's en_US-libritts_r-medium.pt, which belongs to
+    # the restructured repo and is not what this fork loads.
+    assert "en-us-libritts-high.pt" in text
+    # It may be named in a comment saying why it is wrong, but never fetched.
+    code = [line for line in text.split("\n") if not line.lstrip().startswith("#")]
+    assert "en_US-libritts_r-medium.pt" not in "\n".join(code)
+
+
+def test_every_download_refuses_a_404_written_to_disk(notebook):
+    """Failure four: the URL 404'd, wget saved the error body under the name it
+    was given, and every step downstream reported success."""
+    cells = [joined(cell) for cell in notebook["cells"]]
+
+    assert any("def fetch(" in text and "error page and not a file" in text for text in cells)
+    for text in cells:
+        assert "!wget" not in text, "an unchecked download is a silent 404"
+
+
+def test_the_preflight_names_the_module_not_the_package(notebook):
+    """Importing piper_sample_generator would pass and step 6 would still fail
+    forty minutes later. The check has to use the name train.py uses."""
+    preflight = next(c for c in notebook["cells"] if "CHECKS = [" in joined(c))
+    text = joined(preflight)
+
+    assert "from generate_samples import generate_samples" in text
+    assert "py311" in text, "checked where the trainer will find out"
 
 
 def test_there_is_a_preflight_before_anything_is_downloaded(notebook):
@@ -293,7 +340,6 @@ def test_there_is_a_preflight_before_anything_is_downloaded(notebook):
     text = kinds[preflight]
     assert "import openwakeword.train" in text, "the trainer's own import chain"
     assert "generate_samples" in text, "piper, which step 6 needs first"
-    assert "sys.executable" in text, "checked where the trainer will find out"
     assert "raise RuntimeError" in text
 
 
