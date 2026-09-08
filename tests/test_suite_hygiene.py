@@ -151,3 +151,62 @@ def test_the_date_helpers_are_portable():
     # Two digit days keep working, which is where a naive lstrip("0") breaks.
     assert day_and_month(datetime(2026, 9, 17, 7, 27)) == "17 September"
     assert human_day(datetime(2026, 10, 1, 0, 0)) == "Thursday 1 October"
+
+
+# -- the account write path stays binary ------------------------------------
+
+
+ACCOUNT_WRITE_PATH = [
+    Path(__file__).resolve().parent.parent / "ranger" / "marker.py",
+]
+
+
+def test_the_marker_module_never_uses_text_mode_io():
+    """Nine tests failed on Windows and none on Linux because of one call.
+
+    `Path.write_text` opens in text mode. On Windows it rewrites every `\n` as
+    `\r\n`, so an existing `\r\n` becomes `\r\r\n`, and `read_text` folds
+    that to `\n\n`. The account write path's entire design is byte identity,
+    so a single text-mode call anywhere in it makes the guard refuse files that
+    are fine -- or, worse in the migration, rewrite the CRM half it exists to
+    protect.
+
+    Linux translates nothing, so the suite round-tripped happily and agreed
+    with itself. This is the rule written where it can be enforced.
+    """
+    for source in ACCOUNT_WRITE_PATH:
+        text = source.read_text(encoding="utf-8")
+        code = "\n".join(
+            line for line in text.splitlines()
+            if not line.lstrip().startswith(("#", "#:"))
+        )
+        for banned in ("write_text(", "read_text("):
+            assert banned not in code, (
+                f"{source.name} calls {banned} -- the account write path is binary "
+                "end to end, because it promises byte identity"
+            )
+
+
+def test_append_below_marker_never_uses_text_mode_io():
+    import inspect
+
+    from ranger.vault import Vault
+
+    body = inspect.getsource(Vault.append_below_marker)
+    code = "\n".join(
+        line for line in body.splitlines() if not line.lstrip().startswith("#")
+    )
+    assert "write_text(" not in code
+    assert "read_text(" not in code
+    assert "read_bytes()" in code and "write_bytes(" in code
+
+
+def test_the_digest_cannot_be_handed_a_string():
+    """The bug in one call. Bytes-only means it cannot come back quietly."""
+    import pytest as _pytest
+
+    from ranger.marker import digest
+
+    with _pytest.raises(TypeError):
+        digest("text that has already been through a reader")
+

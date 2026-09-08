@@ -35,6 +35,18 @@ from typing import Any, Iterable
 #: this and nothing about what follows it.
 TOKEN = "<!-- ranger:below"
 
+#: The same token, for the write path, which is binary from end to end.
+#:
+#: The account write path's promise is byte identity, so no step in it gets to
+#: reinterpret bytes. `Path.write_text` opens in text mode: on Windows it turns
+#: every `\n` into `\r\n`, so a file that already used `\r\n` comes back as
+#: `\r\r\n`, and `read_text` then folds that to `\n\n`. The bytes above the
+#: marker no longer match the bytes that were read, the guard refuses, and it
+#: refuses because the writer corrupted a file that was fine. On Linux nothing
+#: translates and it round-trips, so the suite agreed with itself and with
+#: nothing outside.
+TOKEN_BYTES = TOKEN.encode("utf-8")
+
 #: What the migration writes. Only the first line is load-bearing.
 BLOCK = """\
 <!-- ranger:below — everything above this line is CRM export, regenerable.
@@ -102,9 +114,68 @@ def has_context(text: str) -> bool:
     return not _EMPTY_BELOW.match(body)
 
 
-def digest(text: str) -> str:
-    """Of the bytes above the marker. The thing the append guard compares."""
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+def split_bytes(data: bytes) -> tuple[bytes, bytes]:
+    """(above, below), on bytes. The write path's only splitter.
+
+    Same rule as `split`, on the representation that has not been through a
+    translating reader.
+    """
+    found = data.count(TOKEN_BYTES)
+    if found == 0:
+        raise MarkerError(
+            f"no {TOKEN!r} marker in this note. Ranger appends below the marker and "
+            "will not create one on the fly: a note with no marker is a note this does "
+            "not understand. Run: ranger accounts migrate"
+        )
+    if found > 1:
+        raise MarkerError(
+            f"{found} {TOKEN!r} markers in this note, and there must be exactly one. "
+            "Two markers means two places to append and no way to tell which half is "
+            "the export."
+        )
+    at = data.index(TOKEN_BYTES)
+    return data[:at], data[at:]
+
+
+def digest(data: bytes) -> str:
+    """Of the bytes above the marker. The thing the append guard compares.
+
+    Bytes only, and a string is a TypeError rather than a quiet encode. A
+    digest taken over a decoded string is a digest of something that has
+    already been through a reader that may have rewritten every line ending,
+    which is exactly how this went wrong the first time.
+    """
+    if not isinstance(data, (bytes, bytearray)):
+        raise TypeError(
+            f"digest takes bytes, not {type(data).__name__}. The account write path is "
+            "binary end to end on purpose: hashing a decoded string hashes whatever "
+            "the reader did to it."
+        )
+    return hashlib.sha256(bytes(data)).hexdigest()
+
+
+def newline_of(data: bytes) -> bytes:
+    """The line ending this file already uses.
+
+    So a CRLF note does not grow LF-only lines. Harmless to render, ugly in
+    every future diff, and avoidable in one line. Ranger matches what is there
+    and never converts what is already written.
+    """
+    if b"\r\n" in data:
+        return b"\r\n"
+    if b"\r" in data and b"\n" not in data:
+        return b"\r"
+    return b"\n"
+
+
+def as_bytes(text: str, newline: bytes = b"\n") -> bytes:
+    """Text Ranger is adding, encoded with the endings the file already uses.
+
+    Only ever applied to newly composed text. Bytes that were already on disk
+    are never passed through this.
+    """
+    encoded = text.encode("utf-8")
+    return encoded.replace(b"\n", newline) if newline != b"\n" else encoded
 
 
 def entry(note: str, source: str, when: date | None = None) -> str:
@@ -160,12 +231,16 @@ def migrate(vault: Any, folder: Path, *, dry_run: bool = False) -> Migration:
             continue
         name = note.name
         try:
-            text = note.read_text(encoding="utf-8")
+            # Binary, like the append path and for the same reason: reading
+            # text and writing text would rewrite every line ending in the CRM
+            # half, silently modifying the exact thing the marker exists to
+            # protect, before the marker even exists.
+            data = note.read_bytes()
         except OSError as exc:
             report.refused.append((name, f"could not be read: {exc}"))
             continue
 
-        found = count(text)
+        found = data.count(TOKEN_BYTES)
         if found == 1:
             report.already.append(name)
             continue
@@ -174,8 +249,11 @@ def migrate(vault: Any, folder: Path, *, dry_run: bool = False) -> Migration:
             continue
 
         if not dry_run:
-            separator = "" if text.endswith("\n\n") else "\n" if text.endswith("\n") else "\n\n"
-            note.write_text(text + separator + BLOCK, encoding="utf-8")
+            newline = newline_of(data)
+            blank = newline * 2
+            separator = b"" if data.endswith(blank) else newline if data.endswith(newline) else blank
+            # Append. The bytes already on disk are never rewritten, only added to.
+            note.write_bytes(data + separator + as_bytes(BLOCK, newline))
         report.migrated.append(name)
     return report
 
@@ -196,7 +274,7 @@ def notes_with_context(folder: Path) -> list[tuple[str, int]]:
         if not note.is_file():
             continue
         try:
-            text = note.read_text(encoding="utf-8")
+            text = note.read_bytes().decode("utf-8", errors="replace")
         except OSError:
             # Unreadable counts as holding. Fail closed: a note that cannot be
             # checked is not a note that has been cleared.

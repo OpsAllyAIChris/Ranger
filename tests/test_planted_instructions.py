@@ -324,10 +324,10 @@ async def test_filing_does_not_let_a_note_talk_its_way_past_the_gate(poisoned_be
 async def test_what_ranger_files_cannot_escape_the_marker(poisoned_below):
     """The end-to-end version of the append guard: a note whose *content* is an
     instruction to rewrite the export still only ever lands below the line."""
-    from ranger.marker import digest, split
+    from ranger.marker import digest, split, split_bytes
 
     path = poisoned_below.vault.accounts / "Illes Foods.md"
-    was = digest(split(path.read_text(encoding="utf-8"))[0])
+    was = digest(split_bytes(path.read_bytes())[0])
 
     registry = build_registry(poisoned_below, Vault(poisoned_below.vault))
     result = await registry.run(
@@ -340,7 +340,7 @@ async def test_what_ranger_files_cannot_escape_the_marker(poisoned_below):
     )
 
     assert result.ok
+    assert digest(split_bytes(path.read_bytes())[0]) == was, "the export half moved"
     text = path.read_text(encoding="utf-8")
-    assert digest(split(text)[0]) == was, "the export half moved"
     assert "Tier 4" in split(text)[1], "the text was filed, as data, below the line"
 

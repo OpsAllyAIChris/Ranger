@@ -376,6 +376,24 @@ rebuild, and `ranger snapshot` giving the vault a local git history, because
 read-only `Accounts/` *was* the undo. Delete-never did not change and neither
 did `Knowledge/`.
 
+**The account write path is binary from end to end, and that is load-bearing.**
+`Path.write_text` opens in text mode: on Windows it rewrites every `\n` as
+`\r\n`, so a file that already used `\r\n` comes back as `\r\r\n`, and
+`read_text` folds that to `\n\n`. A design whose whole promise is byte
+identity cannot survive one such call, and it did not — nine tests failed on
+Windows and none on Linux, because Linux translates nothing and the suite
+agreed with itself and with nothing outside. The same call in the *migration*
+was worse: it would have rewritten every line ending in the CRM half, silently
+modifying the exact thing the marker exists to protect.
+
+So: `read_bytes` and `write_bytes` throughout, `split_bytes` for the write path,
+and `marker.digest` takes bytes and raises `TypeError` on a string, because a
+digest over a decoded string is a digest of whatever the reader did to it. Two
+hygiene tests enforce it, and `newline_of` makes what Ranger appends match the
+endings the file already uses rather than introducing mixed ones. **Any future
+path that promises byte identity gets the same treatment, and the test fixture
+writes its bytes by hand rather than through a translating writer.**
+
 **The split token is `<!-- ranger:below`, counted by occurrence, and everything
 from that byte onward is the below-half.** The rest of the comment and the
 `## Ranger Context` heading are editable prose. Deliberately: the operator reads

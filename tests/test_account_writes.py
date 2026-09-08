@@ -47,8 +47,13 @@ def note(config):
     return path
 
 
-def above(path) -> str:
-    return split(path.read_text(encoding="utf-8"))[0]
+def above(path) -> bytes:
+    """The export half, as bytes. Never as text: the whole promise is about
+    bytes, and a helper that decoded first would be measuring what the reader
+    did rather than what the writer did."""
+    from ranger.marker import split_bytes
+
+    return split_bytes(path.read_bytes())[0]
 
 
 # -- the happy path, and what it must not disturb ---------------------------
@@ -182,16 +187,18 @@ def test_a_write_that_would_change_the_bytes_above_is_refused(vault, note, monke
     before = note.read_bytes()
     calls = {"n": 0}
 
-    def drifting(text: str):
+    from ranger.marker import split_bytes as real_split_bytes
+
+    def drifting(data: bytes):
         """Honest to the real risk: composition silently loses a byte above
         the line. The first read is true, the composed one is not."""
-        above_half, below = split(text)
+        above_half, below = real_split_bytes(data)
         calls["n"] += 1
         if calls["n"] > 1:
-            above_half = above_half.replace("Tier:** 1", "Tier:** 4")
+            above_half = above_half.replace(b"Tier:** 1", b"Tier:** 4")
         return above_half, below
 
-    monkeypatch.setattr("ranger.marker.split", drifting)
+    monkeypatch.setattr("ranger.marker.split_bytes", drifting)
 
     with pytest.raises(MarkerError) as raised:
         vault.append_below_marker(note, entry("x", "call"))
@@ -205,7 +212,7 @@ def test_a_failure_while_writing_leaves_the_note_byte_identical(vault, note, mon
     failed append, because it still looks like a note."""
     before = note.read_bytes()
 
-    real_write = type(note).write_text
+    real_write = type(note).write_bytes
 
     def explode(self, *args, **kwargs):
         if self.name.endswith(".ranger-tmp"):
@@ -213,7 +220,7 @@ def test_a_failure_while_writing_leaves_the_note_byte_identical(vault, note, mon
             raise OSError("the disk went away mid-write")
         return real_write(self, *args, **kwargs)
 
-    monkeypatch.setattr(type(note), "write_text", explode)
+    monkeypatch.setattr(type(note), "write_bytes", explode)
 
     with pytest.raises(OSError):
         vault.append_below_marker(note, entry("x", "call"))
@@ -233,12 +240,12 @@ def test_the_note_itself_is_never_opened_for_writing(vault, note, monkeypatch):
     only the scratch file is, and only a rename touches the note.
     """
     written: list[str] = []
-    real_write = type(note).write_text
+    real_text = type(note).write_text
     real_bytes = type(note).write_bytes
 
     def record_text(self, *args, **kwargs):
-        written.append(self.name)
-        return real_write(self, *args, **kwargs)
+        written.append(self.name + " (text mode!)")
+        return real_text(self, *args, **kwargs)
 
     def record_bytes(self, *args, **kwargs):
         written.append(self.name)
@@ -254,7 +261,7 @@ def test_the_note_itself_is_never_opened_for_writing(vault, note, monkeypatch):
 
 
 def test_a_failed_append_leaves_no_scratch_file_behind(vault, note, monkeypatch):
-    real_write = type(note).write_text
+    real_write = type(note).write_bytes
 
     def explode(self, *args, **kwargs):
         if self.name.endswith(".ranger-tmp"):
@@ -262,7 +269,7 @@ def test_a_failed_append_leaves_no_scratch_file_behind(vault, note, monkeypatch)
             raise OSError("nope")
         return real_write(self, *args, **kwargs)
 
-    monkeypatch.setattr(type(note), "write_text", explode)
+    monkeypatch.setattr(type(note), "write_bytes", explode)
 
     with pytest.raises(OSError):
         vault.append_below_marker(note, entry("x", "call"))

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+
 import pytest
 
 from ranger.vault import Vault, VaultError, VaultPathDenied, VaultWriteDenied
@@ -69,15 +71,46 @@ def test_log_folder_is_append_only(vault, config):
         vault.overwrite(target, "clobber", allow_overwrite=True)
 
 
-def test_symlink_out_of_ranger_folder_is_denied(vault, config, vault_root):
-    escape = config.vault.drafts / "escape"
+def _link_to(source, target) -> str:
+    """A directory link, by whatever mechanism this machine allows.
+
+    Windows needs developer mode or admin rights for a symlink, so this test
+    used to skip there -- on the only machine that matters, silently, which is
+    its own problem. A **junction** needs neither, resolves the same way for
+    `Path.resolve`, and is the thing an operator could actually create by
+    accident with `mklink /J`. So the escape is exercised everywhere.
+    """
     try:
-        escape.symlink_to(vault_root / "Accounts")
-    except (OSError, NotImplementedError) as exc:
-        # Windows needs developer mode or admin rights to make a symlink.
-        pytest.skip(f"symlinks not permitted here: {exc}")
+        source.symlink_to(target)
+        return "symlink"
+    except (OSError, NotImplementedError):
+        pass
+    if os.name != "nt":
+        raise
+    import subprocess
+
+    result = subprocess.run(
+        ["cmd", "/c", "mklink", "/J", str(source), str(target)],
+        capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        raise OSError(f"neither a symlink nor a junction could be made: {result.stderr}")
+    return "junction"
+
+
+def test_a_link_out_of_the_ranger_folder_is_denied(vault, config, vault_root):
+    """The escape that matters: a link inside a writable folder pointing at a
+    read-only one. Denied because the path is resolved before the boundary is
+    checked, not because links are special-cased."""
+    escape = config.vault.drafts / "escape"
+
+    kind = _link_to(escape, vault_root / "Accounts")
+
     with pytest.raises(VaultWriteDenied):
         vault.write_new(escape / "sneaky.md", "should never land")
+    assert not (vault_root / "Accounts" / "sneaky.md").exists(), (
+        f"the {kind} escape wrote into Accounts/"
+    )
 
 
 def test_vault_has_no_delete_or_rename(vault):

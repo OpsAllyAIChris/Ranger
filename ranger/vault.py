@@ -198,23 +198,35 @@ class Vault:
         is that a CRM export is never modified, and a promise worth making is
         worth checking rather than asserting.
 
+        **Binary from end to end, and that is not a style choice.** The design
+        is byte identity, so no step gets to reinterpret bytes. `write_text`
+        opens in text mode and on Windows rewrites every `\n` as `\r\n`, which
+        turns an existing `\r\n` into `\r\r\n`; `read_text` then folds that
+        back to `\n\n`, the hashes disagree, and the guard refuses a file that
+        was perfectly fine. Nine tests failed on Windows and none on Linux,
+        because Linux translates nothing and the suite therefore agreed with
+        itself and with nothing outside.
+
         The write is atomic: a new file is composed in full and moved over the
         old one, so an interrupted write leaves the original byte-identical
         rather than half of each. A partially rewritten account note is worse
         than a failed append, because it looks like a note.
         """
-        from .marker import MarkerError, digest, split
+        from .marker import MarkerError, as_bytes, digest, newline_of, split_bytes
 
         target = self.resolve_account(path)
         original = target.read_bytes()
-        try:
-            before, below = split(original.decode("utf-8"))
-        except UnicodeDecodeError as exc:
-            raise MarkerError(f"{target} is not UTF-8 text: {exc}") from exc
+        before, below = split_bytes(original)
 
         was = digest(before)
-        composed = before + below.rstrip("\n") + "\n" + text
-        after, _ = split(composed)
+        newline = newline_of(original)
+        composed = (
+            before
+            + below.rstrip(b"\r\n")
+            + newline
+            + as_bytes(text, newline)
+        )
+        after, _ = split_bytes(composed)
         if digest(after) != was:
             # Unreachable by construction, which is the point of checking: the
             # cost of being wrong here is a silently rewritten export.
@@ -225,9 +237,8 @@ class Vault:
 
         scratch = target.with_name(target.name + ".ranger-tmp")
         try:
-            scratch.write_text(composed, encoding="utf-8")
-            written = scratch.read_text(encoding="utf-8")
-            settled, _ = split(written)
+            scratch.write_bytes(composed)
+            settled, _ = split_bytes(scratch.read_bytes())
             if digest(settled) != was:
                 raise MarkerError(
                     f"append refused: {target.name} did not survive being written. "

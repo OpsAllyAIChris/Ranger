@@ -106,7 +106,7 @@ def test_a_hand_edited_comment_still_splits_in_the_same_place():
 
         assert above == EXPORT + "\n", f"split moved for: {variant[:40]!r}"
         assert below.startswith(TOKEN)
-        assert digest(above) == digest(EXPORT + "\n")
+        assert digest(above.encode("utf-8")) == digest((EXPORT + "\n").encode("utf-8"))
 
 
 def test_the_marker_travels_with_the_half_ranger_owns():
@@ -315,14 +315,14 @@ def test_an_unreadable_note_counts_as_holding_context(accounts, monkeypatch):
     cleared, and the cost of being wrong is a destroyed record."""
     migrate(None, accounts)
 
-    real = type(accounts).read_text
+    real = type(accounts).read_bytes
 
     def refuse(self, *args, **kwargs):
         if self.name == "Illes Foods.md":
             raise OSError("locked by another process")
         return real(self, *args, **kwargs)
 
-    monkeypatch.setattr(type(accounts), "read_text", refuse)
+    monkeypatch.setattr(type(accounts), "read_bytes", refuse)
 
     assert ("Illes Foods.md", -1) in notes_with_context(accounts)
     assert "unreadable" in rebuild_refusal(accounts)
