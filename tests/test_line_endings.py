@@ -198,3 +198,85 @@ def test_the_digest_refuses_text():
 
     with pytest.raises(TypeError):
         digest("abc")
+
+
+# -- the census, so the operator knows before rather than after -------------
+
+
+def test_each_style_is_counted(config):
+    from ranger.marker import survey_endings
+
+    account(config, "Illes", body_bytes("lf"))
+    account(config, "Rusty", body_bytes("crlf"))
+    account(config, "Gabriel", body_bytes("crlf"))
+    account(config, "Old Mac", body_bytes("cr"))
+    account(config, "Pegasus", MIXED)
+
+    census = survey_endings(config.vault.accounts)
+
+    assert census.counts == {"lf": 1, "crlf": 2, "cr": 1, "mixed": 1, "none": 0}
+    assert census.total == 5
+
+
+def test_a_mixed_note_is_named(config):
+    """A count is a number. A name is something to go and look at."""
+    from ranger.marker import survey_endings
+
+    account(config, "Illes", body_bytes("lf"))
+    account(config, "Pegasus Logistics", MIXED)
+
+    census = survey_endings(config.vault.accounts)
+
+    assert census.mixed == ["Pegasus Logistics.md"]
+    assert any("Pegasus Logistics.md" in line for line in census.lines())
+
+
+def test_a_note_with_no_line_endings_at_all_is_not_mixed(config):
+    from ranger.marker import survey_endings
+
+    account(config, "Terse", b"# Terse")
+
+    assert survey_endings(config.vault.accounts).counts["none"] == 1
+
+
+def test_the_style_is_counted_not_sniffed_from_the_first_line(config):
+    """A file whose first hundred lines are CRLF and whose last ten are LF is
+    mixed. Reading the first ending would call it CRLF and be wrong."""
+    from ranger.marker import ending_style
+
+    mostly_crlf = (b"a\r\n" * 100) + (b"b\n" * 10)
+
+    assert ending_style(mostly_crlf) == "mixed"
+
+
+def test_a_dry_run_reports_the_census_and_writes_nothing(config, capsys):
+    from ranger.cli import cmd_accounts_migrate
+
+    path = account(config, "Pegasus", MIXED)
+    before = path.read_bytes()
+
+    class Args:
+        dry_run = True
+
+    assert cmd_accounts_migrate(config, Args()) == 0
+
+    out = capsys.readouterr().out
+    assert "line endings" in out
+    assert "mixed" in out
+    assert "1 migrated" in out
+    assert path.read_bytes() == before, "a dry run wrote something"
+
+
+def test_a_real_run_does_not_print_the_census(config, capsys):
+    """It answers a question asked before migrating, not after."""
+    from ranger.cli import cmd_accounts_migrate
+
+    account(config, "Illes", body_bytes("crlf"))
+
+    class Args:
+        dry_run = False
+
+    cmd_accounts_migrate(config, Args())
+
+    assert "line endings" not in capsys.readouterr().out
+

@@ -174,6 +174,22 @@ ranger accounts migrate --dry-run    # says what would change
 ranger accounts migrate
 ```
 
+The dry run also reports the line endings already in the vault:
+
+```
+  dry run, nothing written
+  line endings: 1 LF, 2 CRLF, 1 CR, 1 mixed
+    mixed: Pegasus Logistics.md
+
+  5 migrated, 0 already marked
+```
+
+Ranger never converts what is already on disk, so this decides nothing — it is
+there because the vault came out of four separate CRM exports and nothing
+guarantees they agreed. **A mixed count above zero is worth a look before you
+migrate rather than after.** What Ranger appends matches whatever each note
+already uses, so a CRLF note does not grow LF-only lines.
+
 Idempotent. A second run finds a marker everywhere and changes nothing. A note
 that somehow has two markers is refused rather than repaired, because there is
 no way to know which one you meant.

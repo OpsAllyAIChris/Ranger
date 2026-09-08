@@ -258,6 +258,90 @@ def migrate(vault: Any, folder: Path, *, dry_run: bool = False) -> Migration:
     return report
 
 
+# -- what is actually in the vault ------------------------------------------
+
+
+#: The order they are reported in: the two ordinary answers, then the two worth
+#: looking at.
+STYLES = ("lf", "crlf", "cr", "mixed", "none")
+
+
+def ending_style(data: bytes) -> str:
+    """Which line endings this note uses, or "mixed" if it uses more than one.
+
+    Counted rather than sniffed from the first line. A file whose first hundred
+    lines are CRLF and whose last ten are LF is mixed, and mixed is the answer
+    worth seeing: the vault came out of four separate CRM exports and nothing
+    guarantees they agreed.
+    """
+    crlf = data.count(b"\r\n")
+    lone_cr = data.count(b"\r") - crlf
+    lone_lf = data.count(b"\n") - crlf
+
+    present = [
+        name
+        for name, found in (("crlf", crlf), ("cr", lone_cr), ("lf", lone_lf))
+        if found
+    ]
+    if not present:
+        return "none"
+    return present[0] if len(present) == 1 else "mixed"
+
+
+@dataclass
+class Endings:
+    """The census. What is being migrated, before it is migrated."""
+
+    counts: dict[str, int] = field(default_factory=dict)
+    #: Named, because a mixed note is the one the operator may want to look at.
+    mixed: list[str] = field(default_factory=list)
+    unreadable: list[str] = field(default_factory=list)
+
+    @property
+    def total(self) -> int:
+        return sum(self.counts.values())
+
+    def lines(self) -> list[str]:
+        """One line per style that actually occurs, plus the names worth seeing."""
+        out = [
+            f"{self.counts[name]} {name.upper() if name != 'mixed' else 'mixed'}"
+            for name in STYLES
+            if self.counts.get(name)
+        ]
+        rendered = [f"  line endings: {', '.join(out)}" if out else "  line endings: none"]
+        for name in self.mixed[:5]:
+            rendered.append(f"    mixed: {name}")
+        if len(self.mixed) > 5:
+            rendered.append(f"    ... and {len(self.mixed) - 5} more mixed")
+        for name in self.unreadable:
+            rendered.append(f"    unreadable: {name}")
+        return rendered
+
+
+def survey_endings(folder: Path) -> Endings:
+    """Every account note, by the line endings it uses.
+
+    Ranger never converts what is already on disk, so this changes nothing and
+    decides nothing. It is here because the operator asked what they were about
+    to migrate, and a mixed count above zero is worth knowing before rather
+    than after.
+    """
+    census = Endings(counts={name: 0 for name in STYLES})
+    for note in sorted(folder.rglob("*.md")):
+        if not note.is_file():
+            continue
+        try:
+            data = note.read_bytes()
+        except OSError:
+            census.unreadable.append(note.name)
+            continue
+        style = ending_style(data)
+        census.counts[style] += 1
+        if style == "mixed":
+            census.mixed.append(note.name)
+    return census
+
+
 # -- the rebuild guard ------------------------------------------------------
 
 

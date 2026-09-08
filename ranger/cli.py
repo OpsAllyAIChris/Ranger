@@ -1482,7 +1482,17 @@ def cmd_accounts_migrate(config: Config, args: Any) -> int:
     report = migrate(None, folder, dry_run=dry)
 
     if dry:
+        from .marker import survey_endings
+
         print(paint("  dry run, nothing written", DIM))
+        # What is about to be migrated, before it is. Ranger never converts
+        # what is already on disk, so this decides nothing -- but the vault
+        # came out of four separate CRM exports and a mixed count above zero
+        # is worth knowing beforehand rather than afterwards.
+        census = survey_endings(folder)
+        for line in census.lines():
+            print(paint(line, YELLOW) if "mixed" in line or "unreadable" in line else line)
+        print()
     print(f"  {len(report.migrated)} migrated, {len(report.already)} already marked")
     for name, why in report.refused:
         print(paint(f"  refused {name}: {why}", YELLOW))
