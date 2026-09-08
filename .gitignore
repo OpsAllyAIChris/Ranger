@@ -1,3 +1,6 @@
-# graphify: local-only artifacts (graphify-out/ itself is meant to be committed)
+# graphify: local-only artifacts.
+# graphify-out/ itself IS meant to be committed (graph.json, GRAPH_REPORT.md,
+# graph.html) so the team shares one map — only these local bits are excluded.
 graphify-out/cost.json
-graphify-out/.graphify_python
+graphify-out/cache/
+graphify-out/.graphify_*
