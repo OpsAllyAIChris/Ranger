@@ -13,6 +13,7 @@ Windows was really doing. **The refusal path matters more than the happy path**
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 import pytest
 
@@ -417,3 +418,158 @@ def test_a_microphone_check_that_errors_does_not_force_the_window(config):
         desktop.focus_window, micuse.may_arm = original_focus, original_may
 
     assert asked == [False]
+
+
+# -- the title and the matcher cannot drift ---------------------------------
+#
+# Renaming the assistant changed `<title>` and changed what `focus_window`
+# looked for, and surfacing still broke: nothing in the suite noticed, because
+# no test connected the page the server serves to the string the matcher uses.
+# A `not_found` that only appears in the audit log after a wake firing is a
+# silent regression with a long fuse.
+
+
+PAGE = Path(__file__).resolve().parent.parent / "ranger" / "web" / "index.html"
+
+
+def served_title() -> str:
+    import re
+
+    found = re.search(r"<title>(.*?)</title>", PAGE.read_text(encoding="utf-8"))
+    assert found, "the interface serves no <title> at all"
+    return found.group(1).strip()
+
+
+def test_the_matcher_looks_for_the_title_the_interface_actually_serves():
+    """The test that would have caught it, tying the two ends together."""
+    from ranger.desktop import matches, window_names
+
+    title = served_title()
+
+    assert matches(title), (
+        f"the page serves <title>{title}</title> and the matcher looks for "
+        f"{window_names()}, so surfacing cannot find its own window"
+    )
+
+
+def test_the_title_comes_from_the_naming_constant():
+    """Not a coincidence that happens to line up today."""
+    from ranger.naming import ASSISTANT
+
+    assert served_title() == ASSISTANT
+
+
+def test_the_previous_name_still_matches():
+    """Deliberate, not a leftover.
+
+    The window title comes from the page's `<title>`, which only changes when
+    the page is reloaded. A Chrome window that was already open when a rename
+    shipped keeps the old name until it is reopened -- which is exactly how
+    this broke. There is no other program on that machine called either.
+    """
+    from ranger.desktop import matches
+    from ranger.naming import PROJECT
+
+    assert matches(PROJECT)
+
+
+@pytest.mark.parametrize(
+    "title",
+    [
+        "Jarvis",
+        "Ranger",
+        "Jarvis - Google Chrome",
+        "Jarvis — Mozilla Firefox",
+        "jarvis",
+        "Jarvis (2)",
+    ],
+)
+def test_titles_chrome_might_actually_produce_are_matched(title):
+    """Substring and case-insensitive, because Chrome may append to the title
+    and an exact or `startswith` match is a rename away from breaking."""
+    from ranger.desktop import matches
+
+    assert matches(title)
+
+
+@pytest.mark.parametrize(
+    "title",
+    ["Microsoft Teams", "Outlook", "Untitled - Notepad", "localhost:8765/", ""],
+)
+def test_other_windows_are_not_matched(title):
+    from ranger.desktop import matches
+
+    assert not matches(title)
+
+
+def test_no_entry_point_hardcodes_a_title():
+    """All three read the same candidate list. A default of one cosmetic string
+    is what let a rename disable surfacing."""
+    import inspect
+
+    from ranger.desktop import focus_window, minimise_window, window_state
+
+    for function in (focus_window, minimise_window, window_state):
+        default = inspect.signature(function).parameters["title_starts_with"].default
+        assert default is None, f"{function.__name__} defaults to a fixed title"
+
+
+# -- the diagnostic ---------------------------------------------------------
+
+
+def test_the_report_says_what_it_is_looking_for():
+    """A `not_found` after a wake firing is too late and does not say what it
+    was looking at."""
+    from ranger.desktop import find_report
+    from ranger.naming import ASSISTANT, PROJECT
+
+    report = find_report()
+
+    assert report["looking_for"] == [ASSISTANT, PROJECT]
+    assert report["detail"]
+
+
+@pytest.mark.skipif(ON_WINDOWS, reason="there are real windows here")
+def test_off_windows_the_report_says_so_rather_than_failing():
+    from ranger.desktop import find_report
+
+    report = find_report()
+
+    assert report["windows"] is False
+    assert report["found"] is False
+    assert "not Windows" in report["detail"]
+
+
+@pytest.mark.skipif(not ON_WINDOWS, reason="needs real windows to enumerate")
+def test_on_windows_the_report_lists_what_is_open_when_nothing_matches():
+    """The thing that answers "what is it called now" without a Windows machine
+    on this end."""
+    from ranger.desktop import find_report
+
+    report = find_report("Definitely Not A Window " * 4)
+
+    assert report["windows"] is True
+    assert report["found"] is False
+    assert report["titles"], "nothing was reported, so the question stays open"
+
+
+def test_doctor_reports_the_window(config, capsys, monkeypatch):
+    """Before the microphone is ever armed."""
+    from ranger.cli import cmd_doctor
+
+    monkeypatch.setattr("ranger.desktop.on_windows", lambda: True)
+    monkeypatch.setattr(
+        "ranger.desktop.find_report",
+        lambda title=None: {
+            "windows": True, "found": False, "title": "", "titles": ["Microsoft Teams"],
+            "looking_for": ["Jarvis", "Ranger"], "detail": "",
+        },
+    )
+
+    cmd_doctor(config)
+    out = capsys.readouterr().out
+
+    assert "the interface window cannot be found" in out
+    assert "looking for: Jarvis, Ranger" in out
+    assert "Microsoft Teams" in out
+

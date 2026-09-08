@@ -160,7 +160,7 @@ class FocusResult:
         return f"{self.outcome}: {self.detail}"
 
 
-def focus_window(title_starts_with: str = "Jarvis", *, topmost: bool = False) -> FocusResult:
+def focus_window(title_starts_with: str | None = None, *, topmost: bool = False) -> FocusResult:
     """Bring Jarvis's window forward, and say which of three things happened.
 
     **Restoring and foregrounding are two different permissions**, which the
@@ -211,7 +211,7 @@ MINIMISED = "minimised"
 ALREADY = "already_minimised"
 
 
-def minimise_window(title_starts_with: str = "Jarvis") -> FocusResult:
+def minimise_window(title_starts_with: str | None = None) -> FocusResult:
     """Put Jarvis's window away. The other direction, and the easy one.
 
     `window.blur()` from the page does nothing in Chrome's app mode -- confirmed
@@ -251,7 +251,49 @@ def minimise_window(title_starts_with: str = "Jarvis") -> FocusResult:
         return FocusResult(FAILED, f"{type(exc).__name__}: {exc}")
 
 
-def window_state(title_starts_with: str = "Jarvis") -> dict[str, Any]:
+def find_report(title_starts_with: str | None = None) -> dict[str, Any]:
+    """Can the window be found, and **what title does Windows actually report**?
+
+    The diagnostic that was missing. Surfacing broke on a rename and the only
+    symptom was a `not_found` in the audit log after a wake firing, which is
+    both too late and does not say what it was looking at. `ranger doctor` calls
+    this, so the answer is available before the microphone is ever armed.
+
+    When nothing matches it returns every visible window title on the machine,
+    because the useful question then is "what is it called now", and guessing
+    at that from a repository with no Windows in it is how a day gets lost.
+    """
+    names = (title_starts_with,) if title_starts_with else window_names()
+    report: dict[str, Any] = {
+        "windows": False, "found": False, "title": "", "looking_for": list(names),
+        "titles": [], "detail": "",
+    }
+    if not on_windows():
+        report["detail"] = "not Windows, so there is no window to find"
+        return report
+
+    report["windows"] = True
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        user32 = ctypes.WinDLL("user32", use_last_error=True)
+        titles = [title for _, title in visible_windows(user32, ctypes, wintypes)]
+        for title in titles:
+            if matches(title, names):
+                report.update(found=True, title=title, detail=f"found: {title!r}")
+                return report
+        report["titles"] = titles
+        report["detail"] = (
+            f"no visible window carries any of {', '.join(names)}; "
+            f"{len(titles)} windows are open"
+        )
+    except Exception as exc:
+        report["detail"] = f"{type(exc).__name__}: {exc}"
+    return report
+
+
+def window_state(title_starts_with: str | None = None) -> dict[str, Any]:
     """What Windows will say about Jarvis's window, which is less than hoped.
 
     **There is still no reliable occlusion signal, and this says so rather than
@@ -324,15 +366,35 @@ def window_state(title_starts_with: str = "Jarvis") -> dict[str, Any]:
         return unknown
 
 
-def _find_window(user32, ctypes, wintypes, title_starts_with: str):
-    """The first visible top level window whose title starts with the name.
+#: Every name the window may be carrying. **Not one string, and not
+#: `startswith`.**
+#:
+#: Matching `startswith(ASSISTANT)` made a rename silently disable surfacing.
+#: The window title comes from the page's `<title>`, which only changes when
+#: the page is reloaded -- so a Chrome window that was already open when the
+#: rename shipped still says the old name, and will until it is reopened.
+#: Chrome may also append to the title, and a tab that has not finished loading
+#: shows the URL instead.
+#:
+#: So: substring, several candidates, and the old name kept deliberately rather
+#: than as a leftover. A window called Ranger is Jarvis's window; there is no
+#: other program on that machine called either.
+def window_names() -> tuple[str, ...]:
+    from .naming import ASSISTANT, PROJECT
+
+    return (ASSISTANT, PROJECT)
+
+
+def visible_windows(user32, ctypes, wintypes) -> list[tuple[int, str]]:
+    """Every visible top level window with a title. For matching and for
+    `ranger doctor`, which needs to show what is actually there.
 
     A minimised window is still `IsWindowVisible`: that flag is about WS_VISIBLE
     rather than about being on screen, which is the same distinction that makes
     the occlusion question hard.
     """
     enum_proc = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
-    found: list[int] = []
+    found: list[tuple[int, str]] = []
 
     def visit(handle, _param):
         if not user32.IsWindowVisible(handle):
@@ -342,13 +404,31 @@ def _find_window(user32, ctypes, wintypes, title_starts_with: str):
             return True
         buffer = ctypes.create_unicode_buffer(length + 1)
         user32.GetWindowTextW(handle, buffer, length + 1)
-        if buffer.value.startswith(title_starts_with):
-            found.append(handle)
-            return False
+        found.append((handle, buffer.value))
         return True
 
     user32.EnumWindows(enum_proc(visit), 0)
-    return found[0] if found else None
+    return found
+
+
+def matches(title: str, names: tuple[str, ...] = ()) -> bool:
+    """Is this title one of Jarvis's windows? Case-insensitively, anywhere in it."""
+    lowered = title.casefold()
+    return any(name.casefold() in lowered for name in (names or window_names()))
+
+
+def _find_window(user32, ctypes, wintypes, title_starts_with: str | None = None):
+    """The first visible window whose title carries one of Jarvis's names.
+
+    `title_starts_with` is kept as an override for the tests that deliberately
+    ask for a title nothing can have. When it is None the candidate list is
+    used, which is the path everything real takes.
+    """
+    names = (title_starts_with,) if title_starts_with else window_names()
+    for handle, title in visible_windows(user32, ctypes, wintypes):
+        if matches(title, names):
+            return handle
+    return None
 
 
 def _surface(user32, ctypes, wintypes, handle, *, topmost: bool = False) -> FocusResult:

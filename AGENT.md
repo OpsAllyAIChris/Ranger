@@ -416,6 +416,17 @@ counterexample survives because it is a single clause that is not the
 dismissal, so where it sits never comes into it; whole-utterance and substring
 variants fail seven and six tests respectively.
 
+**The window is found by substring against several names, never by one
+cosmetic string.** Renaming the assistant changed `<title>` and changed the
+matcher in the same commit, and surfacing broke anyway: `<title>` only takes
+effect on a reload, so a Chrome window open across the rename kept the old name
+and the new matcher found nothing. The candidate list holds both names on
+purpose, `ranger doctor` reports whether the window is findable and what title
+Windows actually reports, and a test ties the served `<title>` to the matcher
+so neither end can move alone. **Coupling a test could not see is the same
+class as the CRLF bug**: two things were changed correctly and the thing
+between them was not tested.
+
 **`focus_window` reports which of three things happened.** Restoring and
 foregrounding are two different permissions, which the first version conflated:
 `SW_RESTORE` is not gated by the foreground lock, while `SetForegroundWindow` is

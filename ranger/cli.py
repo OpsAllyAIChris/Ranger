@@ -318,6 +318,27 @@ def cmd_doctor(config: Config) -> int:
     elif _aliases is not None and _aliases.pairs:
         print(f"  ok       {len(_aliases.pairs)} accounts folded together by aliases.md")
 
+    # Surfacing broke on a rename and the only symptom was a not_found in the
+    # audit log after a wake firing. That is too late and does not say what it
+    # was looking at, so the answer is here, before the microphone is armed.
+    from .desktop import find_report, on_windows
+
+    if on_windows():
+        window = find_report()
+        if window["found"]:
+            print(f"  ok       the interface window is findable: {window['title']!r}")
+        else:
+            problems += 1
+            print("  problem  the interface window cannot be found, so the wake word")
+            print("           cannot bring it forward and cannot put it away")
+            print(f"           looking for: {', '.join(window['looking_for'])}")
+            for title in window["titles"][:12]:
+                print(f"             open: {title!r}")
+            if len(window["titles"]) > 12:
+                print(f"             ... and {len(window['titles']) - 12} more")
+    else:
+        print("  ok       window surfacing is a Windows feature and this is not Windows")
+
     if config.wake.enabled:
         from .wake import available, missing_models
 

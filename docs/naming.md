@@ -41,14 +41,34 @@ would leave the old tasks in place and running, so a logon would start the
 interface twice. That is a migration too, and a worse one, because it is
 invisible until something behaves oddly.
 
-## One coupling to keep in view
+## The coupling, and what happened to it
 
-`naming.ASSISTANT` is both the window title and what `desktop.focus_window`,
-`minimise_window` and `window_state` match window titles against. Change the
-title without changing them and surfacing silently stops finding the window —
-`focus_window` would return `not_found` and the wake word would stop bringing
-the window forward, with nothing failing loudly. They read the same constant
-for exactly that reason.
+`naming.ASSISTANT` is both the window title and one of the names
+`desktop.focus_window`, `minimise_window` and `window_state` look for. This was
+flagged as a risk when the rename shipped, and it broke anyway — **changing
+both ends together was not enough.**
+
+The window title comes from the page's `<title>`, and `<title>` only takes
+effect when the page is reloaded. A Chrome window that was already open when
+the rename shipped kept saying the old name, so the new matcher looked for
+`Jarvis` at a window still called `Ranger` and found nothing. The only symptom
+was `hands-free surface not_found` in the audit log after a wake firing.
+
+Three things now stop it recurring:
+
+1. **Substring, not `startswith`, and several candidate names.** The old name is
+   in the candidate list deliberately, not as a leftover: there is no other
+   program on that machine called either, and a window that has not been
+   reopened since a rename is still the window. Chrome may also append to the
+   title, and an exact match is one suffix away from breaking.
+2. **`ranger doctor` reports whether the window is findable and what title
+   Windows actually says.** A `not_found` that only appears after a wake firing
+   is too late, and it does not answer the one useful question, which is what
+   the window is called now. When nothing matches, doctor lists every visible
+   window title.
+3. **A test ties the served `<title>` to the matcher.** Renaming the title alone
+   fails two tests; renaming the constant alone fails seven. Neither end can
+   move without the other noticing.
 
 ## If the rest is ever renamed
 
