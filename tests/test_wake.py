@@ -325,3 +325,121 @@ def test_disarming_forgets_everything_it_had_buffered():
     hotword.disarm()
     assert hotword.state is State.OFF
     assert hotword._captured == []
+
+
+# -- the check fails closed ------------------------------------------------
+
+
+def test_a_check_that_cannot_run_refuses_rather_than_allows():
+    """The whole mitigation for a wake word firing during a customer call.
+
+    A check that cannot run has found nothing, not found nobody. The operator's
+    words: they would rather it never work than work while they are on a call.
+    """
+    from ranger.micuse import Unreadable, may_arm
+
+    def broken():
+        raise Unreadable("the key is not there")
+
+    verdict = may_arm(broken)
+    assert not verdict.allowed
+    assert verdict.unreadable
+    assert "could not run" in verdict.reason
+
+
+def test_it_refuses_where_there_is_no_registry_to_read_at_all():
+    from ranger.micuse import may_arm
+
+    verdict = may_arm()
+    assert not verdict.allowed, "no consent store means nothing is known"
+    assert "not Windows" in verdict.reason
+
+
+def test_an_empty_store_is_a_real_answer_and_a_missing_one_is_not():
+    from ranger.micuse import Unreadable, consumers, may_arm
+
+    assert may_arm(lambda: []).allowed, "opened, nothing in use"
+    with pytest.raises(Unreadable):
+        consumers()
+
+
+def test_hands_free_will_not_arm_when_the_check_failed():
+    from ranger.micuse import Unreadable, may_arm
+
+    def broken():
+        raise Unreadable("winreg is not available")
+
+    hotword = Hotword(detector=Detector(), check_microphone=lambda: may_arm(broken))
+    ok, why = hotword.arm()
+    assert not ok
+    assert "could not run" in why
+    assert not hotword.armed
+
+
+# -- the periodic check ----------------------------------------------------
+
+
+def test_a_call_starting_while_armed_disarms_without_waiting_for_a_fire():
+    """Arming and then joining a call must not leave the microphone held for
+    the whole call because the phrase happened never to fire."""
+    from ranger.handsfree import Listener
+
+    busy = [False]
+    hotword = Hotword(
+        detector=Detector(),
+        now=clock(),
+        check_microphone=lambda: Verdict(not busy[0], ("chrome.exe",) if busy[0] else ()),
+    )
+    assert hotword.arm()[0]
+
+    fires: list[Fire] = []
+    states: list[State] = []
+
+    def frames():
+        for index in range(200):
+            if index == 5:
+                busy[0] = True
+            yield SILENCE
+
+    listener = Listener(
+        hotword=hotword,
+        frames=frames,
+        on_utterance=lambda audio: None,
+        on_fire=fires.append,
+        on_state=states.append,
+        check_seconds=0.0,   # every frame, so the test does not sleep
+    )
+    listener._run()
+
+    assert not hotword.armed
+    assert State.OFF in states
+    assert fires and fires[-1].outcome is Outcome.BLOCKED
+    assert "chrome.exe" in fires[-1].blockers[0]
+
+
+def test_a_microphone_check_that_starts_erroring_also_disarms():
+    from ranger.handsfree import Listener
+
+    calls = [0]
+
+    def check():
+        calls[0] += 1
+        if calls[0] > 2:
+            raise RuntimeError("the registry went away")
+        return Verdict(True)
+
+    hotword = Hotword(detector=Detector(), now=clock(), check_microphone=check)
+    hotword.arm()
+
+    fires: list[Fire] = []
+    listener = Listener(
+        hotword=hotword,
+        frames=lambda: iter([SILENCE] * 50),
+        on_utterance=lambda audio: None,
+        on_fire=fires.append,
+        check_seconds=0.0,
+    )
+    listener._run()
+
+    assert not hotword.armed
+    assert fires and "stopped working" in fires[-1].blockers[0]

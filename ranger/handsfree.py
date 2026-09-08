@@ -67,16 +67,55 @@ class Listener:
     def running(self) -> bool:
         return self._thread is not None and self._thread.is_alive()
 
+    def _still_allowed(self) -> bool:
+        """Has anything else taken the microphone since we armed?"""
+        check = self.hotword.check_microphone
+        if check is None:
+            return True
+        try:
+            verdict = check()
+        except Exception as exc:  # a check that errors is a check that failed
+            self.hotword.disarm(f"the microphone check stopped working: {exc}")
+            self._announce(f"the microphone check stopped working: {exc}")
+            return False
+        if verdict.allowed:
+            return True
+        self.hotword.disarm(verdict.reason)
+        self._announce(verdict.reason)
+        return False
+
+    def _announce(self, why: str) -> None:
+        from .wake import Fire, Outcome
+
+        if self.on_state is not None:
+            self.on_state(State.OFF)
+        # Reported as a firing outcome so it lands in the audit log with
+        # everything else, which is where the operator counts these.
+        self.on_fire(Fire(0.0, Outcome.BLOCKED, 0.0, blockers=(why,)))
+
     def _run(self) -> None:
+        import time as clock
+
         from .wake import rms
 
         last_state = self.hotword.state
+        next_check = clock.monotonic() + self.check_seconds
         try:
             for frame in self.frames():
                 if self._stop is not None and self._stop.is_set():
                     break
                 if not self.hotword.armed:
                     break
+
+                # Asked on a timer, not only when the phrase fires. Arming and
+                # then joining a call would otherwise leave Ranger holding the
+                # microphone for the whole call, because the check at fire time
+                # only runs if something fires.
+                now = clock.monotonic()
+                if now >= next_check:
+                    next_check = now + self.check_seconds
+                    if not self._still_allowed():
+                        break
 
                 utterance, fire = self.hotword.feed(frame)
 

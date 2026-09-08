@@ -41,6 +41,15 @@ CONSENT_STORE = (
 OURS = ("python.exe", "pythonw.exe", "ranger.exe")
 
 
+class Unreadable(Exception):
+    """The consent store could not be read, so nothing is known.
+
+    Deliberately not the same as "nothing is using the microphone". This check
+    is the whole mitigation for a wake word firing during a customer call, and
+    a check that cannot run has found nothing rather than found nobody.
+    """
+
+
 @dataclass(frozen=True)
 class Consumer:
     """One application, and whether it has the microphone open right now."""
@@ -68,14 +77,23 @@ def on_windows() -> bool:
 
 
 def _read_registry() -> Iterable[tuple[str, bool, int]]:
-    """(name, packaged, stop_time) for every application in the consent store."""
-    import winreg
+    """(name, packaged, stop_time) for every application in the consent store.
 
+    Raises `Unreadable` if neither hive could be opened. An empty store is a
+    real answer; a store that will not open is not.
+    """
+    try:
+        import winreg
+    except ImportError as exc:  # not Windows, or a stripped build
+        raise Unreadable(f"winreg is not available: {exc}") from exc
+
+    opened = 0
     for root in (winreg.HKEY_CURRENT_USER, winreg.HKEY_LOCAL_MACHINE):
         try:
             store = winreg.OpenKey(root, CONSENT_STORE)
         except OSError:
             continue
+        opened += 1
         with store:
             index = 0
             while True:
@@ -90,6 +108,12 @@ def _read_registry() -> Iterable[tuple[str, bool, int]]:
                     stop = _stop_time(store, name)
                     if stop is not None:
                         yield (name, True, stop)
+
+    if not opened:
+        raise Unreadable(
+            f"neither HKCU nor HKLM has {CONSENT_STORE}, so which applications "
+            "are using the microphone cannot be known"
+        )
 
 
 def _read_group(store, group: str, *, packaged: bool):
@@ -124,8 +148,17 @@ def _stop_time(parent, name: str) -> int | None:
 
 
 def consumers(read: Callable[[], Iterable[tuple[str, bool, int]]] | None = None) -> list[Consumer]:
-    """Every application the consent store knows about, and its current state."""
-    reader = read or (_read_registry if on_windows() else lambda: ())
+    """Every application the consent store knows about, and its current state.
+
+    Raises `Unreadable` rather than returning an empty list when there is no
+    way to find out. On anything that is not Windows there is no store at all,
+    which is also not knowing.
+    """
+    if read is None and not on_windows():
+        raise Unreadable(
+            "the microphone check reads a Windows registry key, and this is not Windows"
+        )
+    reader = read or _read_registry
     found: list[Consumer] = []
     for name, packaged, stop in reader():
         found.append(Consumer(name=name, packaged=packaged, in_use=stop == 0))
@@ -154,9 +187,17 @@ class Verdict:
 
     allowed: bool
     blockers: tuple[str, ...] = ()
+    #: The check could not run. Refused for a different reason from "somebody
+    #: else has the microphone", and worth saying differently.
+    unreadable: str = ""
 
     @property
     def reason(self) -> str:
+        if self.unreadable:
+            return (
+                f"the microphone check could not run ({self.unreadable}), and hands free "
+                "does not arm without it"
+            )
         if self.allowed:
             return "nothing else is using the microphone"
         return "the microphone is in use by " + ", ".join(self.blockers)
@@ -166,16 +207,20 @@ def may_arm(
     read: Callable[[], Iterable[tuple[str, bool, int]]] | None = None,
     *,
     ignore: tuple[str, ...] = (),
-    require_windows: bool = True,
 ) -> Verdict:
-    """The check, in the form the caller wants it.
+    """The check, and it fails closed.
 
-    On anything that is not Windows there is no consent store to read, so this
-    reports allowed and says so. That is honest rather than convenient: the
-    operator's machine is Windows, and pretending to have checked on a platform
-    where nothing was checked would be worse than saying nothing was.
+    A check that cannot run has found nothing, not found nobody. This is the
+    entire mitigation for a wake word firing during a customer call and
+    transcribing the customer, so being unable to perform it refuses rather
+    than allows. The operator's words: they would rather it never work than
+    work while they are on a call.
+
+    That means hands free does not arm on anything that is not Windows, since
+    there is no consent store to read. Correct rather than convenient.
     """
-    if require_windows and not on_windows() and read is None:
-        return Verdict(True)
-    blockers = others_using(read, ignore=ignore)
+    try:
+        blockers = others_using(read, ignore=ignore)
+    except Unreadable as exc:
+        return Verdict(False, (), unreadable=str(exc))
     return Verdict(not blockers, tuple(blockers))
