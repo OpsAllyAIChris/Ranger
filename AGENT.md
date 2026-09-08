@@ -804,6 +804,16 @@ unreadable store when first written, which was fail-open on exactly the
 condition the feature was accepted under. It also means hands free does not arm
 on anything that is not Windows, because there is no store to read there.
 
+**One browser looks like every other browser, and that once deadlocked it.**
+Windows records microphone use per executable, so every Chrome window and
+profile shares one entry: Ranger's own interface and a Teams call in a tab are
+the same row, and excluding one is not available. The interface used to open
+its microphone on the first click and hold it for the life of the page, an
+optimisation to stop the recording indicator flickering, which meant Chrome was
+listed as in use permanently and hands free refused to arm for Ranger's own
+idle stream. The stream is released the moment recording stops and arming puts
+it down explicitly first. The check was never weakened to fix it.
+
 **An empty store counts as not knowing.** On a real machine the consent store
 always has entries, so zero of them means the enumeration is looking in the
 wrong place, and accepting that would be a check that silently always says yes.

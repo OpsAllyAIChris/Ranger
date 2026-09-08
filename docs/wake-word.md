@@ -80,6 +80,23 @@ says so. A check that cannot run has found nothing, not found nobody. That also
 means hands free does not work on anything but Windows, because there is no
 consent store to read anywhere else.
 
+**One Chrome looks like every other Chrome.** Windows records microphone use
+per executable, so every window and every profile of a browser shares one
+entry. Ranger's own interface and a Teams call in a tab are the same row, and
+there is no way to exclude one without excluding the other.
+
+That does not weaken the check, but it did once deadlock it. The interface used
+to open its microphone on the first click and hold it for the life of the page,
+so Chrome was listed as in use permanently and hands free refused to arm for
+Ranger's own idle stream. The stream is now released the moment recording
+stops, and arming puts it down explicitly before asking. The cost is a few
+hundred milliseconds of device startup per utterance and the recording
+indicator appearing and disappearing as it should.
+
+So while hands free is armed, Python holds the microphone and the browser holds
+nothing. Clicking the mic button while armed says so rather than taking it
+back.
+
 **Check that it works before trusting it.**
 
 ```powershell

@@ -20,6 +20,9 @@ const SOCKET_URL =
 /** Kept short. The card is the record; this is only so a click feels answered. */
 const TOAST_MS = 2600;
 
+/** How long Windows takes to record that a microphone stream has been let go. */
+const RELEASE_SETTLE_MS = 700;
+
 export function createShell(orb) {
   const el = {
     status: $('status'),
@@ -305,6 +308,12 @@ export function createShell(orb) {
 
   async function startListening() {
     if (listening || !voiceReady || openToken) return;
+    if (handsFree.armed) {
+      // Python has the microphone while armed. Two consumers would both work
+      // on Windows and neither would be what the operator meant.
+      toast('hands free is on. Turn it off to hold the button instead');
+      return;
+    }
     ensureAudio();
     // Unlocked from inside the click that started this, or the browser will
     // refuse to play the reply and nothing will say why.
@@ -407,7 +416,7 @@ export function createShell(orb) {
     }
   }
 
-  function armHandsFree() {
+  async function armHandsFree() {
     if (!handsFree.offered) return;
     if (!handsFree.ready) {
       toast(handsFree.reason || 'hands free is not installed');
@@ -417,6 +426,19 @@ export function createShell(orb) {
     // to a hands free turn cannot be played.
     ensureAudio();
     speaker.unlock().catch(() => {});
+
+    // Put the browser's microphone down before asking Python for it. Windows
+    // records microphone use per application and cannot tell one Chrome from
+    // another, so a stream this page is still holding reads as "somebody else
+    // has the microphone" and hands free refuses to arm for itself.
+    if (listening) await stopListening(true);
+    microphone.release();
+    el.micHint.textContent = 'starting hands free';
+
+    // Windows writes the release promptly, but not instantly. Waiting is
+    // honest; retrying until it passes would be a way of not taking no for an
+    // answer, and no is the answer that matters here.
+    await new Promise((resolve) => setTimeout(resolve, RELEASE_SETTLE_MS));
     send({ type: 'arm' });
   }
 
@@ -494,6 +516,7 @@ export function createShell(orb) {
       }
       case 'hands_free':
         drawHandsFree(event);
+        if (!event.armed) el.micHint.textContent = 'hold space to talk';
         break;
       case 'wake_fire':
         // Every firing, including the discarded ones. It is in the audit log

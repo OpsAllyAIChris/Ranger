@@ -297,6 +297,27 @@ def cmd_doctor(config: Config) -> int:
         print("  todo     tts.voice_id is not set. Run 'ranger voices', then put the id in")
         print(f"           {_local_config_path(config)}, which is git-ignored and survives a pull.")
 
+    from .aliases import AliasFile as _AliasFile
+
+    try:
+        _scans, _ = __import__("ranger.accounts", fromlist=["scan_all"]).scan_all(
+            Vault(config.vault), config.vault.accounts, config.accounts.exclude_files
+        )
+        _aliases = _AliasFile(Vault(config.vault), config.vault.ranger).load(
+            [s.name for s in _scans]
+        )
+    except Exception:
+        _aliases = None
+
+    if _aliases is not None and _aliases.stale:
+        problems += len(_aliases.stale)
+        for problem in _aliases.stale:
+            # Loud, because the symptom of ignoring it is an account quietly
+            # splitting back into two after a CRM refresh.
+            print(f"  problem  stale alias: {problem}")
+    elif _aliases is not None and _aliases.pairs:
+        print(f"  ok       {len(_aliases.pairs)} accounts folded together by aliases.md")
+
     if config.wake.enabled:
         from .wake import available
 
@@ -1167,6 +1188,85 @@ def cmd_schedule(config: Config, args: Any) -> int:
     return 0
 
 
+def cmd_alias(config: Config, args: Any) -> int:
+    """Accounts the CRM exports twice, folded into one at read time."""
+    from .accounts import scan_all
+    from .aliases import AliasFile, suggest
+
+    paint = _colour(sys.stdout.isatty())
+    vault = Vault(config.vault)
+    scans, _ = scan_all(vault, config.vault.accounts, config.accounts.exclude_files)
+    names = [scan.name for scan in scans]
+    store = AliasFile(vault, config.vault.ranger)
+    action = getattr(args, "alias_command", None) or "show"
+
+    if action == "suggest":
+        current = store.load()
+        mapped = {a.variant.casefold() for a in current.pairs} | {
+            a.canonical.casefold() for a in current.pairs
+        }
+        found = [
+            s for s in suggest(names)
+            if s.left.casefold() not in mapped and s.right.casefold() not in mapped
+        ]
+        if not found:
+            print(paint("  nothing looks like the same account written twice.", DIM))
+            return 0
+
+        print(paint(f"{len(found)} pairs that might be one account", BOLD))
+        print(paint("  Ranger never merges these. Pick the name to keep and run:", DIM))
+        print(paint("    ranger alias add \"<other name>\" \"<name to keep>\"", DIM))
+        print()
+        for item in found:
+            print(f"  {item.describe()}")
+        return 0
+
+    if action in {"add", "remove"}:
+        variant = " ".join(args.variant).strip()
+        if action == "remove":
+            print(
+                paint(f"  {variant} is a separate account again.", TEAL)
+                if store.remove(variant)
+                else paint(f"  {variant} was not mapped to anything.", DIM)
+            )
+            return 0
+
+        canonical = " ".join(args.canonical).strip()
+        if not variant or not canonical:
+            print("usage: ranger alias add \"<other name>\" \"<name to keep>\"", file=sys.stderr)
+            return 2
+        if canonical.casefold() not in {n.casefold() for n in names}:
+            print(paint(f"  {canonical!r} is not an account in the vault.", RED), file=sys.stderr)
+            return 1
+        if variant.casefold() == canonical.casefold():
+            print(paint("  those are the same name.", YELLOW), file=sys.stderr)
+            return 1
+
+        if store.add(variant, canonical):
+            print(paint(f"  {variant} now reads as {canonical}.", TEAL))
+            print(paint("  Their activity is added together, so this account may move up", DIM))
+            print(paint("  the morning brief. That is the point of it.", DIM))
+        else:
+            print(paint(f"  {variant} is already mapped.", DIM))
+        print(paint(f"  {store.path}, hand-editable", DIM))
+        return 0
+
+    aliases = store.load(names)
+    if aliases.empty and not aliases.stale:
+        print(paint("  nothing is folded together.", DIM))
+        print(paint("  'ranger alias suggest' looks for accounts exported twice.", DIM))
+        return 0
+
+    if aliases.pairs:
+        print(paint(f"{len(aliases.pairs)} folded into one account at read time", BOLD))
+        for alias in sorted(aliases.pairs, key=lambda a: a.canonical.lower()):
+            print(f"  {alias.variant}  ->  {alias.canonical}")
+    for problem in aliases.stale:
+        print(paint(f"  stale: {problem}", YELLOW))
+    print(paint(f"  {store.path}", DIM))
+    return 0
+
+
 def cmd_mic(config: Config, args: Any) -> int:
     """What the microphone check sees. The way to confirm it works at all.
 
@@ -1716,6 +1816,16 @@ def main(argv: list[str] | None = None) -> int:
                 help="run through pythonw so no console window appears",
             )
 
+    alias = sub.add_parser("alias", help="accounts the CRM exports under two names")
+    alias_sub = alias.add_subparsers(dest="alias_command")
+    alias_sub.add_parser("show", help="what is folded together, and anything stale")
+    alias_sub.add_parser("suggest", help="pairs that look like one account. Never merges")
+    add = alias_sub.add_parser("add", help="fold one name into another")
+    add.add_argument("variant", nargs="+", help="the name to fold in")
+    add.add_argument("canonical", nargs="+", help="the name to keep")
+    drop = alias_sub.add_parser("remove", help="stop folding a name in")
+    drop.add_argument("variant", nargs="+", help="the name to separate again")
+
     sub.add_parser(
         "mic", help="what the microphone check sees, and whether hands free could arm"
     )
@@ -1776,6 +1886,8 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_keyterms(config, args)
     if args.command == "schedule":
         return cmd_schedule(config, args)
+    if args.command == "alias":
+        return cmd_alias(config, args)
     if args.command == "mic":
         return cmd_mic(config, args)
     if args.command == "dormant":

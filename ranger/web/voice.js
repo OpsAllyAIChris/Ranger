@@ -46,9 +46,21 @@ function pickFormat() {
 }
 
 /**
- * The microphone. One stream, kept open between utterances so the browser does
- * not show its recording indicator flickering on and off, and so the second
- * utterance does not pay for permission and device startup again.
+ * The microphone. **Released the moment it is not recording.**
+ *
+ * It used to be held open between utterances, to stop the browser's recording
+ * indicator flickering and to avoid paying for device startup twice. That was
+ * wrong for a reason nothing in the browser could show: Windows records
+ * microphone use per application, and an open stream means Chrome is listed as
+ * using the microphone from the first click until the page closes.
+ *
+ * Hands free refuses to arm while another application holds the microphone,
+ * and Chrome cannot be told apart from Chrome, so Ranger's own idle stream
+ * blocked Ranger's own wake word. Deadlock, from an optimisation.
+ *
+ * The cost of releasing is real and small: a few hundred milliseconds of
+ * device startup on each utterance, and the indicator appearing and
+ * disappearing as it should.
  */
 export function createMicrophone({ onLevel, onError } = {}) {
   let stream = null;
@@ -89,6 +101,7 @@ export function createMicrophone({ onLevel, onError } = {}) {
       // A latch that was forgotten. Stopping is better than a recording nobody
       // meant to make, and the caller finds out because stop() resolves.
       if (recorder && recorder.state === 'recording') recorder.stop();
+      else release();
     }, MAX_SECONDS * 1000);
   }
 
@@ -109,6 +122,10 @@ export function createMicrophone({ onLevel, onError } = {}) {
       recorder.onstop = () => {
         const blob = new Blob(chunks, { type });
         chunks = [];
+        // Released here, not left for later. While this stream is open,
+        // Windows lists Chrome as using the microphone, and that is what
+        // hands free reads.
+        release();
         if (seconds < MIN_SECONDS || blob.size < 512) {
           resolve(null);
           return;
@@ -119,8 +136,7 @@ export function createMicrophone({ onLevel, onError } = {}) {
     });
   }
 
-  function close() {
-    clearTimeout(stopTimer);
+  function release() {
     if (meter) { meter.stop(); meter = null; }
     if (stream) {
       for (const track of stream.getTracks()) track.stop();
@@ -129,10 +145,17 @@ export function createMicrophone({ onLevel, onError } = {}) {
     recorder = null;
   }
 
+  function close() {
+    clearTimeout(stopTimer);
+    release();
+  }
+
   return {
     start,
     stop,
     close,
+    release,
+    get held() { return stream !== null; },
     get recording() { return Boolean(recorder && recorder.state === 'recording'); },
   };
 }

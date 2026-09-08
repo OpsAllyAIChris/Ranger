@@ -210,6 +210,68 @@ def scan_opportunities(text: str) -> tuple[str, ...]:
     return tuple(stages)
 
 
+def merge_notes(name: str, notes: list["AccountNote"]) -> "AccountNote":
+    """Several exported notes read as the one account they are.
+
+    The CRM exports some accounts under more than one name, so recall would
+    otherwise answer from half an account's history and sound confident about
+    it. `aliases.md` says which names belong together; this puts them back.
+
+    Metadata takes the canonical note's value and fills gaps from the others,
+    because the canonical export is the one the operator considers real.
+    Sections are concatenated with a heading each, since a Pain points section
+    in one file and another in the second are both true. Activities are merged
+    and re-sorted newest first, which is the only field where getting the order
+    wrong would change an answer.
+    """
+    if not notes:
+        return AccountNote(name=name)
+    if len(notes) == 1:
+        return notes[0]
+
+    ordered = sorted(notes, key=lambda n: (n.name.casefold() != name.casefold(), n.name))
+    primary = ordered[0]
+
+    metadata: dict[str, str] = {}
+    for note in ordered:
+        for label, value in note.metadata.items():
+            if value and not metadata.get(label):
+                metadata[label] = value
+
+    sections: dict[str, str] = {}
+    for title in dict.fromkeys(t for note in ordered for t in note.sections):
+        parts = [
+            (note.sections.get(title) or "").strip()
+            for note in ordered
+            if (note.sections.get(title) or "").strip()
+        ]
+        if len(parts) == 1:
+            sections[title] = parts[0]
+        else:
+            sections[title] = "\n\n".join(
+                f"From {note.name}:\n{(note.sections.get(title) or '').strip()}"
+                for note in ordered
+                if (note.sections.get(title) or "").strip()
+            )
+
+    activities = tuple(
+        sorted(
+            (activity for note in ordered for activity in note.activities),
+            key=lambda a: a.date,
+            reverse=True,
+        )
+    )
+
+    return AccountNote(
+        name=name,
+        path=primary.path,
+        metadata=metadata,
+        sections=sections,
+        activities=activities,
+        size=sum(note.size for note in ordered),
+    )
+
+
 def opportunity_shapes(text: str) -> list[tuple[tuple[str, ...], tuple[tuple[str, str], ...]]]:
     """The shape of every opportunity in a note, for the survey.
 

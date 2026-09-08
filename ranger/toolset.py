@@ -15,6 +15,7 @@ from .accounts import (
     NoteScan,
     parse_note,
     quiet_report,
+    merge_notes,
     render_digest,
     resolve_account,
     scan_all,
@@ -35,6 +36,45 @@ def _account_files(config: Config, vault: Vault) -> list[Any]:
         for item in vault.list_markdown(config.vault.accounts)
         if item.path.name.lower() not in excluded
     ]
+
+
+def _aliases(config: Config, vault: Vault, names: list[str]):
+    """The alias map, checked against the accounts that actually exist."""
+    from .aliases import AliasFile
+
+    return AliasFile(vault, config.vault.ranger).load(names)
+
+
+def _resolve(query: str, names: list[str], aliases):
+    """Resolve a spoken name, then fold it onto its canonical account.
+
+    Two steps rather than one: the fuzzy matcher still does the work, and the
+    alias map only decides which of two real notes the answer belongs to. That
+    keeps "BWI Compny" working, which a straight lookup in the map would not.
+    """
+    from .accounts import resolve_account
+
+    resolution = resolve_account(query, names)
+    if not resolution.found:
+        return resolution
+
+    canonical = aliases.canonical_for(resolution.match)
+    if canonical == resolution.match or canonical not in names:
+        return resolution
+    from dataclasses import replace
+
+    return replace(resolution, match=canonical)
+
+
+def _notes_for(account: str, files, aliases) -> list:
+    """Every note belonging to one account: the canonical one and its variants.
+
+    This is the half that was easy to miss. Folding the scans makes the morning
+    brief right; folding the *reads* is what makes an answer right, because an
+    account split across two files was answering from half its own history.
+    """
+    wanted = {account.casefold(), *(v.casefold() for v in aliases.variants_of(account))}
+    return [item for item in files if item.path.stem.casefold() in wanted]
 
 
 def _ambiguous_result(query: str, candidates: tuple[str, ...]) -> ToolResult:
@@ -60,7 +100,8 @@ def _account_recall(config: Config, vault: Vault) -> Tool:
 
         files = _account_files(config, vault)
         names = [item.path.stem for item in files]
-        resolution = resolve_account(query, names)
+        aliases = _aliases(config, vault, names)
+        resolution = _resolve(query, names, aliases)
 
         if resolution.ambiguous:
             return _ambiguous_result(query, resolution.candidates)
@@ -74,9 +115,13 @@ def _account_recall(config: Config, vault: Vault) -> Tool:
                 summary="no match",
             )
 
+        parts = _notes_for(resolution.match, files, aliases)
         item = next(f for f in files if f.path.stem == resolution.match)
-        text = vault.read_text(item.path)
-        note = parse_note(text, resolution.match, item.path)
+        notes = [
+            parse_note(vault.read_text(f.path), f.path.stem, f.path) for f in parts
+        ] or [parse_note(vault.read_text(item.path), resolution.match, item.path)]
+
+        note = merge_notes(resolution.match, notes) if len(notes) > 1 else notes[0]
 
         detail = bool(payload.get("detail"))
         digest = render_digest(
@@ -90,15 +135,29 @@ def _account_recall(config: Config, vault: Vault) -> Tool:
         # An account note holds pasted customer email and vendor text. It is
         # data, and it is fenced as data.
         findings = scan(digest)
-        body = fence(item.relative, digest, findings=findings)
+        label = item.relative if len(notes) == 1 else (
+            f"{len(notes)} notes for {resolution.match}"
+        )
+        body = fence(label, digest, findings=findings)
+        folded = (
+            ""
+            if len(notes) == 1
+            else (
+                f"\n\nThis account is exported under {len(notes)} names and they are read "
+                "together. Answer as one account."
+            )
+        )
         note_of_size = (
             f"\n\nThis is a digest of a {note.size} character note, not the note itself. "
             "Answer in a sentence or two and offer detail if the operator wants it."
         )
         return ToolResult(
             ok=True,
-            content=body + note_of_size,
-            summary=f"{resolution.match} ({resolution.how} match, {len(note.activities)} activities)",
+            content=body + folded + note_of_size,
+            summary=(
+                f"{resolution.match} ({resolution.how} match, {len(note.activities)} activities"
+                + (f", {len(notes)} notes)" if len(notes) > 1 else ")")
+            ),
         )
 
     return Tool(
@@ -140,8 +199,9 @@ def _draft_and_hold(config: Config, vault: Vault) -> Tool:
 
         account = str(payload.get("account", "")).strip() or None
         if account:
-            names = [item.path.stem for item in _account_files(config, vault)]
-            resolution = resolve_account(account, names)
+            files = _account_files(config, vault)
+            names = [item.path.stem for item in files]
+            resolution = _resolve(account, names, _aliases(config, vault, names))
             if resolution.ambiguous:
                 return _ambiguous_result(account, resolution.candidates)
             if resolution.found:
@@ -213,6 +273,12 @@ def _what_went_quiet(config: Config, vault: Vault, today: Callable[[], date]) ->
         scans, unreadable = scan_all(
             vault, config.vault.accounts, config.accounts.exclude_files
         )
+        # One account per real account, with the halves added together. An
+        # account worked last week under one name is not quiet because the
+        # other name has been silent for a year.
+        from .aliases import fold
+
+        scans = fold(scans, _aliases(config, vault, [s.name for s in scans]))
 
         if not full:
             from dataclasses import replace as _replace

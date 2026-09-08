@@ -213,7 +213,15 @@ class Verdict:
             )
         if self.allowed:
             return "nothing else is using the microphone"
-        return "the microphone is in use by " + ", ".join(self.blockers)
+        said = "the microphone is in use by " + ", ".join(self.blockers)
+        if any(name.lower() in BROWSERS for name in self.blockers):
+            # The commonest confusing case: Ranger's own window counts, because
+            # Windows cannot say which window of a browser is using it.
+            said += (
+                ". A browser is recorded per program rather than per window, so this "
+                "is a call, or Ranger's own interface still holding it"
+            )
+        return said
 
 
 def describe(read: Callable[[], Iterable[tuple[str, bool, int]]] | None = None) -> list[str]:
@@ -243,7 +251,25 @@ def describe(read: Callable[[], Iterable[tuple[str, bool, int]]] | None = None) 
         ]
     else:
         lines.append("none of them is using it right now")
+
+    browsers = [c for c in live if c.name.lower() in BROWSERS]
+    if browsers:
+        lines.append("")
+        lines.append(
+            "Windows records this per program, not per window, so "
+            + ", ".join(sorted(c.name for c in browsers))
+            + " could be a call or could be Ranger's own interface. It is treated as"
+        )
+        lines.append("somebody else either way, which is why hands free refuses.")
     return lines
+
+
+#: Recorded per executable, so every window and every profile of one of these
+#: shares a single entry. Named here because that is the whole limitation of
+#: this check, and it should be visible rather than remembered.
+BROWSERS = frozenset(
+    {"chrome.exe", "msedge.exe", "firefox.exe", "brave.exe", "opera.exe", "chromium.exe"}
+)
 
 
 def may_arm(

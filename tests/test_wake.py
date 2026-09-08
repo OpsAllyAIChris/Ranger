@@ -501,3 +501,67 @@ def test_a_microphone_check_that_starts_erroring_also_disarms():
 
     assert not hotword.armed
     assert fires and "stopped working" in fires[-1].blockers[0]
+
+
+# -- Ranger blocking itself ------------------------------------------------
+
+
+def test_a_browser_cannot_be_told_apart_from_itself_and_the_check_says_so():
+    """The consent store keys non-packaged apps by executable path.
+
+    Every Chrome window and every Chrome profile shares one entry, so Ranger's
+    own interface and a browser Teams call are the same row. Excluding "our"
+    Chrome is not available, and the check says which of the two it might be
+    rather than leaving the operator to wonder.
+    """
+    from ranger.micuse import describe, may_arm
+
+    store = lambda: [("chrome.exe", False, 0), ("Zoom.exe", False, 99)]  # noqa: E731
+    reason = may_arm(store).reason
+    assert not may_arm(store).allowed
+    assert "per program rather than per window" in reason
+
+    shown = "\n".join(describe(store))
+    assert "could be a call or could be Ranger's own interface" in shown
+
+
+def test_the_browser_releases_the_microphone_the_moment_it_stops_recording():
+    """The deadlock, and its cause.
+
+    getUserMedia was opened once and held for the life of the page, so Chrome
+    was listed as using the microphone from the first click onwards. Hands free
+    refuses while another application holds it, and cannot tell one Chrome from
+    another, so Ranger's own idle stream blocked Ranger's own wake word.
+    """
+    from pathlib import Path
+
+    source = Path(__import__("ranger").__path__[0], "web", "voice.js").read_text(
+        encoding="utf-8"
+    )
+    stop_block = source.split("recorder.onstop = () => {")[1].split("recorder.stop();")[0]
+    assert "release();" in stop_block, "the stream has to be let go when recording ends"
+    assert "function release()" in source
+    assert "kept open between utterances" not in source
+
+
+def test_arming_puts_the_browsers_microphone_down_first():
+    from pathlib import Path
+
+    shell = Path(__import__("ranger").__path__[0], "web", "shell.js").read_text(
+        encoding="utf-8"
+    )
+    arming = shell.split("async function armHandsFree()")[1].split("\n  }")[0]
+    assert "microphone.release()" in arming
+    assert "RELEASE_SETTLE_MS" in arming, "Windows records the release promptly, not instantly"
+    # And it must not retry until the answer changes.
+    assert "while" not in arming
+
+
+def test_the_click_path_stands_down_while_python_owns_the_microphone():
+    from pathlib import Path
+
+    shell = Path(__import__("ranger").__path__[0], "web", "shell.js").read_text(
+        encoding="utf-8"
+    )
+    listening = shell.split("async function startListening()")[1].split("\n  }")[0]
+    assert "handsFree.armed" in listening
