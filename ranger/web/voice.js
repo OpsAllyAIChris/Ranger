@@ -196,6 +196,8 @@ function createMeter(stream, onLevel) {
  * started when it happens to arrive.
  */
 export function createSpeaker({ onLevel, onDone } = {}) {
+  //: The highest chunk index handed to the graph, reported when it drains.
+  let lastQueued = -1;
   let context = null;
   let analyser = null;
   let playhead = 0;
@@ -240,7 +242,7 @@ export function createSpeaker({ onLevel, onDone } = {}) {
    * container, and the same bytes play perfectly through PortAudio because
    * that path is told the rate separately.
    */
-  async function play(bytes, format) {
+  async function play(bytes, format, index) {
     const audio = ensure();
     // Autoplay policy: a context created before any click starts suspended,
     // and a resume inside the click that started this is what unlocks it.
@@ -260,6 +262,7 @@ export function createSpeaker({ onLevel, onDone } = {}) {
 
     playing += 1;
     sources.push(source);
+    if (typeof index === 'number') lastQueued = Math.max(lastQueued, index);
     watch();
     source.onended = () => {
       playing -= 1;
@@ -267,13 +270,18 @@ export function createSpeaker({ onLevel, onDone } = {}) {
       if (playing <= 0) {
         watching = false;
         if (onLevel) onLevel(0);
-        if (onDone) onDone();
+        // The index matters, not just the fact of draining. Sentences are sent
+        // as they are produced, so this queue empties several times in one
+        // reply; whoever is listening has to be able to tell "stopped talking
+        // for now" from "stopped talking".
+        if (onDone) onDone(lastQueued);
       }
     };
   }
 
   /** Barge-in. Everything queued stops now and the playhead is reset. */
   function stop() {
+    lastQueued = -1;
     for (const source of sources) {
       try { source.stop(); } catch (e) { /* already ended */ }
     }

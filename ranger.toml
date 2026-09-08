@@ -178,6 +178,30 @@ preroll_seconds = 1.5
 idle_disarm_minutes = 15.0
 # How often to ask Windows whether another application took the microphone.
 mic_check_seconds = 5.0
+#
+# Conversation mode. After Ranger replies to a wake word turn it keeps
+# listening for a follow-up, so the phrase does not have to be said again.
+#
+# Seconds to *start* speaking, measured from when Ranger stops talking rather
+# than from when the turn completes: sentences are spoken as they are produced,
+# so those are not the same moment and anchoring on the wrong one spends the
+# window while Ranger is still mid-answer. Once speech starts, the ordinary
+# utterance rules take over and this is no longer a ceiling.
+conversation_seconds = 8.0
+# Windows per firing of the wake word. The budget refills when the phrase is
+# said and on nothing else: resetting it after a quiet period would mean a room
+# with a fan refills it forever, and the cap would not be a cap.
+#
+# Three is a first week guess. Every open and close is written to the audit log
+# with a reason, so `ranger log` after a week is how this gets set with data:
+# a pile of `timer` means the window is too eager, a pile of `cap` means it is
+# too mean.
+conversation_reopens = 3
+# Refuse to open the window when the interface is not on screen. The window is
+# an open microphone whose only indication is an orange banner, so a minimised
+# window means nothing is indicating anything. Set this false once the window
+# can bring itself to the front on a firing.
+conversation_requires_visible = true
 
 [brief]
 # Tier 5. A morning brief has a size, not a threshold.

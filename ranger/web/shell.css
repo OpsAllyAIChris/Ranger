@@ -56,6 +56,12 @@
   --ink-faint: rgba(255, 255, 255, 0.4);
 
   --ease: cubic-bezier(0.16, 1, 0.3, 1);
+  /* The one exception, and it is a token so that it is still a decision made
+   * once. A countdown must not ease: the ring is telling the operator how much
+   * of an open microphone is left, and a curve on that is a ring that lies
+   * about the time remaining. */
+  --drain: linear;
+  --drain-steps: steps(8, end);
   --ui: 'Inter', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
   --mono: 'JetBrains Mono', ui-monospace, 'Cascadia Mono', Consolas, monospace;
 
@@ -669,4 +675,45 @@ body.hands-free #panel { top: calc(var(--header) + 30px); }
 @media (prefers-reduced-motion: reduce) {
   .card-body, #status, #mic .ring { animation: none !important; }
   .entry { animation-duration: 1ms; }
+}
+
+/* The conversation window.
+ *
+ * Not a third colour. Orange means one thing -- the microphone is live -- and
+ * a third hue would mean learning three. The ring says the second thing, which
+ * is that this one stops on its own, and how much of it is left. */
+#window-ring {
+  width: 18px;
+  height: 18px;
+  flex: 0 0 auto;
+  transform: rotate(-90deg);
+}
+#window-ring circle {
+  fill: none;
+  stroke-width: 3;
+}
+#window-ring .track {
+  stroke: color-mix(in srgb, var(--live) 25%, transparent);
+}
+#window-ring .drain {
+  stroke: var(--live);
+  stroke-linecap: round;
+  /* 2 * pi * r, so the dash is the whole circumference and the offset is how
+   * much of it has been spent. */
+  stroke-dasharray: 56.5;
+  stroke-dashoffset: 0;
+}
+#window-ring.draining .drain {
+  animation: window-drain var(--window-seconds, 8s) var(--drain) forwards;
+}
+@keyframes window-drain {
+  from { stroke-dashoffset: 0; }
+  to { stroke-dashoffset: 56.5; }
+}
+@media (prefers-reduced-motion: reduce) {
+  /* The ring is information, not decoration, so it still drains -- in steps,
+   * which reads as a countdown rather than as motion. */
+  #window-ring.draining .drain {
+    animation-timing-function: var(--drain-steps);
+  }
 }

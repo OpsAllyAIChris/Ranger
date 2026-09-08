@@ -195,6 +195,51 @@ the browser does not touch it. While armed, the level the orb follows for input
 arrives over the socket instead of being measured in the page. Playback
 amplitude is unchanged and still measured where the sound comes out.
 
+## Conversation mode
+
+After Ranger replies to a wake word turn it keeps listening, so a follow-up does
+not need the phrase again. The banner gains a **draining ring** showing how much
+of the window is left, and the text changes to say the phrase is not needed.
+
+Three settings, in `ranger.toml` and overridable in `ranger.local.toml`:
+
+| setting | default | what it is |
+| --- | --- | --- |
+| `conversation_seconds` | 8.0 | seconds to *start* speaking. Once speech starts the ordinary utterance rules take over |
+| `conversation_reopens` | 3 | windows per firing of the phrase. **0 turns conversation mode off** |
+| `conversation_requires_visible` | true | refuse to open while the interface is off screen |
+
+The window closes on: the timer running out, an utterance that transcribes to
+nothing, a real follow-up (the next turn opens the next window), a confirmation
+card, typing or clicking, another application taking the microphone, disarming,
+the page going off screen, and the budget running out. A card and the keyboard
+are **hard** closes: they spend the budget, so the phrase is needed again.
+
+**The budget refills when the phrase is said and at no other time.** Not after a
+quiet period — that would mean a room with a fan refills it forever.
+
+**A spoken "yes" is never an answer to a confirmation card.** It cannot reach
+the gate, which takes a token and a click; and a card opening closes the window
+so the question does not arise.
+
+### Tuning the cap with data
+
+Three is a first-week guess. Every open and close is in the audit log with a
+reason, so `ranger log` after a week is how it gets set:
+
+```
+window opened          8s, 2 of 3
+window closed timer
+window closed spoke    what about Illes Foods
+window closed cap
+```
+
+A pile of `timer` means the window is opening when nothing was going to be said
+— shorten it, or lower the cap. A pile of `cap` means real conversations are
+being cut off — raise it. A pile of `silent` means the room is noisy enough to
+be triggering captures, which is a microphone placement problem rather than a
+setting.
+
 ## What turns it off
 
 - Clicking the banner, or the hands free control in the header.

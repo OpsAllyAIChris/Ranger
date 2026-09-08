@@ -352,6 +352,10 @@ class Fire:
     confidence: float
     seconds: float = 0.0
     blockers: tuple[str, ...] = ()
+    #: Captured inside a conversation window rather than after the phrase. The
+    #: caller needs to know: there is no phrase on the front to strip, and it
+    #: must not refill the reopen budget.
+    follow_up: bool = False
 
     def describe(self, phrase: str) -> str:
         """The audit line. Counting these over a week is the point."""
@@ -454,6 +458,11 @@ class Hotword:
     _armed_at: float = 0.0
     _last_interaction: float = 0.0
     _spoke: bool = False
+    _follow_up: bool = False
+    #: The grace period in force right now. A firing gets `grace_seconds`; a
+    #: conversation window gets its own, which is longer, and setting the field
+    #: itself would leak that into every later firing.
+    _grace: float = 0.0
 
     def __post_init__(self) -> None:
         self._ring = Ring(frames=max(1, int(self.preroll_seconds * SAMPLE_RATE / FRAME_SAMPLES)))
@@ -527,7 +536,7 @@ class Hotword:
                 self._spoke = True
                 self._last_voice = moment
                 return None, None
-            if moment - self._fired_at > self.grace_seconds:
+            if moment - self._fired_at > (self._grace or self.grace_seconds):
                 return None, self._finish(Outcome.NO_SPEECH, moment)
             return None, None
 
@@ -540,6 +549,37 @@ class Hotword:
         if moment - self._fired_at > self.max_seconds:
             return self._utterance(), self._finish(Outcome.TOO_LONG, moment)
         return None, None
+
+    def listen(self, grace_seconds: float | None = None) -> bool:
+        """Wait for speech without the phrase. Conversation mode's one hook.
+
+        The same WAITING state a firing produces, entered deliberately instead
+        of by a detection, so a follow-up gets the pre-roll, the silence rule
+        and the ceiling without any of that being written twice. False if it is
+        not armed or is already busy with an utterance.
+
+        The microphone is re-checked here for the same reason it is re-checked
+        on a firing: a call that started while the window was opening is
+        exactly the case a check at arming time misses.
+        """
+        if self.state is not State.ARMED:
+            return False
+
+        verdict = self._verdict()
+        if verdict is not None and not verdict.allowed:
+            self.disarm("something else took the microphone")
+            return False
+
+        self.state = State.WAITING
+        self._fired_at = self.now()
+        self._confidence = 0.0
+        self._spoke = False
+        self._follow_up = True
+        self._last_voice = self._fired_at
+        self._grace = self.grace_seconds if grace_seconds is None else grace_seconds
+        self._captured = [self._ring.drain()]
+        self.touch()
+        return True
 
     def _fired(self, score: float, moment: float) -> Fire | None:
         """The phrase was heard. Check the microphone again before recording.
@@ -557,6 +597,8 @@ class Hotword:
         self._fired_at = moment
         self._confidence = score
         self._spoke = False
+        self._follow_up = False
+        self._grace = self.grace_seconds
         self._last_voice = moment
         # The pre-roll becomes the front of the utterance, so the phrase and
         # anything said straight after it are both already captured.
@@ -574,7 +616,8 @@ class Hotword:
         self._ring.clear()
         self.detector.reset()
         self.touch()
-        return Fire(self._fired_at, outcome, self._confidence, seconds)
+        follow_up, self._follow_up = self._follow_up, False
+        return Fire(self._fired_at, outcome, self._confidence, seconds, follow_up=follow_up)
 
 
 # -- the microphone loop ----------------------------------------------------

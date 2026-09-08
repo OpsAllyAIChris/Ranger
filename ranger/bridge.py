@@ -35,6 +35,12 @@ DISMISS = "dismiss"
 STOP = "stop"
 ARM = "arm"
 DISARM = "disarm"
+#: The browser's speaker queue drained, having played up to `index`. Half of
+#: the conversation window's anchor; the other half is the turn completing.
+SPOKEN = "spoken"
+#: The page became visible or hidden. The window will not open behind a
+#: minimised window, because the only sign the microphone is live is on it.
+VISIBLE = "visible"
 
 #: How many tool calls the panel remembers. Enough to see what just happened,
 #: not a second audit log: the real one is in the vault and is append only.
@@ -59,12 +65,44 @@ class Session:
     #: into per session and never persisted on, so there is no path where a
     #: restart comes back listening.
     listener: Any = None
+    #: Conversation mode. Created when hands free arms and thrown away when it
+    #: disarms: there is no window without a hotword to refill its budget.
+    window: Any = None
     _turn: asyncio.Task | None = None
+    _window_timer: asyncio.TimerHandle | None = None
+
+    def __post_init__(self) -> None:
+        """Put the card gate's outbound messages through `watch`.
+
+        Done here rather than at assembly so the guarantee does not depend on
+        how the session was built. A card opening must close the conversation
+        window whether this session came from `build_session`, from a test, or
+        from whatever calls it next.
+        """
+        gate = getattr(self.agent, "gate", None)
+        if isinstance(gate, SocketGate):
+            gate.emit = self.watch
 
     # -- outbound ------------------------------------------------------
 
     def emit(self, kind: str, **fields: Any) -> None:
         self.send({"kind": kind, **fields})
+
+    def watch(self, payload: dict[str, Any]) -> None:
+        """Everything the gate emits passes through here on its way out.
+
+        A card opening closes the conversation window and spends the budget.
+        Not because a spoken yes could ever reach the gate -- it cannot, the
+        gate takes a token and a click and nothing else -- but because a window
+        held open under a card is an open microphone next to a decision, and a
+        follow-up arriving with no phrase in front of it reads exactly like an
+        answer. The safest version of that temptation is one that never occurs.
+        """
+        if payload.get("kind") == "confirm_open":
+            from .conversation import Why
+
+            self._close_window(Why.GATED, "a confirmation card opened")
+        self.send(payload)
 
     def hello(self) -> None:
         """What the front end needs before it can render anything."""
@@ -124,6 +162,10 @@ class Session:
             return self._arm()
         if kind == DISARM:
             return self._disarm()
+        if kind == SPOKEN:
+            return self._played(message)
+        if kind == VISIBLE:
+            return self._visibility(message)
         if kind == STOP:
             if not self.stop():
                 self.emit("error", message="nothing was running")
@@ -135,6 +177,12 @@ class Session:
         if not text:
             self.emit("error", message="an empty turn has nothing to answer")
             return
+
+        # Typing is a different way of answering, so the microphone stops
+        # waiting. A hard close: the budget is spent rather than carried.
+        from .conversation import Why
+
+        self._close_window(Why.TYPED, "answered at the keyboard")
 
         if self.busy:
             if not bool(message.get("interrupt", False)):
@@ -269,8 +317,8 @@ class Session:
 
         loop = asyncio.get_running_loop()
 
-        def utterance(pcm: bytes) -> None:
-            loop.call_soon_threadsafe(self._heard_hands_free, pcm)
+        def utterance(pcm: bytes, follow_up: bool = False) -> None:
+            loop.call_soon_threadsafe(self._heard_hands_free, pcm, follow_up)
 
         def fired(fire) -> None:
             loop.call_soon_threadsafe(self._log_fire, fire)
@@ -282,6 +330,13 @@ class Session:
 
         def level(value: float) -> None:
             loop.call_soon_threadsafe(lambda: self.emit("level", value=round(value, 3)))
+
+        from .conversation import build_window
+
+        self.window = build_window(
+            self.agent.config,
+            check_microphone=lambda: may_arm(ignore=("chrome.exe",)).allowed,
+        )
 
         self.listener = Listener(
             hotword=hotword,
@@ -300,16 +355,31 @@ class Session:
         if self.listener is None:
             self.emit("error", message="hands free is not on")
             return
+        from .conversation import Why as WindowWhy
+
+        self._close_window(WindowWhy.DISARMED, why)
+        self.window = None
+        self._cancel_window_timer()
         self.listener.hotword.disarm(why)
         self.listener.stop()
         self.listener = None
         self._log_wake("disarmed", why)
         self.emit("hands_free", **self._hands_free_state())
+        self._emit_window()
 
-    def _heard_hands_free(self, pcm: bytes) -> None:
-        """An utterance captured by the hotword, taken as a turn."""
+    def _heard_hands_free(self, pcm: bytes, follow_up: bool = False) -> None:
+        """An utterance captured by the hotword, taken as a turn.
+
+        `follow_up` means it came from a conversation window rather than from
+        the phrase: there is nothing on the front to strip, and it must not
+        refill the reopen budget.
+        """
         from .listen import Utterance
         from .wake import wav_of
+
+        if not follow_up:
+            self._woke()
+        self._cancel_window_timer()
 
         if self.busy:
             self.stop("interrupted")
@@ -317,8 +387,17 @@ class Session:
         self._turn = asyncio.create_task(
             self._run_audio(Utterance(audio=wav_of(pcm), mime="audio/wav",
                                       seconds=round(len(pcm) / 2 / 16000, 2)),
-                            strip=self.agent.config.wake.phrase)
+                            strip="" if follow_up else self.agent.config.wake.phrase)
         )
+
+    def _woke(self) -> None:
+        """The phrase fired. The only thing that refills the reopen budget.
+
+        Not elapsed time. A budget that refilled after a quiet period would not
+        be a budget: a room with a fan would refill it forever.
+        """
+        if self.window is not None:
+            self.window.woke()
 
     def _log_fire(self, fire) -> None:
         """Every firing, including the discarded ones.
@@ -348,6 +427,114 @@ class Session:
             audit.write(f"hands-free {kind}", detail, origin=self.agent.origin)
         except Exception:
             pass
+
+    # -- conversation mode ---------------------------------------------
+    #
+    # The window that stays open after Ranger stops talking. All of it lives
+    # here, in the caller: nothing about it reaches Ranger.turn(), which does
+    # not know whether the words it was handed came from a keyboard, a phrase
+    # or a follow-up, and should not.
+
+    def _played(self, message: dict[str, Any]) -> None:
+        """The browser's speaker queue drained.
+
+        This arrives several times in an ordinary reply, because sentences are
+        spoken as they are produced and the queue empties whenever the model is
+        slower than the voice. It is half an anchor, never a trigger.
+        """
+        if self.window is None:
+            return
+        try:
+            index = int(message.get("index", -1))
+        except (TypeError, ValueError):
+            return
+        self.window.played(index)
+        self._maybe_open()
+
+    def _visibility(self, message: dict[str, Any]) -> None:
+        if self.window is None:
+            return
+        self.window.sees(bool(message.get("visible", True)))
+        self._flush_window("the interface went off screen")
+
+    def _maybe_open(self) -> None:
+        """Open the window if the turn is done and the speaking has stopped."""
+        if self.window is None or self.listener is None:
+            return
+        opened, why = self.window.opens(self._clock())
+        if why == "not ready":
+            return
+        self._flush_window(why)
+        if opened:
+            if not self.listener.hotword.listen(self.window.seconds):
+                # The hotword refused: it is not armed, or the microphone check
+                # failed inside it. Either way there is nothing to listen with.
+                from .conversation import Why
+
+                self.window.close(Why.MIC_CHECK, "the hotword would not listen")
+                self._flush_window("")
+                self._emit_window()
+                return
+            self._arm_window_timer()
+        self._emit_window()
+
+    def _close_window(self, why, detail: str = "") -> None:
+        if self.window is None:
+            return
+        if self.window.close(why, detail):
+            self._cancel_window_timer()
+            self._flush_window(detail)
+            self._emit_window()
+
+    def _emit_window(self) -> None:
+        """What the interface draws the draining ring from."""
+        window = self.window
+        if window is None:
+            self.emit("window", open=False, seconds=0.0, used=0, of=0)
+            return
+        self.emit(
+            "window",
+            open=window.open,
+            seconds=window.seconds,
+            used=window.used,
+            of=window.reopens,
+        )
+
+    def _arm_window_timer(self) -> None:
+        """One timer for the whole window, cancelled by whatever closes it."""
+        self._cancel_window_timer()
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        self._window_timer = loop.call_later(
+            self.agent.config.wake.conversation_seconds, self._window_expired
+        )
+
+    def _cancel_window_timer(self) -> None:
+        if self._window_timer is not None:
+            self._window_timer.cancel()
+            self._window_timer = None
+
+    def _window_expired(self) -> None:
+        self._window_timer = None
+        if self.window is None or not self.window.open:
+            return
+        why = self.window.tick(self._clock())
+        if why is not None:
+            self._flush_window("")
+            self._emit_window()
+            if why.value == "mic_check":
+                self._disarm("another application took the microphone")
+
+    def _clock(self) -> float:
+        import time
+
+        return time.monotonic()
+
+    def _flush_window(self, detail: str) -> None:
+        for kind, note in self.window.drain() if self.window else []:
+            self._log_wake(f"window {kind}", note or detail)
 
     def _decide(self, message: dict[str, Any]) -> None:
         """A click on a confirmation card.
@@ -385,6 +572,8 @@ class Session:
 
         speaking = SentenceStream() if self.speaker is not None else None
         spoken = 0
+        if self.window is not None:
+            self.window.begin()
 
         try:
             async for event in self.agent.turn(text):
@@ -415,6 +604,11 @@ class Session:
         self.emit("state", state=State.IDLE.value)
         self.push_panel()
         self.emit("done")
+        if self.window is not None:
+            # Half the anchor. The other half is the browser saying it has
+            # stopped talking, which may already have arrived or may not.
+            self.window.finished()
+            self._maybe_open()
 
     async def _speak(self, sentence: str, index: int) -> None:
         """One sentence of audio, sent as soon as it exists.
@@ -435,6 +629,8 @@ class Session:
             self.emit("notice", level="warn", message=f"could not speak that: {exc}")
             return
         if audio:
+            if self.window is not None:
+                self.window.sent(index)
             self.emit(
                 "speech",
                 index=index,
@@ -521,6 +717,8 @@ def build_session(
     def emit(payload: dict[str, Any]) -> None:
         send(payload)
 
+    # Session.__post_init__ redirects a card gate's emit through Session.watch,
+    # so this one is only what the gate uses before the session exists.
     agent = build_agent(config, gate=gate or SocketGate(emit), origin=origin)
     transcriber, speaker, hinted = build_voice(config)
     return Session(

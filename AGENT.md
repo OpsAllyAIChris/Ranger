@@ -873,6 +873,60 @@ worked. The models install inside the openWakeWord package rather than next to
 the vault, because its preprocessor finds the feature models by a hardcoded
 path — so rebuilding the venv loses them and the install has to be run again.
 
+## Conversation mode
+
+After a wake word turn, the microphone stays open for a follow-up so the phrase
+does not have to be said again. Eight seconds, three windows per firing, and
+every open and close in the audit log with a reason.
+
+**It lives in the caller. Amendment A.** `ranger/conversation.py` is a state
+machine with no clock, no socket and no core; `bridge.py` feeds it events.
+Nothing about the window reaches `Ranger.turn()`, which does not know whether
+the words it was handed came from a keyboard, a click, a phrase or a follow-up,
+and must not start knowing.
+
+**The anchor is the end of playback, not the end of the turn, and both halves
+are required.** Sentences are spoken as they are produced, so the browser's
+speaker queue empties several times in one reply. Opening on the browser's
+"stopped talking" alone opens a window per drain; opening on the turn alone
+opens it while Ranger is still speaking and the eight seconds are gone before
+they can be used. So the browser reports *which chunk index* it drained on, and
+the window opens only when the turn is complete and the last chunk sent is the
+last chunk played, with a latch making that at most once per turn. **A test
+that uses a single-chunk reply proves none of this and will pass forever**;
+every anchor test in `tests/test_conversation.py` uses three.
+
+**The reopen budget refills on the phrase and on nothing else.** Not on elapsed
+time: a budget that refilled after a quiet period would be refilled forever by
+a room with a fan, and the cap would not be a cap.
+
+**A spoken yes is never consent, and conversation mode makes that harder.** A
+follow-up arrives with no phrase in front of it and reads exactly like
+continuation, so a card opening is a *hard close* — the window shuts and the
+budget is spent. Not because a transcript could reach the gate, which takes a
+token and a click and nothing else, but because an open microphone beside a
+pending decision is the wrong shape. `Session.__post_init__` redirects a
+`SocketGate`'s emit through `Session.watch`, so that holds however the session
+was assembled rather than depending on `build_session`.
+
+**Silence and noise both close it.** Eight seconds with nothing said closes it;
+an utterance that transcribes to nothing closes it too, which is what stops a
+fan holding the microphone open through the whole budget.
+
+**The microphone check runs on open as well as on the poll**, because a call
+that started four seconds ago would otherwise not be seen for another one, and
+a check that errors counts as taken.
+
+**It will not open behind a window nobody can see.** The only sign the
+microphone is live is an orange banner, so `wake.conversation_requires_visible`
+refuses to open while the page is hidden. Set it false once the window can
+bring itself to the front.
+
+**A draining ring, not a third colour.** Orange means one thing, the microphone
+is live, and a third hue would mean learning three. The ring is the only thing
+in the stylesheet not on `var(--ease)`: it uses `var(--drain)`, which is
+`linear`, because a countdown that eases lies about the time remaining.
+
 ## Tier 7d: voice in the browser
 
 The microphone and the loudspeaker are in the browser. Two reasons, and the

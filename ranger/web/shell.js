@@ -41,6 +41,7 @@ export function createShell(orb) {
     handsFreeLabel: $('handsfree-label'),
     banner: $('live-banner'),
     bannerText: $('live-banner-text'),
+    windowRing: $('window-ring'),
     bannerStop: $('live-banner-stop'),
   };
 
@@ -303,6 +304,12 @@ export function createShell(orb) {
     });
     speaker = createSpeaker({
       onLevel: (level) => { if (!listening && orb) orb.setVoiceBright(level); },
+      // Half of the conversation window's anchor. The server has the other
+      // half, the turn completing, and opens the window only when the chunk
+      // played is the last chunk sent. Reporting the index rather than the
+      // bare event is what stops a reply that drains three times opening
+      // three windows.
+      onDone: (index) => send({ type: 'spoken', index }),
     });
   }
 
@@ -416,6 +423,35 @@ export function createShell(orb) {
     }
   }
 
+  /** The conversation window: still listening, and for how much longer.
+   *
+   * The banner already says the microphone is open. This says the second
+   * thing, which is that this particular opening was not asked for by name and
+   * will close by itself. Restarting the animation means removing the class
+   * and forcing a reflow; without that a second window reuses the finished
+   * animation and the ring sits empty while the microphone is live.
+   */
+  function drawWindow(state) {
+    const ring = el.windowRing;
+    if (!ring) return;
+    if (!state.open) {
+      ring.hidden = true;
+      ring.classList.remove('draining');
+      if (handsFree.armed) {
+        el.bannerText.textContent =
+          'microphone open, listening for "' + handsFree.phrase + '"';
+      }
+      return;
+    }
+    ring.hidden = false;
+    ring.classList.remove('draining');
+    void ring.getBoundingClientRect();
+    ring.style.setProperty('--window-seconds', state.seconds + 's');
+    ring.classList.add('draining');
+    el.bannerText.textContent =
+      'still listening, no need to say the phrase (' + state.used + ' of ' + state.of + ')';
+  }
+
   async function armHandsFree() {
     if (!handsFree.offered) return;
     if (!handsFree.ready) {
@@ -451,6 +487,10 @@ export function createShell(orb) {
     drawHandsFree({ armed: false });
     return true;
   }
+
+  document.addEventListener('visibilitychange', () => {
+    send({ type: 'visible', visible: document.visibilityState === 'visible' });
+  });
 
   el.handsFree.onclick = () => {
     if (handsFree.armed) killHandsFree();
@@ -518,6 +558,9 @@ export function createShell(orb) {
         drawHandsFree(event);
         if (!event.armed) el.micHint.textContent = 'hold space to talk';
         break;
+      case 'window':
+        drawWindow(event);
+        break;
       case 'wake_fire':
         // Every firing, including the discarded ones. It is in the audit log
         // either way; this is so the operator sees it happen.
@@ -531,7 +574,7 @@ export function createShell(orb) {
         break;
       case 'speech':
         if (speaker) {
-          speaker.play(fromBase64(event.audio), event.format).catch((err) => {
+          speaker.play(fromBase64(event.audio), event.format, event.index).catch((err) => {
             toast('could not play that: ' + err);
             console.error('playback failed', event.format, err);
           });

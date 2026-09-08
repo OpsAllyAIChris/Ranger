@@ -209,7 +209,15 @@ def test_every_transition_uses_the_one_easing_curve():
         stripped = line.strip()
         if not re.match(r"^(transition|animation)(-timing-function)?\s*:", stripped):
             continue
-        assert "var(--ease)" in stripped, f"not on the shared easing: {stripped}"
+        # --drain and --drain-steps are the one exception, and they are tokens
+        # so this is still a decision made once rather than a curve invented at
+        # the call site. A countdown must not ease: the ring says how much of
+        # an open microphone is left, and a curve on that is a ring that lies
+        # about the time remaining.
+        assert any(
+            token in stripped
+            for token in ("var(--ease)", "var(--drain)", "var(--drain-steps)")
+        ), f"not on a shared easing token: {stripped}"
     assert "--ease: cubic-bezier(0.16, 1, 0.3, 1)" in style
 
 

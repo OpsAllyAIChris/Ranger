@@ -176,6 +176,22 @@ class WakeConfig:
     idle_disarm_minutes: float = 15.0
     #: How often to ask whether another application took the microphone.
     mic_check_seconds: float = 5.0
+    #: Conversation mode. After a reply, keep listening for a follow-up without
+    #: the phrase. Anchored to the end of playback, not the end of the turn.
+    #:
+    #: Time to *start* speaking. Once speech starts the ordinary utterance
+    #: rules take over, so this is not a ceiling on the follow-up itself.
+    conversation_seconds: float = 8.0
+    #: Windows per firing of the wake word. The budget refills on the phrase and
+    #: on nothing else: resetting it after a quiet period would mean a room with
+    #: a fan refills it forever. Three is a first week guess and the logged
+    #: close reasons are what will replace it.
+    conversation_reopens: int = 3
+    #: Refuse to open the window when the interface is not on screen. An open
+    #: microphone whose only indication is on a window nobody can see is the
+    #: thing the design exists to avoid. Turn this off once the window can
+    #: bring itself to the front.
+    conversation_requires_visible: bool = True
 
     @property
     def idle_disarm_seconds(self) -> float:
@@ -473,6 +489,7 @@ KNOWN_KEYS: dict[str, frozenset[str]] = {
     "wake": frozenset({
         "enabled", "phrase", "model", "threshold", "grace_seconds", "silence_seconds",
         "max_seconds", "preroll_seconds", "idle_disarm_minutes", "mic_check_seconds",
+        "conversation_seconds", "conversation_reopens", "conversation_requires_visible",
     }),
     "brief": frozenset({
         "lines", "slipping_max", "deals_max", "cold_after_days", "decision_prompt",
@@ -777,6 +794,11 @@ def load_config(path: str | Path | None = None, *, load_env: bool = True) -> Con
         preroll_seconds=float(wake_section.get("preroll_seconds", 1.5)),
         idle_disarm_minutes=float(wake_section.get("idle_disarm_minutes", 15.0)),
         mic_check_seconds=float(wake_section.get("mic_check_seconds", 5.0)),
+        conversation_seconds=float(wake_section.get("conversation_seconds", 8.0)),
+        conversation_reopens=int(wake_section.get("conversation_reopens", 3)),
+        conversation_requires_visible=bool(
+            wake_section.get("conversation_requires_visible", True)
+        ),
     )
     if len(wake.phrase.split()) < 2:
         raise ConfigError(
@@ -785,6 +807,13 @@ def load_config(path: str | Path | None = None, *, load_env: bool = True) -> Con
         )
     if not 0.0 < wake.threshold <= 1.0:
         raise ConfigError("wake.threshold must be above 0 and at most 1")
+    if wake.conversation_seconds <= 0:
+        raise ConfigError(
+            "wake.conversation_seconds must be above 0. To turn conversation mode off, "
+            "set wake.conversation_reopens = 0."
+        )
+    if wake.conversation_reopens < 0:
+        raise ConfigError("wake.conversation_reopens cannot be negative. 0 turns it off.")
     if wake.idle_disarm_minutes <= 0:
         raise ConfigError(
             "wake.idle_disarm_minutes must be positive. Hands free that never disarms "

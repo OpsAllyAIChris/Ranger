@@ -42,7 +42,9 @@ class Listener:
     #: Yields 80ms frames of 16 bit mono at 16kHz. Injected so the whole loop
     #: can be driven from a file, or from nothing at all, in a test.
     frames: Callable[[], Any]
-    on_utterance: Callable[[bytes], None]
+    #: (pcm, follow_up). follow_up means it came from a conversation window
+    #: rather than from the phrase, so there is nothing to strip off it.
+    on_utterance: Callable[..., None]
     on_fire: Callable[[Fire], None]
     on_state: Callable[[State], None] | None = None
     on_level: Callable[[float], None] | None = None
@@ -132,7 +134,7 @@ class Listener:
                 if fire is not None:
                     self.on_fire(fire)
                 if utterance:
-                    self.on_utterance(utterance)
+                    self.on_utterance(utterance, bool(fire is not None and fire.follow_up))
         except Exception as exc:  # a dead microphone must not be a dead server
             self.hotword.disarm(f"the microphone stopped: {exc}")
             if self.on_state is not None:
