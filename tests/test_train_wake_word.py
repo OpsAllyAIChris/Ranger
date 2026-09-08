@@ -163,3 +163,149 @@ def test_a_phrase_with_no_negatives_still_produces_a_notebook(script, tmp_path):
         cell for cell in notebook["cells"] if "custom_negative_phrases" in joined(cell)
     )
     assert "'hey bartholomew'" in joined(config)
+
+
+# -- the guards -------------------------------------------------------------
+#
+# A step that silently produced no files is the expensive failure: the training
+# config goes on pointing at the empty directory, the run takes three hours
+# anyway, and the model trains on whatever data did arrive. That happened on
+# the first real run — AudioSet extracted, the glob for it found nothing, the
+# conversion loop ran over an empty list, and nothing said so.
+
+
+def test_every_download_step_checks_what_it_produced(notebook):
+    """Not a spot check. Each of these is a step that can silently write no
+    files, and each one is upstream of three hours of compute."""
+    guarded = [
+        joined(cell)
+        for cell in notebook["cells"]
+        if "produced(" in joined(cell) or "raise RuntimeError" in joined(cell)
+    ]
+    text = "\n".join(guarded)
+
+    assert "./mit_rirs" in text, "impulse responses unchecked"
+    assert "./audioset_16k" in text, "AudioSet conversion unchecked"
+    assert "./fma" in text, "music download unchecked"
+    assert "./holdout_16k" in text, "held out audio unchecked"
+    assert "validation_set_features.npy" in text, "feature files unchecked"
+
+
+def test_the_audioset_clips_are_searched_for_not_assumed(notebook):
+    """The glob upstream uses found nothing on the first real run. Whatever the
+    tar's layout is, the files are under ./audioset, so search rather than
+    assume — and print the tree when the search comes back empty.
+    """
+    cell = next(c for c in notebook["cells"] if "audioset_16k" in joined(c))
+    text = joined(cell)
+
+    assert 'Path("audioset").rglob' in text
+    assert 'Path("audioset/audio")' not in text
+    assert "Nothing audio-shaped under ./audioset" in text
+
+
+def test_the_config_cell_verifies_every_path_it_points_at(notebook):
+    """The backstop. An empty directory is a valid directory, so the last
+    chance to notice is the moment the config is written."""
+    cell = next(c for c in notebook["cells"] if "custom_negative_phrases" in joined(c))
+    text = joined(cell)
+
+    assert "rir_paths" in text and "background_paths" in text
+    assert "produced(" in text
+    assert "piper_sample_generator_path" in text
+    # Checked before the file is written, not after.
+    assert text.index("produced(") < text.index('open("hey_ranger.yaml", "w")')
+
+
+def test_the_helper_refuses_an_empty_directory(notebook, tmp_path):
+    """Run the helper the notebook defines, rather than reading it."""
+    cell = next(c for c in notebook["cells"] if "def produced" in joined(c))
+    source = joined(cell)
+    namespace: dict = {"Path": Path}
+    exec(source[source.index("def produced") :], namespace)  # noqa: S102
+    produced = namespace["produced"]
+
+    empty = tmp_path / "audioset_16k"
+    empty.mkdir()
+    with pytest.raises(RuntimeError, match="expected at least"):
+        produced(str(empty), at_least=100, what="clips")
+
+    nested = tmp_path / "full" / "deeper"
+    nested.mkdir(parents=True)
+    for index in range(5):
+        (nested / f"{index}.wav").write_bytes(b"x")
+    assert len(produced(str(tmp_path / "full"), at_least=5, what="clips")) == 5
+
+
+def test_the_environment_cell_checks_its_own_installs(notebook):
+    """`!pip install` cannot fail a cell: a shell magic's exit code is ignored.
+
+    That is how a failed install of openwakeword itself reached step 6 as
+    ModuleNotFoundError, three cells and forty minutes later.
+    """
+    setup = next(c for c in notebook["cells"] if "piper-sample-generator" in joined(c))
+    text = joined(setup)
+
+    assert "!pip install" not in text, "an unchecked install is a silent failure"
+    assert "subprocess.run" in text
+    assert "raise RuntimeError" in text
+
+
+def test_openwakeword_installs_without_its_own_dependencies(notebook):
+    """speexdsp-ns publishes wheels for cp37 to cp312 and no source
+    distribution, so on a newer Python there is nothing to install and nothing
+    to build from, and it fails the whole install. Training never touches it.
+    """
+    setup = next(c for c in notebook["cells"] if "piper-sample-generator" in joined(c))
+    text = joined(setup)
+
+    assert '"-e", REPO, "--no-deps"' in text
+    assert "speexdsp-ns" in text, "the reason for --no-deps has to be written down"
+    # --no-deps skips onnxruntime, and AudioFeatures defaults to ONNX, so the
+    # trainer would fail on its first line without it.
+    assert '"onnxruntime"' in text
+
+
+def test_the_environment_cell_proves_the_trainer_can_import_it(notebook):
+    """Checked in a subprocess of the same interpreter the trainer is launched
+    with. Importing it in the notebook's own kernel would not prove that."""
+    setup = next(c for c in notebook["cells"] if "piper-sample-generator" in joined(c))
+    text = joined(setup)
+
+    assert "sys.executable" in text
+    assert "import openwakeword" in text
+    assert "AudioFeatures" in text, "loading the feature models is the real check"
+    assert "PYTHONPATH" in text
+
+
+def test_there_is_a_preflight_before_anything_is_downloaded(notebook):
+    """Five incompatibilities surfaced only at execution time and three of them
+    forty minutes into training. Every one was an import that could have been
+    tried in thirty seconds. The preflight has to run before the downloads or
+    it saves nothing.
+    """
+    kinds = [joined(cell) for cell in notebook["cells"]]
+    preflight = next(index for index, text in enumerate(kinds) if "CHECKS = [" in text)
+    downloads = next(index for index, text in enumerate(kinds) if "mit_rirs" in text)
+
+    assert preflight < downloads
+
+    text = kinds[preflight]
+    assert "import openwakeword.train" in text, "the trainer's own import chain"
+    assert "generate_samples" in text, "piper, which step 6 needs first"
+    assert "sys.executable" in text, "checked where the trainer will find out"
+    assert "raise RuntimeError" in text
+
+
+def test_the_augmentation_pin_is_one_that_imports(notebook):
+    """torch-audiomentations 0.11.0 is upstream's pin and calls
+    torchaudio.set_audio_backend, removed in torchaudio 2.1. Colab ships far
+    newer than that, so upstream's pin cannot import on today's image at all.
+    """
+    setup = next(c for c in notebook["cells"] if "audiomentations" in joined(c))
+    text = joined(setup)
+
+    assert "torch-audiomentations==0.11.0" not in text
+    assert "torch-audiomentations==0.11.2" in text
+    assert "set_audio_backend" in text, "the reason for the bump has to be written down"
+

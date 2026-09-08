@@ -56,7 +56,8 @@ Only the notebook. Everything else downloads itself.
 
 | cell | what it does | roughly |
 | --- | --- | --- |
-| 1. Environment | Clones piper-sample-generator and openwakeword, installs the training dependencies, fetches the two feature models | 10 min |
+| 1. Environment | Clones piper-sample-generator and openwakeword, installs the training dependencies, fetches the two feature models, then loads openwakeword in a fresh interpreter to prove it | 10 min |
+| 1b. Preflight | Imports everything step 6 needs, in a subprocess, before anything downloads. Not upstream's | 30 sec |
 | 2. Imports | — | seconds |
 | 3. Room impulse responses | MIT's reverb survey, so the synthetic speech sounds like a room | 3 min |
 | 4. Background audio | AudioSet + Free Music Archive, 2 hours. `n_hours` is a dial | 15 min |
@@ -71,6 +72,63 @@ Only the notebook. Everything else downloads itself.
 
 **If cell 7 dies part way through, run it again.** It counts the clips already
 on disk and carries on. Nothing is wasted. Same for the downloads.
+
+**Cell 1b is a preflight, and it is the most valuable cell in the notebook.**
+Five separate incompatibilities in this pipeline surfaced only when something
+executed, and three of them surfaced forty minutes into training. Every one was
+an import that could have been tried in thirty seconds. So the preflight
+imports the entire chain the trainer needs — `openwakeword.train`, which pulls
+in torch, torchinfo, torchmetrics, audiomentations, torch-audiomentations,
+speechbrain, torchaudio and acoustics — plus piper's sample generator, in a
+subprocess of the interpreter the trainer is launched with, before a single
+byte is downloaded. If it passes, step 6 will start. It cannot promise step 6
+will finish.
+
+One of those five is worth naming because upstream's own notebook cannot run
+without the fix: `torch-audiomentations==0.11.0`, which openWakeWord pins,
+calls `torchaudio.set_audio_backend`, removed in torchaudio 2.1. Colab ships
+far newer than that. Version 0.11.1 dropped the call and 0.11.2 is the last of
+that line, so that is the pin here.
+
+**Every install in cell 1 is checked, and `openwakeword` installs with
+`--no-deps`.** Two more things that cost runs.
+
+`!pip install` cannot fail a cell — a shell magic's exit code is ignored — so a
+failed install prints its error into the scrollback and the notebook carries on
+as though it worked. That is how a broken install of openwakeword itself
+surfaced three cells and forty minutes later as
+`ModuleNotFoundError: No module named 'openwakeword'` inside the trainer. Every
+install now runs through `subprocess` and raises.
+
+And the install was failing for a reason worth writing down: openWakeWord
+depends on **`speexdsp-ns`, which publishes wheels for cp37 through cp312 and
+no source distribution at all**. On a newer Python there is nothing for pip to
+install and nothing to build from, so the entire install fails on an optional
+noise suppressor that training never touches. `--no-deps` skips it. What
+`--no-deps` then also skips and training does need is installed explicitly —
+`onnxruntime` above all, because `AudioFeatures` defaults to the ONNX framework
+and the trainer fails on its first line without it. `tflite-runtime` is
+deliberately absent: everything here runs through ONNX and it has the same
+missing-wheel problem.
+
+Cell 1 ends by loading `openwakeword` and constructing `AudioFeatures` **in a
+subprocess of the same interpreter the trainer is launched with**, which is the
+only check that proves what step 6 needs. Importing it in the notebook's own
+kernel would not.
+
+**Every download step now counts what it produced and stops if the answer is
+zero.** That is not defensive habit, it is a bug that already cost a run: the
+AudioSet tar extracted, the glob upstream uses found no `.flac` files under the
+path it expected, the conversion loop ran over an empty list, and nothing said
+anything. `audioset_16k` stayed empty, the training config went on pointing at
+it, and the run would have trained on music alone and reported success. An
+empty directory is a valid directory, so nothing downstream complains.
+
+The AudioSet cell now searches for audio anywhere under `./audioset` instead of
+assuming a layout, prints the directory tree if it still finds none, and skips
+the download if the tar is already there. The config cell re-checks every path
+it points at before writing anything, which is the last moment a silently empty
+step can be caught.
 
 ### What the free Colab tier gives you
 

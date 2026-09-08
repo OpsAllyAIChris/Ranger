@@ -107,45 +107,190 @@ def _markdown(source: str) -> dict:
 SETUP = """\
 # Step 1 of 7. Environment. About ten minutes, and it prints a lot.
 #
-# Straight from openWakeWord's own notebook. openwakeword is cloned rather than
-# pip installed because the training code, the example config and the trainer
-# entry point all live in the repository.
+# Upstream's notebook installs with !pip, and a shell magic's exit code does
+# not stop a cell. So a failed install prints an error into the scrollback and
+# the notebook carries on as though it worked — which is how step 6 came to
+# die on ModuleNotFoundError: openwakeword, three cells and forty minutes
+# later. Every install here runs through subprocess and is checked, and the
+# cell ends by loading openwakeword in a fresh interpreter, which is how the
+# trainer will find out.
 
-!git clone https://github.com/rhasspy/piper-sample-generator
-!wget -O piper-sample-generator/models/en_US-libritts_r-medium.pt 'https://github.com/rhasspy/piper-sample-generator/releases/download/v2.0.0/en_US-libritts_r-medium.pt'
-!pip install piper-phonemize
-!pip install webrtcvad
-
-!git clone https://github.com/dscripka/openwakeword
-!pip install -e ./openwakeword
-
-!pip install mutagen==1.47.0 torchinfo==1.8.0 torchmetrics==1.2.0 speechbrain==0.5.14
-!pip install audiomentations==0.33.0 torch-audiomentations==0.11.0 acoustics==0.2.6
-!pip install tensorflow-cpu==2.8.1 tensorflow_probability==0.16.0 onnx_tf==1.10.0
-!pip install pronouncing==0.2.0 datasets==2.14.6 deep-phonemizer==0.0.19
-
-# The feature models, which the wheel does not ship. The same files
-# 'ranger wake install' fetches, from the same release. Plain urllib rather
-# than !wget, because a shell magic inside a loop is a way to lose an error.
 import os
+import subprocess
+import sys
 import urllib.request
 
+REPO = "./openwakeword"
+
+
+def run(*command, must_work=True):
+    print("$", " ".join(command))
+    result = subprocess.run(command, capture_output=True, text=True)
+    if result.returncode != 0:
+        print(result.stdout[-2000:])
+        print(result.stderr[-2000:])
+        if must_work:
+            raise RuntimeError(f"failed ({result.returncode}): {' '.join(command)}")
+        print(f"!! FAILED, continuing: {' '.join(command)}")
+    return result.returncode == 0
+
+
+def pip(*packages, must_work=True):
+    return run(sys.executable, "-m", "pip", "install", *packages, must_work=must_work)
+
+
+# -- the pieces training cannot run without --------------------------------
+
+if not os.path.exists("piper-sample-generator"):
+    run("git", "clone", "https://github.com/rhasspy/piper-sample-generator")
+urllib.request.urlretrieve(
+    "https://github.com/rhasspy/piper-sample-generator/releases/download/v2.0.0/en_US-libritts_r-medium.pt",
+    "piper-sample-generator/models/en_US-libritts_r-medium.pt",
+)
+pip("piper-phonemize")
+pip("webrtcvad")
+
+if not os.path.exists(REPO):
+    run("git", "clone", "https://github.com/dscripka/openwakeword")
+
+# --no-deps, and the reason matters. openWakeWord depends on speexdsp-ns,
+# which publishes manylinux wheels for cp37 to cp312 and no source
+# distribution at all, so on a newer Python there is nothing for pip to
+# install and nothing to build from. The whole install fails on it. It is an
+# optional noise suppressor that training never touches.
+pip("-e", REPO, "--no-deps")
+
+# What --no-deps then skipped and training does need. onnxruntime is the one
+# that matters: AudioFeatures defaults to the ONNX framework, so the trainer
+# fails on its first line without it. tflite-runtime is deliberately absent —
+# everything here runs through ONNX, and it has the same missing-wheel problem.
+pip("onnxruntime", "scikit-learn", "tqdm", "scipy", "requests")
+
+pip("mutagen==1.47.0", "torchinfo==1.8.0", "torchmetrics==1.2.0", "speechbrain==0.5.14")
+# torch-audiomentations 0.11.0 is upstream's pin and it calls
+# torchaudio.set_audio_backend, which torchaudio removed in 2.1. Colab ships a
+# torchaudio far newer than that, so upstream's pin cannot import at all on
+# today's image. 0.11.1 dropped the call; 0.11.2 is the last of that line and
+# still exports every transform openwakeword/data.py uses.
+pip("audiomentations==0.33.0", "torch-audiomentations==0.11.2", "acoustics==0.2.6")
+pip("pronouncing==0.2.0", "datasets==2.14.6", "deep-phonemizer==0.0.19")
+
+# -- tflite, which Ranger does not use -------------------------------------
+#
+# train.py converts the trained model to tflite immediately after writing the
+# .onnx. Ranger loads the .onnx, so the conversion is cosmetic here, and these
+# are old pins that are the likeliest thing in this cell to stop resolving.
+# Best effort: if they fail, training still produces the file we want and the
+# very last line of step 6 will raise on the conversion. That is survivable
+# and step 6 says so.
+tflite_ok = pip(
+    "tensorflow-cpu==2.8.1", "tensorflow_probability==0.16.0", "onnx_tf==1.10.0",
+    must_work=False,
+)
+
+# -- the feature models, which the wheel does not ship ---------------------
+#
+# The same files 'ranger wake install' fetches, from the same release.
+
 RELEASE = "https://github.com/dscripka/openWakeWord/releases/download/v0.5.1/"
-target = "./openwakeword/openwakeword/resources/models"
+target = os.path.join(REPO, "openwakeword", "resources", "models")
 os.makedirs(target, exist_ok=True)
 for feature in ["embedding_model.onnx", "embedding_model.tflite",
                 "melspectrogram.onnx", "melspectrogram.tflite"]:
     path = os.path.join(target, feature)
     urllib.request.urlretrieve(RELEASE + feature, path)
     size = os.path.getsize(path)
-    assert size > 100_000, f"{feature} came back as {size} bytes, which is an error page"
+    if size < 100_000:
+        raise RuntimeError(f"{feature} came back as {size} bytes, which is an error page")
     print(f"{feature}: {size // 1024} KB")
 
-import torch
+# -- prove it, the way the trainer will find out ---------------------------
+#
+# train.py is run as a script by path, so `import openwakeword` resolves
+# through the install rather than through the repo it sits in. Checking it in
+# this kernel would not prove that: check it in a subprocess of the same
+# interpreter the trainer is launched with. PYTHONPATH is set as a belt and
+# braces so the import works even if the editable install did not take.
+
+os.environ["PYTHONPATH"] = os.path.abspath(REPO)
+proof = subprocess.run(
+    [
+        sys.executable,
+        "-c",
+        "import openwakeword, torch, onnxruntime;"
+        "from openwakeword.utils import AudioFeatures;"
+        "AudioFeatures(device='cpu');"
+        "print(openwakeword.__file__)",
+    ],
+    capture_output=True, text=True,
+)
+if proof.returncode != 0:
+    print(proof.stderr)
+    raise RuntimeError(
+        "openwakeword does not load in a fresh interpreter, so step 6 would fail the "
+        "same way, forty minutes from now. Read the pip output above rather than "
+        "continuing."
+    )
+
 print()
+print("openwakeword:", proof.stdout.strip())
+import torch
 print("GPU:", torch.cuda.get_device_name(0) if torch.cuda.is_available() else "NONE")
-print("If that says NONE, stop. Runtime > Change runtime type > T4 GPU, then run this cell again.")
+print("If that says NONE, stop. Runtime > Change runtime type > T4 GPU, then run this again.")
+if not tflite_ok:
+    print("tflite conversion deps did not install. Harmless: the .onnx is written first.")
 """
+
+
+PREFLIGHT = """\
+# Step 1b of 7. Preflight. Thirty seconds, and it is the cheapest cell here.
+#
+# Five separate incompatibilities in this notebook surfaced only at execution
+# time, and three of them surfaced forty minutes into step 6. Every one was an
+# import that could have been tried immediately.
+#
+# train.py imports torch, torchinfo, torchmetrics and openwakeword.data, which
+# pulls in audiomentations, torch_audiomentations, speechbrain, torchaudio and
+# acoustics. Any of those can be incompatible with the Colab image of the day.
+# Import the whole chain now, in a subprocess of the interpreter the trainer is
+# launched with, before a single byte is downloaded.
+#
+# If this cell passes, step 6 will start. It cannot promise it will finish.
+
+import subprocess
+import sys
+
+CHECKS = [
+    ("the trainer and everything it imports", "import openwakeword.train"),
+    ("the wake word model loader", "from openwakeword.model import Model"),
+    ("the augmentation chain", "import openwakeword.data"),
+    (
+        "the sample generator",
+        "import sys; sys.path.insert(0, 'piper-sample-generator');"
+        " from generate_samples import generate_samples",
+    ),
+]
+
+failed = []
+for label, statement in CHECKS:
+    result = subprocess.run([sys.executable, "-c", statement], capture_output=True, text=True)
+    print(("ok    " if result.returncode == 0 else "FAIL  ") + label)
+    if result.returncode != 0:
+        failed.append(label)
+        print(result.stderr[-1500:])
+
+if failed:
+    raise RuntimeError(
+        f"{len(failed)} of {len(CHECKS)} preflight checks failed: {failed}. "
+        "Fix these before downloading anything. The traceback above names the "
+        "library and the call, which is usually a pin in step 1 that is older or "
+        "newer than the Colab image."
+    )
+
+print()
+print("Preflight clear. Everything step 6 imports is importable.")
+"""
+
 
 IMPORTS = """\
 import os
@@ -159,6 +304,25 @@ import torch
 import yaml
 import datasets
 from tqdm import tqdm
+
+
+def produced(folder, at_least=1, what="files"):
+    \"\"\"Fail loudly if a download or conversion step produced nothing.
+
+    A step that silently writes no files is the expensive failure here: the
+    training config goes on pointing at the empty directory, the run takes
+    three hours anyway, and the model is trained on whatever data did arrive.
+    Nothing downstream complains, because an empty directory is a valid
+    directory.
+    \"\"\"
+    found = sorted(path for path in Path(folder).rglob("*") if path.is_file())
+    print(f"{folder}: {len(found)} {what}")
+    if len(found) < at_least:
+        raise RuntimeError(
+            f"{folder} has {len(found)} {what}, expected at least {at_least}. "
+            "Do not continue: the step above did not do what it looked like it did."
+        )
+    return found
 """
 
 RIRS = """\
@@ -175,6 +339,8 @@ for row in tqdm(rir_dataset):
     scipy.io.wavfile.write(
         os.path.join(output_dir, name), 16000, (row["audio"]["array"] * 32767).astype(np.int16)
     )
+
+produced(output_dir, at_least=100, what="impulse responses")
 """
 
 BACKGROUND = """\
@@ -187,23 +353,49 @@ BACKGROUND = """\
 
 n_hours = 2
 
+# -- AudioSet --------------------------------------------------------------
+#
+# The .flac files are found by searching, not by a fixed path. Upstream's
+# notebook globs audioset/audio/**/*.flac and that found nothing on this run:
+# the tar extracted, and the conversion loop then ran over an empty list and
+# wrote no files, silently. Whatever the tar's internal layout is, the files
+# are somewhere under ./audioset, so look there and say what turned up.
+
 os.makedirs("audioset", exist_ok=True)
 fname = "bal_train09.tar"
-link = "https://huggingface.co/datasets/agkphysics/AudioSet/resolve/main/data/" + fname
-!wget -O audioset/{fname} {link}
+if not os.path.exists(f"audioset/{fname}"):
+    link = "https://huggingface.co/datasets/agkphysics/AudioSet/resolve/main/data/" + fname
+    !wget -O audioset/{fname} {link}
 !cd audioset && tar -xf bal_train09.tar
+
+clips = [
+    str(path)
+    for path in Path("audioset").rglob("*")
+    if path.suffix.lower() in {".flac", ".wav", ".mp3", ".ogg", ".m4a"}
+]
+if not clips:
+    print("Nothing audio-shaped under ./audioset. What is there:")
+    for path in sorted(Path("audioset").rglob("*"))[:40]:
+        print("   ", path)
+    raise RuntimeError(
+        "the AudioSet tar extracted no audio files this cell can find. Look at the "
+        "listing above and widen the search, rather than continuing without them."
+    )
+print(f"found {len(clips)} AudioSet clips")
 
 output_dir = "./audioset_16k"
 os.makedirs(output_dir, exist_ok=True)
-audioset_dataset = datasets.Dataset.from_dict(
-    {"audio": [str(i) for i in Path("audioset/audio").glob("**/*.flac")]}
-)
+audioset_dataset = datasets.Dataset.from_dict({"audio": clips})
 audioset_dataset = audioset_dataset.cast_column("audio", datasets.Audio(sampling_rate=16000))
 for row in tqdm(audioset_dataset):
-    name = row["audio"]["path"].split("/")[-1].replace(".flac", ".wav")
+    name = Path(row["audio"]["path"]).stem + ".wav"
     scipy.io.wavfile.write(
         os.path.join(output_dir, name), 16000, (row["audio"]["array"] * 32767).astype(np.int16)
     )
+
+produced(output_dir, at_least=100, what="converted AudioSet clips")
+
+# -- Free Music Archive ----------------------------------------------------
 
 output_dir = "./fma"
 os.makedirs(output_dir, exist_ok=True)
@@ -211,11 +403,14 @@ fma_dataset = datasets.load_dataset("rudraml/fma", name="small", split="train", 
 fma_dataset = iter(fma_dataset.cast_column("audio", datasets.Audio(sampling_rate=16000)))
 for _ in tqdm(range(n_hours * 3600 // 30)):  # every FMA clip is 30 seconds
     row = next(fma_dataset)
-    name = row["audio"]["path"].split("/")[-1].replace(".mp3", ".wav")
+    name = Path(row["audio"]["path"]).stem + ".wav"
     scipy.io.wavfile.write(
         os.path.join(output_dir, name), 16000, (row["audio"]["array"] * 32767).astype(np.int16)
     )
+
+produced(output_dir, at_least=n_hours * 3600 // 30 - 10, what="music clips")
 """
+
 
 FEATURES = """\
 # Step 4 of 7. Two precomputed feature files: ~2,000 hours of general audio to
@@ -224,6 +419,22 @@ FEATURES = """\
 
 !wget -q --show-progress https://huggingface.co/datasets/davidscripka/openwakeword_features/resolve/main/openwakeword_features_ACAV100M_2000_hrs_16bit.npy
 !wget -q --show-progress https://huggingface.co/datasets/davidscripka/openwakeword_features/resolve/main/validation_set_features.npy
+
+# wget writes whatever came back, including an error page, under the name it
+# was given. Opening each as a memory-mapped array reads the header only, so
+# this costs nothing and proves the file is what it claims to be.
+for feature_file in ["openwakeword_features_ACAV100M_2000_hrs_16bit.npy",
+                     "validation_set_features.npy"]:
+    if not os.path.exists(feature_file):
+        raise RuntimeError(f"{feature_file} did not download")
+    array = np.load(feature_file, mmap_mode="r")
+    print(f"{feature_file}: {array.shape} {array.dtype}, "
+          f"{os.path.getsize(feature_file) / 1e9:.2f} GB")
+    if array.shape[0] < 1000:
+        raise RuntimeError(
+            f"{feature_file} loaded but has only {array.shape[0]} rows, which is "
+            "a truncated download. Delete it and run this cell again."
+        )
 """
 
 
@@ -250,7 +461,7 @@ for row in tqdm(itertools.islice(iter(stream), already, already + HOLDOUT_HOURS 
         os.path.join("./holdout_16k", name), 16000, (row["audio"]["array"] * 32767).astype(np.int16)
     )
 
-print(len(os.listdir("./holdout_16k")), "held out clips")
+produced("./holdout_16k", at_least=HOLDOUT_HOURS * 3600 // 30 - 10, what="held out clips")
 """
 
 
@@ -292,9 +503,31 @@ config["feature_data_files"] = {{
     "ACAV100M_sample": "openwakeword_features_ACAV100M_2000_hrs_16bit.npy"
 }}
 
+# Every path the config points at, checked before anything is written. This is
+# the backstop: an empty directory is a valid directory, so a step that
+# silently produced nothing reaches the trainer as a config pointing at
+# nothing, and the run takes three hours anyway and trains on what did arrive.
+for key in ["rir_paths", "background_paths"]:
+    for folder in config[key]:
+        produced(folder, at_least=1, what=f"files for {{key}}")
+
+for label, feature_file in list(config["feature_data_files"].items()) + [
+    ("false_positive_validation", config["false_positive_validation_data_path"])
+]:
+    if not os.path.exists(feature_file):
+        raise RuntimeError(f"{{label}} points at {{feature_file}}, which does not exist")
+    print(f"{{label}}: {{os.path.getsize(feature_file) / 1e9:.2f}} GB")
+
+if not os.path.exists(os.path.join(config["piper_sample_generator_path"], "models")):
+    raise RuntimeError(
+        f"no piper sample generator at {{config['piper_sample_generator_path']}}. "
+        "Step 1 did not finish."
+    )
+
 with open("{name}.yaml", "w") as handle:
     yaml.dump(config, handle)
 
+print()
 print("phrase:      ", config["target_phrase"])
 print("negatives:   ", len(config["custom_negative_phrases"]))
 print("samples:     ", config["n_samples"])
@@ -438,6 +671,7 @@ def notebook_for(phrase: str, name: str, negatives: list[str]) -> dict:
             "that decides whether the model is worth using."
         ),
         _code(SETUP),
+        _code(PREFLIGHT),
         _code(IMPORTS),
         _code(RIRS),
         _code(BACKGROUND),
