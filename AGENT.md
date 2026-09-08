@@ -789,9 +789,31 @@ consumer wins.** Windows records which applications hold the microphone and
 Ranger reads the same source the taskbar indicator does. Strict rather than
 lenient because most of the operator's meetings are browser calls, and a
 browser holding the microphone cannot be told apart from a browser holding it
-for a call: lenient leaves uncovered exactly the case the check exists for. It
-is checked at arming and again at every fire, because a call that starts while
-Ranger sits armed is the case a check only at arming would miss.
+for a call: lenient leaves uncovered exactly the case the check exists for.
+
+It runs three times: before arming, on a timer while armed, and again at every
+fire. All three, because a check only at arming misses a call that starts
+afterwards, and a check only at fire time leaves the microphone held for a
+whole call that nothing happens to fire during.
+
+**And it fails closed.** If the consent store cannot be read, hands free
+refuses to arm and says why. A check that cannot run has found nothing, not
+found nobody, and this is the entire mitigation for a wake word firing during a
+customer call and transcribing the customer. It returned "allowed" on an
+unreadable store when first written, which was fail-open on exactly the
+condition the feature was accepted under. It also means hands free does not arm
+on anything that is not Windows, because there is no store to read there.
+
+**An empty store counts as not knowing.** On a real machine the consent store
+always has entries, so zero of them means the enumeration is looking in the
+wrong place, and accepting that would be a check that silently always says yes.
+
+`ranger mic` prints what the store says and whether hands free could arm. It
+exists because the check reads a Windows registry key that cannot be exercised
+anywhere without one, and a safety check nobody can confirm is one nobody
+should trust. Two of the tests for it originally asserted the sandbox's
+platform rather than the operator's, and so passed here and failed on the one
+platform the code exists for.
 
 The cost, stated where the decision is: while armed the orb's *input* level
 arrives over the socket instead of being measured in the page. Playback is
