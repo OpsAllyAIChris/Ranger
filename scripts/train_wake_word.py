@@ -70,13 +70,29 @@ SAMPLES_VAL = 2000
 STEPS = 50000
 
 
+def _lines(source: str) -> list[str]:
+    """A cell's source, in the shape nbformat means by a list of strings.
+
+    Each entry **keeps its trailing newline**, and the last one does not have
+    one. Jupyter reconstructs a cell with `"".join(source)`, so entries without
+    newlines come back as one run-on line: every import on one line, every
+    comment welded to the code after it, and a SyntaxError on the first cell.
+
+    Splitting on "\n" and dropping the separators produced exactly that, and
+    the check that was supposed to catch it rejoined the list with "\n" before
+    parsing — so it put the newlines back itself and agreed with the bug.
+    Anything verifying this has to join with "" or go through nbformat.
+    """
+    return source.rstrip("\n").splitlines(keepends=True)
+
+
 def _code(source: str) -> dict:
     return {
         "cell_type": "code",
         "execution_count": None,
         "metadata": {},
         "outputs": [],
-        "source": source.rstrip("\n").split("\n"),
+        "source": _lines(source),
     }
 
 
@@ -84,7 +100,7 @@ def _markdown(source: str) -> dict:
     return {
         "cell_type": "markdown",
         "metadata": {},
-        "source": source.rstrip("\n").split("\n"),
+        "source": _lines(source),
     }
 
 

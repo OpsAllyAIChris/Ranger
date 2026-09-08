@@ -653,6 +653,16 @@ Two things that only showed up by running it:
   with each other and with nothing outside. Chromium refused the handshake and
   that was the only signal. The test suite now checks RFC 6455's own worked
   example, which is the vector that catches it.
+
+  The same shape caught the training notebook. Its cells were written as lists
+  of lines with the newlines stripped, so Colab welded each cell into one line
+  and the first one died on a SyntaxError — and the check that was supposed to
+  catch that rejoined the list with `"\n"` before parsing, putting the
+  newlines back itself. **A test that reassembles an artefact by a rule the
+  producer also used is not a test.** Reassemble it the way the consumer does:
+  `"".join(cell["source"])`, because that is what Jupyter does. Note that
+  `nbformat.validate` passes on the broken file — the schema allows a list of
+  arbitrary strings — so validating against a schema is not the check either.
 - The reader ran on `asyncio.to_thread`, whose pool threads are not daemons and
   which the interpreter joins on the way out. A reader blocked on a socket
   nobody is going to write to never returns, so ctrl-c printed its goodbye and
