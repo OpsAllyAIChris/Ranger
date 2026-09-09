@@ -320,6 +320,32 @@ assembly_seconds = 1.1
 preview_blocks = 400
 preview_rows = 300
 
+[imports]
+# Files dropped onto the window. They land in Ranger/imports/<date>/ under
+# their own name, create-only, and NOTHING IS PARSED ON DROP: a file dropped by
+# accident costs nothing. The first time you ask about one, Python writes a
+# bounded sidecar beside it (<name>.extract.md) and every later question reads
+# that instead of the file, which is what keeps a 340KB spreadsheet from
+# becoming 340KB of context.
+#
+# Gross profit figures never pass through the model. Once you have confirmed
+# which columns are which, Python reads the numbers straight out of the file.
+#
+# These files hold customer pricing and margin. They stay local and they are in
+# the snapshot allow list, like everything else Jarvis cannot reconstruct.
+#
+# The ceiling on one dropped file. An export is well under a megabyte; this is
+# here so a stray 400MB video is refused with a sentence.
+max_mb = 25.0
+# How much of each sheet the sidecar quotes. Every sheet is always named with
+# its row count however many there are, because a fourteen sheet workbook with
+# four sheets listed is a file you would be wrong about.
+extract_rows = 60
+extract_sheets = 40
+# Extract on drop rather than on the first question. Off on purpose: an
+# accidental drop should do nothing at all.
+extract_on_drop = false
+
 [gp]
 # The gross profit tracker: the first dashlet. Figures are entered by hand, in
 # the panel or with "ranger gp add", and land in Ranger/gp/ as create-only

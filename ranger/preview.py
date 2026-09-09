@@ -92,6 +92,11 @@ class Sheet:
     total_rows: int = 0
     #: Cells that hold a formula. Counted, never evaluated, never shown.
     formulas: int = 0
+    #: Where they are, as (row, column) zero-based. The preview does not use
+    #: this; the import does, so it can refuse a gross profit column that holds
+    #: formulas rather than importing a cached value that was true whenever the
+    #: file was last opened by something that calculates.
+    formula_cells: set = field(default_factory=set)
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -328,11 +333,18 @@ def _xlsx(path: Path, base: Preview, max_rows: int) -> Preview:
             sheet = Sheet(name=name)
             root = ElementTree.fromstring(xml)
             for row in root.iter(f"{S}row"):
+                # Named, not `index`: the column index below reuses that name
+                # for each cell, so a row number kept in it would be whatever
+                # the previous cell's column was.
+                row_index = sheet.total_rows
                 sheet.total_rows += 1
                 cells: list[str] = []
                 for cell in row.findall(f"{S}c"):
                     formula = cell.find(f"{S}f")
                     if formula is not None:
+                        sheet.formula_cells.add(
+                            (row_index, _column_index(cell.get("r", "")))
+                        )
                         # Counted and skipped. The cached result is not shown
                         # either: it is whatever was true when the file was
                         # last opened by something that calculates.

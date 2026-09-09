@@ -1338,6 +1338,42 @@ microphone is live and keeps one meaning.
 Full write-up, including where the preview sits and why the orb steps aside
 rather than being covered: `docs/documents.md`.
 
+## Dropped files, and why the model hardly ever sees one
+
+Drag a file onto the window and it lands in `Ranger/imports/<date>/` under its
+own name, create-only. **Nothing is parsed by dropping it**: a file dropped by
+accident costs nothing at all.
+
+The design is driven by token cost and by one rule about numbers.
+
+The first question about a file writes a bounded sidecar beside it,
+`<name>.extract.md`, and every later question reads the sidecar. A 340KB
+workbook becomes about 2KB of context once. The sidecar is create-only like
+everything else; re-extraction writes a new one beside the old.
+
+**Gross profit never passes through the model.** Once a column mapping exists,
+Python reads the figures straight out of the file. The mapping is proposed from
+the header text, confirmed by the operator at a keyboard, and saved against a
+fingerprint of the header row: a known shape imports silently and writes a line
+to the inbox, an unknown shape asks and never guesses. When an export format
+changes, the fingerprint stops matching and that is reported as a mapping to
+confirm again rather than as an error.
+
+A re-import writes only what changed. Same value is not a correction, or the
+folder becomes a record of how often a file was dropped; a different value is a
+correction and supersedes, per the GP rules. A column of formulas is refused
+out loud, because a cached formula value is whatever was true when the file was
+last calculated.
+
+This is the highest-volume injection surface in the system, and the extract is
+persisted and re-read, so the fence is applied on every read rather than at
+extraction. `tests/test_planted_instructions.py` covers an instruction in a
+spreadsheet cell, a PDF body and a Word paragraph, and covers the one that only
+exists here: a cell cannot influence a column mapping.
+
+Full write-up, including what happens when the same file is dropped twice:
+`docs/imports.md`.
+
 ## Closing out a session
 
 Every session ends with a debrief written to `docs/sessions/<date>.md`, and it

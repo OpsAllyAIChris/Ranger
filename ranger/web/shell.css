@@ -432,6 +432,50 @@ body.previewing #cards { transform: translateX(calc(min(46vw, 720px) - 26px + 18
 .preview-note { font-size: 10.5px; color: var(--ink-faint); margin: 6px 0; font-style: italic; }
 .preview-error { font-size: 12px; color: #E8B84B; }
 
+/* A file being dragged over the window. The whole frame says it will take it,
+   in the interface's own teal -- never the microphone's orange, which means one
+   thing and keeps meaning it. */
+body.dropping::after {
+  content: 'drop it anywhere';
+  position: fixed;
+  inset: 10px;
+  z-index: 4;
+  border: 2px dashed var(--accent);
+  border-radius: 14px;
+  background: rgba(45, 212, 168, 0.06);
+  color: var(--accent);
+  font-size: 13px;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  padding-bottom: 22px;
+  pointer-events: none;
+}
+.preview-badge.import { color: var(--accent); }
+.import-form { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 12px; }
+.import-pick { display: flex; flex-direction: column; gap: 4px; font-size: 11px;
+               color: var(--ink-dim); }
+.import-select {
+  padding: 5px 7px;
+  border-radius: 7px;
+  border: 1px solid var(--hairline);
+  background: rgba(0, 0, 0, 0.3);
+  color: var(--ink);
+  font-family: var(--mono);
+  font-size: 11px;
+}
+.import-confirm {
+  margin-top: 14px;
+  padding: 7px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--accent);
+  background: rgba(45, 212, 168, 0.12);
+  color: var(--accent);
+  font-size: 12px;
+  cursor: pointer;
+}
+.import-confirm:hover { background: rgba(45, 212, 168, 0.2); }
+
 .entry .preview-open {
   margin-top: 7px;
   padding: 3px 8px;

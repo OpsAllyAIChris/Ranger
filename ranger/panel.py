@@ -152,8 +152,29 @@ def snapshot(config: Config, vault: Vault) -> dict[str, Any]:
         pass
     drafts.sort(key=lambda item: item.title)
 
+    dropped: list[Item] = []
+    try:
+        from .imports import listing as import_listing
+
+        for item in import_listing(vault, config):
+            dropped.append(
+                Item(
+                    id=item.relative,
+                    title=item.name,
+                    # The date is the point of the folder: an import is a dated
+                    # snapshot of what an export said that day, not a mirror.
+                    detail=f"{item.kind}, {max(1, item.size // 1024)} KB"
+                    + ("" if item.extracted else ", not read yet"),
+                    when=item.day,
+                    kind="import" + (":table" if item.tabular else ""),
+                )
+            )
+    except Exception:
+        pass
+
     return {
         "inbox": [_notice_item(vault, n).as_dict() for n in ordinary],
+        "imports": [item.as_dict() for item in dropped],
         "drafts": [item.as_dict() for item in drafts],
         "awaiting": [_notice_item(vault, n).as_dict() for n in waiting],
         # Python-computed reads, not agent turns. The panel redraws on every

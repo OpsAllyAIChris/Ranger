@@ -50,6 +50,7 @@ def test_the_registry_holds_exactly_the_intended_tools(registry):
         "forget",
         "gross_profit",
         "list_own_files",
+        "read_import",
         "read_own_file",
         "remember",
         "what_went_quiet",
@@ -76,6 +77,10 @@ def test_only_forget_needs_the_confirmation_gate(registry):
     reflex within a week, and a card clicked without reading manufactures a
     record of review that did not happen. What makes it safe instead is that it
     can only add, only below the marker, and only to a note that already exists.
+
+    read_import reads a dropped file through a bounded sidecar and writes that
+    sidecar, which is why it does not carry `writes`: it produces nothing the
+    operator did not already drop there, and it is create-only.
 
     write_document writes and does not gate, consistent with draft_and_hold:
     the file lands in the drafts folder, nothing sends it, and the preview that

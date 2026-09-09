@@ -303,6 +303,36 @@ class DocumentsConfig:
 
 
 @dataclass(frozen=True)
+class ImportsConfig:
+    """Dropped files. What is allowed in, and how much of it is read.
+
+    Nothing here decides what a file means. These are the two questions a
+    machine has: how big a file may be, and how much of one is worth turning
+    into context.
+    """
+
+    #: The ceiling on a dropped file, in megabytes. A NetSuite export is under
+    #: a megabyte; this is here so a stray 400MB video is refused with a
+    #: sentence rather than written into the vault and then into the snapshot.
+    max_mb: float = 25.0
+    #: How many rows of each sheet the sidecar quotes. Every sheet is always
+    #: *named* with its row count, however many there are: a fourteen sheet
+    #: workbook where four sheets are listed is a file the operator will be
+    #: wrong about.
+    extract_rows: int = 60
+    #: How many sheets have their contents quoted, as opposed to being named.
+    extract_sheets: int = 40
+    #: Extract a dropped file the moment it lands. Off, and deliberately: a
+    #: file dropped by accident should cost nothing, and the extract is written
+    #: the first time something is actually asked about the file.
+    extract_on_drop: bool = False
+
+    @property
+    def max_bytes(self) -> int:
+        return int(self.max_mb * 1_048_576)
+
+
+@dataclass(frozen=True)
 class GpConfig:
     """The gross profit tracker. Entered by hand, computed in Python.
 
@@ -474,6 +504,7 @@ class Config:
     recall: RecallConfig
     drafts: DraftsConfig
     documents: DocumentsConfig
+    imports: ImportsConfig
     gp: GpConfig
     voice: VoiceConfig
     stt: SttConfig
@@ -586,6 +617,9 @@ KNOWN_KEYS: dict[str, frozenset[str]] = {
     "documents": frozenset({
         "page_size", "assembly", "assembly_particles", "assembly_seconds",
         "preview_blocks", "preview_rows",
+    }),
+    "imports": frozenset({
+        "max_mb", "extract_rows", "extract_sheets", "extract_on_drop",
     }),
     "gp": frozenset({"currency", "year_starts_month", "stale_after_days"}),
     "voice": frozenset({
@@ -975,6 +1009,18 @@ def load_config(path: str | Path | None = None, *, load_env: bool = True) -> Con
     if documents.preview_blocks < 1 or documents.preview_rows < 1:
         raise ConfigError("documents.preview_blocks and preview_rows must be at least 1")
 
+    imports_section = table.get("imports", {})
+    imports = ImportsConfig(
+        max_mb=float(imports_section.get("max_mb", 25.0)),
+        extract_rows=int(imports_section.get("extract_rows", 60)),
+        extract_sheets=int(imports_section.get("extract_sheets", 40)),
+        extract_on_drop=bool(imports_section.get("extract_on_drop", False)),
+    )
+    if not 0 < imports.max_mb <= 500:
+        raise ConfigError("imports.max_mb must be above 0 and at most 500")
+    if imports.extract_rows < 1 or imports.extract_sheets < 1:
+        raise ConfigError("imports.extract_rows and extract_sheets must be at least 1")
+
     gp_section = table.get("gp", {})
     gp = GpConfig(
         currency=str(gp_section.get("currency", "$")),
@@ -1105,6 +1151,7 @@ def load_config(path: str | Path | None = None, *, load_env: bool = True) -> Con
         recall=recall,
         drafts=drafts,
         documents=documents,
+        imports=imports,
         gp=gp,
         voice=voice,
         stt=stt,

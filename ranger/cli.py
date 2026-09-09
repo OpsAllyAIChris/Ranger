@@ -1572,6 +1572,118 @@ def cmd_drafts(config: Config, args: Any) -> int:
     return 0
 
 
+def cmd_imports(config: Config, args: Any) -> int:
+    """Dropped files at the terminal: what is there, read one, import one.
+
+    The same code the window runs. `ranger imports gp` exists because the
+    import path has to be checkable without a browser, and because the whole
+    point of it is that no model is involved -- which is easier to believe when
+    it runs in a terminal with no model attached.
+    """
+    from . import gp, imports, shapes
+    from .vault import Vault
+
+    paint = _colour(sys.stdout.isatty())
+    vault = Vault(config.vault)
+    action = getattr(args, "imports_command", None) or "show"
+    name = " ".join(getattr(args, "name", []) or []).strip()
+
+    if action == "show":
+        files = imports.listing(vault, config)
+        if not files:
+            print(paint("  nothing dropped yet. Drag a file onto the window", DIM))
+            return 0
+        print(paint(f"  {len(files)} dropped", BOLD))
+        for item in files:
+            print(f"  {item.line()}")
+            if not item.extracted:
+                print(paint("      not read yet", DIM))
+        return 0
+
+    found, candidates = imports.find(vault, config, name)
+    if found is None:
+        if candidates:
+            print(paint(f"  {name!r} matches {len(candidates)}:", YELLOW))
+            for item in candidates[:10]:
+                print(f"    {item.name}")
+        else:
+            print(paint(f"  nothing dropped matches {name!r}", YELLOW))
+        return 1
+
+    if action == "read":
+        text, written = imports.sidecar_text(vault, found.path)
+        print(paint(f"  {found.name}" + ("  (extracted now)" if written else ""), BOLD))
+        print()
+        for line in text.splitlines():
+            print(f"  {line}")
+        return 0
+
+    if action == "gp":
+        if not found.tabular:
+            print(paint(f"  {found.name} is not a spreadsheet", YELLOW), file=sys.stderr)
+            return 2
+        tables = imports.tables_of(found.path)
+        if not tables:
+            print(paint("  nothing in it Jarvis can read as a table", YELLOW), file=sys.stderr)
+            return 2
+        table = tables[0]
+        index = shapes.header_row(table.rows)
+        headers = table.header_at(index)
+        if index < 0:
+            print(paint("  no header row Jarvis can see", YELLOW), file=sys.stderr)
+            return 2
+
+        known = shapes.find(vault, config, headers)
+        period_name = getattr(args, "period_column", "") or (known.period_column if known else "")
+        amount_name = getattr(args, "amount_column", "") or (known.amount_column if known else "")
+        if not (period_name and amount_name):
+            period_name, amount_name = shapes.propose(headers)
+
+        lowered = [h.casefold() for h in headers]
+        if (period_name.casefold() not in lowered or amount_name.casefold() not in lowered):
+            print(paint("  Jarvis has not been shown this export's shape.", YELLOW))
+            print(paint("  That is not an error: an export format that changed is a", DIM))
+            print(paint("  mapping to confirm again, not a failure.", DIM))
+            print(paint(f"  headers: {' | '.join(headers)}", DIM))
+            print(paint("  name the columns: --period-column '...' --amount-column '...'", DIM))
+            return 1
+
+        plan = gp.plan_import(
+            gp.ledger_for(config, vault), table.rows, header_index=index,
+            period_column=lowered.index(period_name.casefold()),
+            amount_column=lowered.index(amount_name.casefold()),
+            formulas=table.formulas,
+        )
+        print(paint(f"  {found.name}: {period_name} -> {amount_name}", BOLD))
+        for change in plan.changes:
+            print(f"    {change.line(config.gp.currency)}")
+        for skipped in plan.skipped[:10]:
+            print(paint(f"    skipped: {skipped}", DIM))
+        if plan.refused:
+            print(paint(f"  {plan.refused}", YELLOW), file=sys.stderr)
+            return 2
+        print(paint(f"  {plan.summary()}", TEAL))
+
+        if not getattr(args, "apply", False):
+            print(paint("  nothing written. Add --apply to write it", DIM))
+            return 0
+        written = gp.apply_import(config, vault, plan, source=found.name)
+        if known is None:
+            shapes.remember(vault, config, shapes.Shape(
+                fingerprint=shapes.fingerprint(headers),
+                name=found.name, headers=tuple(headers),
+                period_column=period_name, amount_column=amount_name,
+                confirmed=date.today().isoformat(),
+            ))
+            print(paint("  mapping remembered. The next file with these headers", DIM))
+            print(paint("  imports without asking", DIM))
+        print(paint(f"  {len(written)} entry(s) written to Ranger/gp", TEAL))
+        return 0
+
+    print("usage: ranger imports show|read|gp", file=sys.stderr)
+    return 2
+
+
 def cmd_gp(config: Config, args: Any) -> int:
     """The GP tracker at the terminal. The same figures the panel draws.
 
@@ -2381,6 +2493,21 @@ def main(argv: list[str] | None = None) -> int:
     )
     clear_cmd.add_argument("name", nargs="+", help="file name, or part of the title")
 
+    imports_cmd = sub.add_parser(
+        "imports", help="files dropped onto the window: what is there, and what is in them"
+    )
+    imports_sub = imports_cmd.add_subparsers(dest="imports_command")
+    imports_sub.add_parser("show", help="what has been dropped, newest day first")
+    read_cmd = imports_sub.add_parser("read", help="the bounded extract, written from the file")
+    read_cmd.add_argument("name", nargs="+", help="part of the file name")
+    gp_cmd = imports_sub.add_parser(
+        "gp", help="read gross profit out of a dropped export. Python only, no model"
+    )
+    gp_cmd.add_argument("name", nargs="+", help="part of the file name")
+    gp_cmd.add_argument("--apply", action="store_true", help="write it. Without this, a dry run")
+    gp_cmd.add_argument("--period-column", default="", help="the header of the period column")
+    gp_cmd.add_argument("--amount-column", default="", help="the header of the gross profit column")
+
     gp = sub.add_parser(
         "gp", help="gross profit: figures you enter, totals Python computes"
     )
@@ -2475,6 +2602,8 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_dormant(config, args)
     if args.command == "drafts":
         return cmd_drafts(config, args)
+    if args.command == "imports":
+        return cmd_imports(config, args)
     if args.command == "gp":
         return cmd_gp(config, args)
     if args.command == "snapshot":

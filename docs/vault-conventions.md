@@ -150,11 +150,19 @@ correctable in Obsidian.
 | `Ranger/inbox/` | Notices surfaced and not yet cleared, one file per notice | 5 |
 | `Ranger/log/` | The audit trail, append only | 6 |
 | `Ranger/gp/` | Gross profit figures, one create-only note per entry | C |
+| `Ranger/imports/<date>/` | Files dropped on the window, and their extracts | D3 |
 
 Generated documents live in `Ranger/drafts/` with the markdown ones, because a
 generated document is a draft that happens not to be text: same folder, same
 listing, same clearing, never sent and never overwritten. `ranger drafts
 preview` renders one as text from the file itself. See `docs/documents.md`.
+
+A dropped file lands in `Ranger/imports/<YYYY-MM-DD>/` under its own name,
+create-only, and nothing is parsed by dropping it. The first question about one
+writes a bounded `<name>.extract.md` beside it, and every later question reads
+that instead of the file. Gross profit is read out of these in Python, from
+columns confirmed once at the keyboard, and never by the model. See
+`docs/imports.md`.
 
 `Ranger/gp/` is the first dashlet's store. One note per figure, named for the
 month it is for and the moment it was entered:

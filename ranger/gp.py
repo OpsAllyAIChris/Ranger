@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
@@ -502,3 +502,152 @@ def export(config: Any, vault: Any, today: date, kind: str = "xlsx"):
         today=today,
         page_size=config.documents.page_size,
     )
+
+
+# -- importing, without the model ------------------------------------------
+#
+# The figures in a dropped export are read here, in Python, from columns a
+# person confirmed once. **No language model is in this path.** The model
+# explains the number when asked and never produces one, which matters more
+# here than anywhere else in the repository because these numbers get acted on.
+
+
+@dataclass(frozen=True)
+class Change:
+    """One month, and what importing it would do."""
+
+    period: str
+    amount: Decimal
+    was: Decimal | None
+    #: "new", "corrects", or "unchanged".
+    verdict: str
+
+    @property
+    def writes(self) -> bool:
+        return self.verdict in ("new", "corrects")
+
+    def line(self, symbol: str = "$") -> str:
+        if self.verdict == "unchanged":
+            return f"{self.period}  {money(self.amount, symbol)}  unchanged"
+        if self.verdict == "new":
+            return f"{self.period}  {money(self.amount, symbol)}  new"
+        return f"{self.period}  {money(self.amount, symbol)}  was {money(self.was, symbol)}"
+
+
+@dataclass
+class ImportPlan:
+    """What a re-import would do, before it does any of it."""
+
+    changes: list[Change] = field(default_factory=list)
+    #: Rows that were not figures: totals lines, blank rows, a period nobody
+    #: can parse. Named rather than silently dropped.
+    skipped: list[str] = field(default_factory=list)
+    #: Set when the amount column holds formulas. Nothing is imported: a cached
+    #: formula value is whatever was true when the file was last calculated.
+    refused: str = ""
+
+    @property
+    def writes(self) -> list[Change]:
+        return [change for change in self.changes if change.writes]
+
+    @property
+    def unchanged(self) -> int:
+        return len([c for c in self.changes if c.verdict == "unchanged"])
+
+    def summary(self) -> str:
+        """"3 months updated, 9 unchanged." What the operator is told."""
+        if self.refused:
+            return self.refused
+        written = len(self.writes)
+        parts = [
+            f"{written} month{'' if written == 1 else 's'} updated",
+            f"{self.unchanged} unchanged",
+        ]
+        if self.skipped:
+            parts.append(f"{len(self.skipped)} row{'' if len(self.skipped) == 1 else 's'} skipped")
+        return ", ".join(parts)
+
+
+def plan_import(
+    ledger: Ledger,
+    rows: list[list[str]],
+    *,
+    header_index: int,
+    period_column: int,
+    amount_column: int,
+    formulas: set | None = None,
+) -> ImportPlan:
+    """Work out what an export would change. Reads; writes nothing.
+
+    **Same value is not a correction.** An export carrying twelve months
+    dropped every month would otherwise write twelve superseding entries a
+    month, and the folder would become a record of how often a file was dropped
+    rather than of what was learned. A month whose figure differs *is* a
+    correction and supersedes, per the rules everything else here follows.
+    """
+    plan = ImportPlan()
+    formulas = formulas or set()
+    current = ledger.current()
+    seen: dict[str, Decimal] = {}
+
+    if any(column == amount_column and row > header_index for row, column in formulas):
+        plan.refused = (
+            "that column holds formulas, and Jarvis reads values only. A formula's "
+            "last calculated value is whatever was true when the file was last "
+            "opened by something that calculates, so importing it would be "
+            "importing a guess. Export it again with values."
+        )
+        return plan
+
+    from .imports import read_amount, read_period
+
+    for index, row in enumerate(rows):
+        if index <= header_index:
+            continue
+        label = " ".join(str(cell) for cell in row[:2] if str(cell).strip())[:60]
+        if not any(str(cell).strip() for cell in row):
+            continue
+        period = read_period(row[period_column] if period_column < len(row) else "")
+        amount = read_amount(row[amount_column] if amount_column < len(row) else "")
+        if not period or amount is None:
+            plan.skipped.append(label or f"row {index + 1}")
+            continue
+        if period in seen:
+            # Two rows for one month in a single export. Nothing here can tell
+            # which the operator meant, so neither is imported.
+            plan.skipped.append(f"{label or period} (a second row for {period})")
+            continue
+        seen[period] = amount
+        was = current[period].amount if period in current else None
+        verdict = "new" if was is None else ("unchanged" if was == amount else "corrects")
+        plan.changes.append(Change(period=period, amount=amount, was=was, verdict=verdict))
+
+    plan.changes.sort(key=lambda change: change.period)
+    return plan
+
+
+def apply_import(
+    config: Any, vault: Any, plan: ImportPlan, *, source: str = "", now: datetime | None = None
+) -> list[Entry]:
+    """Write what changed. Create-only, one note each, exactly as a typed one.
+
+    An imported figure is not a different kind of figure: it lands in the same
+    folder, in the same format, and a correction supersedes rather than edits.
+    The note says where it came from, so a figure can always be traced back to
+    the file it was read out of.
+    """
+    now = now or datetime.now()
+    written: list[Entry] = []
+    for offset, change in enumerate(plan.writes):
+        entry = Entry(
+            period=change.period,
+            amount=change.amount,
+            recorded=(now + timedelta(seconds=offset)).replace(microsecond=0),
+            note=f"Imported from {source}." if source else "Imported.",
+        )
+        path = write(vault, folder_for(config), entry)
+        written.append(
+            Entry(period=entry.period, amount=entry.amount, recorded=entry.recorded,
+                  note=entry.note, path=path)
+        )
+    return written

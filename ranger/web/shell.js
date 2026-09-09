@@ -118,6 +118,21 @@ export function createShell(orb) {
       button.onclick = () => send({ type: 'dismiss', id: item.id });
       node.append(button);
     }
+    // A dropped file. "import" asks the server to propose a column mapping;
+    // nothing is parsed until it is clicked, so an accidental drop stays a
+    // file in a folder.
+    if (item.kind && item.kind.startsWith('import')) {
+      node.classList.add('import');
+      if (item.kind.endsWith(':table')) {
+        const button = document.createElement('button');
+        button.className = 'preview-open clickable';
+        button.textContent = 'import';
+        button.title = 'propose a column mapping. Nothing is written until you confirm';
+        button.onclick = () => send({ type: 'import_propose', name: item.title });
+        node.append(button);
+      }
+      return node;
+    }
     // A generated document opens its preview. Reopening never replays the
     // assembly animation: it is played once per document, by the server not
     // marking a reopen for it and by seenDocuments here.
@@ -343,9 +358,75 @@ export function createShell(orb) {
       }),
       section('Inbox', view.inbox || [], { dismissable: true, empty: 'nothing new' }),
       section('Drafts', view.drafts || [], { clearable: true, empty: 'none held' }),
+      section('Dropped', view.imports || [], { empty: 'drop a file on the window' }),
       toolSection(view.tools || [])
     );
   }
+
+  // --------------------------------------------------------------- the drop
+  //
+  // A file dropped on the window is POSTed to the server, which lands it in
+  // today's import folder and says what it got. **Nothing is parsed here and
+  // nothing is parsed there.** The browser does not read the file, does not
+  // name it anything of its own, and does not decide what it is: it hands over
+  // the bytes and the name the operator's own file system gave it.
+  //
+  // A POST rather than a socket message because the socket caps a message at a
+  // megabyte, deliberately, and a spreadsheet is not a sentence.
+
+  let dropDepth = 0;
+
+  function dropping(on) {
+    dropDepth = on ? dropDepth + 1 : Math.max(0, dropDepth - 1);
+    document.body.classList.toggle('dropping', dropDepth > 0);
+  }
+
+  // The server refuses an oversized drop on the Content-Length, without
+  // reading it. That is the guard; this is so the operator gets a sentence
+  // rather than a failed upload, and so a 400MB file is not pushed through a
+  // socket to be told no at the other end.
+  let dropCeiling = 25 * 1024 * 1024;
+
+  async function sendFile(file) {
+    if (file.size > dropCeiling) {
+      toast(
+        file.name + ' is ' + (file.size / 1048576).toFixed(1) +
+        ' MB, over the ' + (dropCeiling / 1048576).toFixed(0) + ' MB limit for a drop'
+      );
+      return;
+    }
+    toast('taking ' + file.name + '...');
+    try {
+      const response = await fetch('/drop', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/octet-stream',
+          'X-Ranger-Filename': encodeURIComponent(file.name),
+        },
+        body: file,
+      });
+      const result = await response.json();
+      toast(result.message || (result.ok ? 'landed' : 'refused'));
+      if (!result.ok) return;
+      // The server looks at what landed: if the headers are a shape the
+      // operator has already mapped it imports, and if they are not it says so
+      // and waits. Either way the panel is redrawn from the vault.
+      send({ type: 'dropped', name: result.name });
+    } catch (err) {
+      toast('that drop did not reach Jarvis: ' + err);
+    }
+  }
+
+  window.addEventListener('dragenter', (e) => { e.preventDefault(); dropping(true); });
+  window.addEventListener('dragover', (e) => { e.preventDefault(); });
+  window.addEventListener('dragleave', (e) => { e.preventDefault(); dropping(false); });
+  window.addEventListener('drop', (e) => {
+    e.preventDefault();
+    dropDepth = 0;
+    document.body.classList.remove('dropping');
+    const files = [...((e.dataTransfer && e.dataTransfer.files) || [])];
+    for (const file of files) sendFile(file);
+  });
 
   // ------------------------------------------------------------ the preview
   //
@@ -529,6 +610,115 @@ export function createShell(orb) {
       'showing ' + shown + ' of ' + total + ' ' + what +
       '. Open the file itself for the rest.';
     return node;
+  }
+
+  // The mapping card. It lives in the preview sheet because the sheet is
+  // already where file-derived content is shown, and because a proposal has to
+  // show what it will write: a confirmation that does not show the rows is a
+  // click, not a decision.
+  function openProposal(event) {
+    endAssembly();
+    previewOpen = event.relative;
+
+    const head = document.createElement('div');
+    head.className = 'preview-head';
+    const name = document.createElement('div');
+    name.className = 'preview-name';
+    const badge = document.createElement('span');
+    badge.className = 'preview-badge import';
+    badge.textContent = 'import';
+    const label = document.createElement('span');
+    label.textContent = event.name;
+    name.append(badge, label);
+    const close = document.createElement('button');
+    close.className = 'ghost clickable';
+    close.textContent = 'close';
+    close.onclick = closePreview;
+    const actions = document.createElement('div');
+    actions.className = 'preview-actions';
+    actions.append(close);
+    head.append(name, actions);
+
+    const caveat = document.createElement('div');
+    caveat.className = 'preview-caveat';
+    caveat.textContent = event.known
+      ? 'Jarvis has seen this shape before. Confirm to import it again.'
+      : 'Jarvis has not seen this shape before. It has proposed a mapping from the '
+        + 'column headings; nothing is written until you confirm it.';
+
+    const body = document.createElement('div');
+    body.className = 'preview-body import';
+
+    const form = document.createElement('div');
+    form.className = 'import-form';
+    const pick = (which, selected) => {
+      const wrap = document.createElement('label');
+      wrap.className = 'import-pick';
+      const text = document.createElement('span');
+      text.textContent = which === 'period' ? 'period column' : 'gross profit column';
+      const select = document.createElement('select');
+      select.className = 'import-select';
+      for (const header of event.headers || []) {
+        const option = document.createElement('option');
+        option.value = header;
+        option.textContent = header;
+        if (header === selected) option.setAttribute('selected', 'selected');
+        select.append(option);
+      }
+      select.value = selected || '';
+      wrap.append(text, select);
+      form.append(wrap);
+      return select;
+    };
+    const period = pick('period', event.period);
+    const amount = pick('amount', event.amount);
+    body.append(form);
+
+    if (event.refused) {
+      const bad = document.createElement('div');
+      bad.className = 'preview-error';
+      bad.textContent = event.refused;
+      body.append(bad);
+    }
+
+    const summary = document.createElement('div');
+    summary.className = 'preview-note';
+    summary.textContent = event.summary || 'nothing to write from this mapping yet';
+    body.append(summary);
+
+    // Exactly what it will write, before it writes it.
+    const rows = (event.changes || []).map((change) => [
+      change.period,
+      change.amount,
+      change.verdict === 'corrects' ? 'was ' + change.was : change.verdict,
+    ]);
+    if (rows.length) body.append(grid([['period', 'figure', ''], ...rows], true));
+    if ((event.skipped || []).length) {
+      const skipped = document.createElement('div');
+      skipped.className = 'preview-note';
+      skipped.textContent =
+        'not read as months: ' + event.skipped.slice(0, 8).join(', ');
+      body.append(skipped);
+    }
+
+    const confirm = document.createElement('button');
+    confirm.className = 'import-confirm clickable';
+    confirm.textContent = 'import these figures';
+    confirm.onclick = () => {
+      send({
+        type: 'import_apply',
+        name: event.name,
+        period: period.value,
+        amount: amount.value,
+      });
+      closePreview();
+    };
+    body.append(confirm);
+
+    el.preview.replaceChildren(head, caveat, body);
+    el.preview.hidden = false;
+    document.body.classList.add('previewing');
+    if (orb && orb.setOffset) orb.setOffset(4.2);
   }
 
   function openPreview(event) {
@@ -887,6 +1077,7 @@ export function createShell(orb) {
     switch (event.kind) {
       case 'hello':
         setState('idle');
+        if (event.drop_max_bytes) dropCeiling = event.drop_max_bytes;
         drawHandsFree(event.hands_free);
         voiceReady = Boolean(event.voice) && supported();
         el.mic.hidden = !voiceReady;
@@ -959,6 +1150,9 @@ export function createShell(orb) {
         break;
       case 'panel':
         drawPanel(event);
+        break;
+      case 'import_proposal':
+        openProposal(event);
         break;
       case 'document':
         // Sent only for a file that is on disk. The animation starts here and

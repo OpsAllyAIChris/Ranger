@@ -150,7 +150,10 @@ def test_every_draft_row_has_a_clear_control(rendered):
     """It was rendering, and rendering invisibly. A Python test of clear_draft
     passes whether or not the button is on screen, which is why this asks the
     rendered tree instead."""
-    drafts = rows(rendered["panel"])
+    drafts = [
+        row for row in rows(rendered["panel"])
+        if "import" not in row["class"].split()
+    ]
 
     assert len(drafts) == 2, "one row per draft"
     for row in drafts:
@@ -165,16 +168,18 @@ def test_every_draft_row_has_a_clear_control(rendered):
 @needs_node
 def test_the_clear_control_sends_the_clear(rendered):
     """Wired to the server, not to a local idea of clearing."""
-    assert rendered["sent"] == [
-        {"type": "clear_draft", "name": "Ranger/drafts/2026-09-08-telly.md"}
-    ]
+    assert rendered["sent"][0] == {
+        "type": "clear_draft", "name": "Ranger/drafts/2026-09-08-telly.md"
+    }
 
 
 @needs_node
 def test_a_generated_document_row_keeps_the_clear_and_gains_a_preview(rendered):
     """The document rows are new, and adding them must not have cost the
     drafts their clear control."""
-    document_row = [row for row in rows(rendered["panel"]) if "document" in row["class"]]
+    document_row = [
+        row for row in rows(rendered["panel"]) if "document" in row["class"].split()
+    ]
 
     assert len(document_row) == 1
     classes = [child["class"] for child in document_row[0]["children"]]
@@ -231,3 +236,78 @@ def test_the_preview_sheet_is_not_in_the_markup_until_it_is_needed():
 
     assert re.search(r'<section id="preview"[^>]*\bhidden\b', page)
     assert "#preview[hidden]" in CSS
+
+
+# -- the drop, as far as a fake DOM can see it ------------------------------
+
+
+@needs_node
+def test_a_dropped_file_gets_a_row_with_its_date(rendered):
+    """The panel shows imports the way it shows drafts, and the date is the
+    point: an import is a dated snapshot of what an export said that day."""
+    dropped = [row for row in rows(rendered["panel"]) if "import" in row["class"].split()]
+
+    assert len(dropped) == 2
+    titles = [row["children"][0]["text"] for row in dropped]
+    assert titles == ["netsuite gp.xlsx", "pricing.pdf"]
+    assert any("2026-09-09" == child["text"] for child in dropped[0]["children"])
+
+
+@needs_node
+def test_only_a_spreadsheet_offers_an_import(rendered):
+    """A dropped PDF is context. Failing to be a GP export is not a failure and
+    does not put a button on the row that would do nothing."""
+    dropped = [row for row in rows(rendered["panel"]) if "import" in row["class"].split()]
+    buttons = [
+        [child["text"] for child in row["children"] if child["clickable"]]
+        for row in dropped
+    ]
+
+    assert buttons[0] == ["import"]
+    assert buttons[1] == [], "a PDF has nothing to map"
+
+
+@needs_node
+def test_nothing_is_parsed_until_the_import_button_is_clicked(rendered):
+    """The drop lands and stops. Asking for a mapping is a separate act, taken
+    by a person, which is what makes an accidental drop free."""
+    assert {"type": "import_propose", "name": "netsuite gp.xlsx"} in rendered["sentAfterConfirm"]
+
+
+@needs_node
+def test_the_mapping_card_shows_the_rows_it_would_write(rendered):
+    """A confirmation that does not show what it will write is a click, not a
+    decision."""
+    texts = [node["text"] for node in walk(rendered["proposal"])]
+
+    assert "netsuite gp.xlsx" in texts
+    assert any("not seen this shape before" in text for text in texts)
+    assert "period column" in texts and "gross profit column" in texts
+    assert "2026-06" in texts and "2026-08" in texts
+    assert any("was 48250" in text for text in texts)
+    assert any("2 months updated" in text for text in texts)
+    assert any("Total 573500" in text for text in texts), "and what it will not write"
+
+
+@needs_node
+def test_confirming_sends_the_columns_and_closes_the_sheet(rendered):
+    assert rendered["sentAfterConfirm"][-1] == {
+        "type": "import_apply",
+        "name": "netsuite gp.xlsx",
+        "period": "Period",
+        "amount": "Gross Profit",
+    }
+    closed = state(rendered, "after confirm")
+    assert closed["preview"]["hidden"] is True
+    assert closed["offsets"][-1] == 0, "and the orb goes back to the middle"
+
+
+def test_the_drag_target_is_not_the_microphone_colour():
+    """Orange means the microphone is live and keeps one meaning."""
+    block = CSS.split("body.dropping::after {")[1].split("}")[0]
+
+    assert "var(--accent)" in block
+    assert "orange" not in block.lower()
+    for hex_colour in re.findall(r"#([0-9a-fA-F]{6})", block):
+        red, green, blue = (int(hex_colour[i:i + 2], 16) for i in (0, 2, 4))
+        assert green + blue > red, f"#{hex_colour} is a warm colour"

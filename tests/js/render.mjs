@@ -29,6 +29,13 @@ const PANEL = {
   awaiting: [],
   dashlets: [],
   tools: [],
+  imports: [
+    { id: 'Ranger/imports/2026-09-09/netsuite gp.xlsx', title: 'netsuite gp.xlsx',
+      detail: 'Excel workbook, 6 KB, not read yet', when: '2026-09-09',
+      kind: 'import:table' },
+    { id: 'Ranger/imports/2026-09-09/pricing.pdf', title: 'pricing.pdf',
+      detail: 'PDF, 2 KB', when: '2026-09-09', kind: 'import' },
+  ],
   drafts: [
     { id: 'Ranger/drafts/2026-09-08-telly.md', title: 'Telly follow up',
       detail: 'Dana, pricing lands Thursday.', when: 'today, 09:12', kind: 'md' },
@@ -89,6 +96,12 @@ const clear = rows
 if (clear) clear.onclick();
 out.sent = socket.sent;
 
+// A click on the import button of the dropped spreadsheet.
+const importButton = panel
+  .walk()
+  .find((node) => node.classList.contains('preview-open') && node.textContent === 'import');
+if (importButton) importButton.onclick();
+
 // 3. A document lands.
 socket.deliver(DOCUMENT);
 out.states.push(state('document'));
@@ -97,5 +110,34 @@ out.assembled = assembled;
 // 4. Escape closes it.
 window.dispatch('keydown', { key: 'Escape' });
 out.states.push(state('closed'));
+
+// 5. A mapping proposal, which is the other thing the sheet is used for.
+socket.deliver({
+  kind: 'import_proposal',
+  name: 'netsuite gp.xlsx',
+  relative: 'Ranger/imports/2026-09-09/netsuite gp.xlsx',
+  known: false,
+  headers: ['Period', 'Revenue', 'COGS', 'Gross Profit', 'Margin %'],
+  period: 'Period',
+  amount: 'Gross Profit',
+  fingerprint: '7f816472',
+  changes: [
+    { period: '2026-06', amount: '41000', was: null, verdict: 'new' },
+    { period: '2026-08', amount: '47900', was: '48250', verdict: 'corrects' },
+  ],
+  skipped: ['Total 573500'],
+  refused: '',
+  summary: '2 months updated, 0 unchanged, 1 row skipped',
+});
+out.states.push(state('proposal'));
+out.proposal = preview.describe();
+
+// Confirming it is the only way a mapping is ever learned.
+const confirm = preview
+  .walk()
+  .find((node) => node.classList.contains('import-confirm'));
+if (confirm) confirm.onclick();
+out.sentAfterConfirm = socket.sent;
+out.states.push(state('after confirm'));
 
 console.log(JSON.stringify(out, null, 1));

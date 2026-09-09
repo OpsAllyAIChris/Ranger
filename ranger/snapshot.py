@@ -47,6 +47,12 @@ INCLUDED = (
     # Hand-entered figures that exist nowhere else. Small, text, and the one
     # folder here whose contents cannot be reconstructed from the CRM.
     "Ranger/gp/",
+    # Dropped files and their sidecars. They hold customer pricing and margin,
+    # they stay local, and a dated import folder is exactly the kind of thing
+    # that is gone for good if it is not in the only undo this vault has. The
+    # per-file ceiling still applies, and a file over it is named in the log
+    # rather than silently skipped.
+    "Ranger/imports/",
 )
 
 #: Markdown sitting directly in `Ranger/`, not recursively: aliases.md,

@@ -51,6 +51,17 @@ PREVIEW = "preview"
 #: Show a generated document in the operator's file manager. The other half of
 #: getting the file out; the download link is the half that always works.
 REVEAL = "reveal"
+#: A dropped file landed (over the POST route) and the browser is telling the
+#: server to look at it. Nothing is parsed on this: it checks whether the
+#: headers are a shape the operator has already mapped, which is Python reading
+#: one row, and imports silently if they are.
+DROPPED = "dropped"
+#: "Propose a mapping for this file." Sent by the import button on a panel row,
+#: never automatically: an accidental drop does nothing.
+IMPORT_PROPOSE = "import_propose"
+#: The operator confirmed a mapping at the keyboard. This is the only way a new
+#: shape is ever learned.
+IMPORT_APPLY = "import_apply"
 #: A gross profit figure typed into the panel. The operator's own keystrokes,
 #: not an agent action: the model is not in this path and must not be. See
 #: dashlets.py for why the whole command centre works this way.
@@ -133,6 +144,9 @@ class Session:
             voice=self.transcriber is not None,
             speech=self.speaker is not None,
             hands_free=self._hands_free_state(),
+            # So an oversized drop is refused with a sentence in the window
+            # rather than by pushing 400MB through a socket to be told no.
+            drop_max_bytes=self.agent.config.imports.max_bytes,
         )
         self.emit("state", state=State.IDLE.value)
         self.push_panel()
@@ -188,6 +202,12 @@ class Session:
             return self._preview(message)
         if kind == REVEAL:
             return self._reveal(message)
+        if kind == DROPPED:
+            return self._dropped(message)
+        if kind == IMPORT_PROPOSE:
+            return self._import_propose(message)
+        if kind == IMPORT_APPLY:
+            return self._import_apply(message)
         if kind == STOP:
             if not self.stop():
                 self.emit("error", message="nothing was running")
@@ -849,6 +869,214 @@ class Session:
             self.emit("notice", level="warn", message=f"could not show {found.name}")
         else:
             self.emit("notice", level="info", message=f"showing {found.name}")
+
+    # -- dropped files -------------------------------------------------
+
+    def _import_context(self, name: str):
+        """(the dropped file, its rows, the header index, the headers).
+
+        Python throughout. This reads a spreadsheet; it never sends one
+        anywhere, and no part of what it reads reaches a model.
+        """
+        from . import imports, shapes
+
+        found, _ = imports.find(self.agent.vault, self.agent.config, name)
+        if found is None or not found.tabular:
+            return None, [], -1, []
+        tables = imports.tables_of(found.path)
+        if not tables:
+            return found, [], -1, []
+        table = tables[0]
+        index = shapes.header_row(table.rows)
+        headers = table.header_at(index)
+        return found, table, index, headers
+
+    def _dropped(self, message: dict[str, Any]) -> None:
+        """A file landed. Say what happened and, if it is a known shape, import it.
+
+        **A known shape applies silently**, because being stopped every month
+        to confirm the same mapping is how a card becomes a reflex. What it
+        never does is apply a shape it has not been shown: an unknown header
+        row is reported as unknown, in plain words, and waits.
+        """
+        from . import imports, shapes
+
+        name = str(message.get("name", "")).strip()
+        self.push_panel()
+        found, table, index, headers = self._import_context(name)
+        if found is None or index < 0:
+            return
+
+        known = shapes.find(self.agent.vault, self.agent.config, headers)
+        if known is None:
+            self.emit(
+                "notice",
+                level="info",
+                message=(
+                    f"{found.name} is a spreadsheet Jarvis has not been shown before. "
+                    "Use import on the panel row and it will propose a mapping."
+                ),
+            )
+            return
+        self._run_import(found, table, index, known)
+
+    def _run_import(self, found, table, index, shape) -> None:
+        """Read the columns, write what changed, tell the operator."""
+        from . import gp
+
+        try:
+            period = [h.casefold() for h in table.header_at(index)].index(
+                shape.period_column.casefold()
+            )
+            amount = [h.casefold() for h in table.header_at(index)].index(
+                shape.amount_column.casefold()
+            )
+        except ValueError:
+            self.emit("error", message=(
+                f"{found.name} matched a known shape but its columns have moved. "
+                "Use import on the panel row to map it again."
+            ))
+            return
+
+        ledger = gp.ledger_for(self.agent.config, self.agent.vault)
+        plan = gp.plan_import(
+            ledger, table.rows, header_index=index,
+            period_column=period, amount_column=amount, formulas=table.formulas,
+        )
+        if plan.refused:
+            self.emit("error", message=plan.refused)
+            return
+
+        written = gp.apply_import(
+            self.agent.config, self.agent.vault, plan, source=found.name
+        )
+        summary = plan.summary()
+        self.emit("notice", level="info", message=f"{found.name}: {summary}")
+        self._log_import(found, summary, len(written))
+        self.push_panel()
+
+    def _log_import(self, found, summary: str, written: int) -> None:
+        """One line in the inbox. A silent import still leaves a trace.
+
+        The operator asked to know if an export moved five months without being
+        stopped every time, and this is that: a notice they will see, written
+        whether or not anybody was at the keyboard when it happened.
+        """
+        from datetime import datetime
+
+        from .heartbeat import Inbox, Notice
+
+        try:
+            Inbox(self.agent.vault, self.agent.config.vault.inbox).write(
+                Notice(
+                    kind="import",
+                    title=f"Imported {found.name}: {summary}",
+                    body=(
+                        f"Read from {found.relative} using a column mapping you "
+                        f"confirmed earlier. {written} entry(s) written to Ranger/gp. "
+                        "Nothing was overwritten; a changed figure supersedes the "
+                        "one it corrects."
+                    ),
+                    created=datetime.now(),
+                )
+            )
+        except Exception as exc:  # an inbox failure must not lose the import
+            self.emit("error", message=f"the import was written; the notice was not: {exc}")
+
+    def _import_propose(self, message: dict[str, Any]) -> None:
+        """What Jarvis would import, and from which columns. Writes nothing.
+
+        The proposal comes from the *header* text and from nothing else. A cell
+        cannot reach this: it is a regular expression over the header row, and
+        then a person at a keyboard.
+        """
+        from . import gp, shapes
+
+        name = str(message.get("name", "")).strip()
+        found, table, index, headers = self._import_context(name)
+        if found is None:
+            self.emit("error", message="no dropped file by that name")
+            return
+        if index < 0:
+            self.emit("error", message=(
+                f"{found.name} has no header row Jarvis can see, so there is nothing "
+                "to map. It is still readable as context."
+            ))
+            return
+
+        known = shapes.find(self.agent.vault, self.agent.config, headers)
+        period_name = known.period_column if known else ""
+        amount_name = known.amount_column if known else ""
+        if not (period_name and amount_name):
+            period_name, amount_name = shapes.propose(headers)
+
+        preview_plan = None
+        if period_name and amount_name:
+            lowered = [h.casefold() for h in headers]
+            try:
+                ledger = gp.ledger_for(self.agent.config, self.agent.vault)
+                preview_plan = gp.plan_import(
+                    ledger, table.rows, header_index=index,
+                    period_column=lowered.index(period_name.casefold()),
+                    amount_column=lowered.index(amount_name.casefold()),
+                    formulas=table.formulas,
+                )
+            except ValueError:
+                preview_plan = None
+
+        self.emit(
+            "import_proposal",
+            name=found.name,
+            relative=found.relative,
+            known=known is not None,
+            headers=list(headers),
+            period=period_name,
+            amount=amount_name,
+            fingerprint=shapes.fingerprint(headers),
+            changes=[
+                {"period": c.period, "amount": str(c.amount),
+                 "was": None if c.was is None else str(c.was), "verdict": c.verdict}
+                for c in (preview_plan.changes if preview_plan else [])
+            ],
+            skipped=list(preview_plan.skipped) if preview_plan else [],
+            refused=preview_plan.refused if preview_plan else "",
+            summary=preview_plan.summary() if preview_plan else "",
+        )
+
+    def _import_apply(self, message: dict[str, Any]) -> None:
+        """The operator confirmed. Remember the shape, then write what changed."""
+        from datetime import date
+
+        from . import shapes
+
+        name = str(message.get("name", "")).strip()
+        period_name = str(message.get("period", "")).strip()
+        amount_name = str(message.get("amount", "")).strip()
+        found, table, index, headers = self._import_context(name)
+        if found is None or index < 0:
+            self.emit("error", message="no dropped file by that name")
+            return
+
+        lowered = [h.casefold() for h in headers]
+        if period_name.casefold() not in lowered or amount_name.casefold() not in lowered:
+            self.emit("error", message="those columns are not in that file")
+            return
+
+        shape = shapes.Shape(
+            fingerprint=shapes.fingerprint(headers),
+            name=found.name,
+            headers=tuple(headers),
+            period_column=period_name,
+            amount_column=amount_name,
+            sheet="",
+            confirmed=date.today().isoformat(),
+        )
+        try:
+            shapes.remember(self.agent.vault, self.agent.config, shape)
+        except Exception as exc:
+            self.emit("error", message=f"could not remember that mapping: {exc}")
+            return
+        self._run_import(found, table, index, shape)
 
     def _dismiss(self, message: dict[str, Any]) -> None:
         from .panel import dismiss

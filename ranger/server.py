@@ -40,6 +40,12 @@ WS_PATH = "/ws"
 #: inside the drafts folder and to be one of the three generated kinds.
 FILE_PATH = "/document/"
 
+#: Where a dropped file arrives. A POST rather than a websocket message: the
+#: socket caps a message at a megabyte on purpose, and a spreadsheet is not a
+#: sentence. The body is the file, the name comes in a header, and the reply is
+#: what Jarvis got.
+DROP_PATH = "/drop"
+
 #: Answers "is it already running, and is anyone looking at it". Written for
 #: the taskbar shortcut, which must not start a second server or open a second
 #: window, and useful on its own when nothing seems to be happening.
@@ -148,6 +154,101 @@ class FrontEndHandler(SimpleHTTPRequestHandler):
         if path.startswith(FILE_PATH):
             return self._document(path[len(FILE_PATH):])
         return super().do_GET()
+
+    def do_POST(self) -> None:  # noqa: N802 - the base class spells it this way
+        """One route, and it takes a file. Nothing else is posted here."""
+        path = self.path.split("?")[0].rstrip("/")
+        if path == DROP_PATH.rstrip("/"):
+            return self._drop()
+        self.send_error(404, "not found")
+
+    def _drop(self) -> None:
+        """A file dropped on the window. **Land it. Do not read it.**
+
+        Origin-checked exactly as the websocket is, and for the same reason:
+        a page on any site the operator happens to have open can POST across
+        origins without a preflight, so if the check is not here it is nowhere.
+
+        Nothing is parsed. The file is written into today's import folder and
+        the reply says what arrived. Whether anything is ever made of it is a
+        separate decision, taken later, by the operator.
+        """
+        config = type(self).config
+        if config is None:
+            self.send_error(404, "not found")
+            return
+        if not self._allowed_origin():
+            self.log_error("refused a drop from origin %r", self.headers.get("Origin"))
+            self.send_error(403, "not allowed")
+            return
+
+        from .imports import Refused, land
+        from .vault import Vault
+
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+        except ValueError:
+            length = 0
+        ceiling = config.imports.max_bytes
+        if length <= 0:
+            self._json(400, {"ok": False, "message": "that drop had no file in it"})
+            return
+        if length > ceiling:
+            self._json(413, {
+                "ok": False,
+                "message": (
+                    f"that file is {length / 1_048_576:.1f} MB, over the "
+                    f"{config.imports.max_mb:.0f} MB limit for a dropped file"
+                ),
+            })
+            return
+
+        name = self.headers.get("X-Ranger-Filename", "")
+        try:
+            from urllib.parse import unquote
+
+            name = unquote(name)
+        except Exception:
+            pass
+
+        payload = self.rfile.read(length)
+        if len(payload) != length:
+            # A truncated upload never becomes a file. The landing writes from
+            # a complete payload, so a half-arrived drop stops here.
+            self._json(400, {"ok": False, "message": "that upload did not finish"})
+            return
+
+        try:
+            landed = land(
+                Vault(config.vault), config, name, payload,
+                max_bytes=ceiling,
+            )
+        except Refused as exc:
+            self._json(400, {"ok": False, "message": str(exc)})
+            return
+        except Exception as exc:
+            self.log_error("drop failed: %s", exc)
+            self._json(500, {"ok": False, "message": f"could not save it: {exc}"})
+            return
+
+        self._json(200, {
+            "ok": True,
+            "message": landed.describe(),
+            "name": landed.name,
+            "relative": landed.relative,
+            "kind": landed.kind,
+            "size": landed.size,
+            "already": landed.already,
+            "tabular": landed.tabular,
+        })
+
+    def _json(self, status: int, payload: dict) -> None:
+        body = json.dumps(payload).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
 
     def _status(self) -> None:
         import os
