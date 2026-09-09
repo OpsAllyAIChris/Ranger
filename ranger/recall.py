@@ -64,10 +64,53 @@ FULL_PER_DAY = 60
 #: How much of one entry's detail is shown. The log itself caps a cell at 400.
 DETAIL_CHARS = 200
 
-#: The rows worth putting in a digest, in the order they are worth reading.
-#: A digest that led with tool calls would bury what the operator actually
-#: asked for under the machinery of answering it.
+#: The rows a digest considers at all.
 DIGEST_KINDS = ("turn", "confirmation", "tool", "reply", "error", "interrupted")
+
+#: The tools that change something in the vault. Checked against the registry
+#: by a test, so adding a writing tool without adding it here fails rather than
+#: quietly making that tool's entries invisible in a digest.
+#:
+#: Named here rather than read from the registry because the registry is built
+#: from this module's own tool, and `recall` assembles text -- it does not know
+#: what a Tool is.
+WRITING = frozenset({
+    "analyse", "clear_draft", "draft_and_hold", "enter_gross_profit",
+    "file_to_account", "forget", "remember", "write_document",
+})
+
+#: Turns that are an acknowledgement rather than a question. On a heavy day
+#: these are a third of the rows and none of them is worth a slot.
+_ACKS = frozenset({
+    "yes", "yeah", "yep", "no", "nope", "ok", "okay", "sure", "go", "ahead",
+    "do", "it", "that", "one", "please", "thanks", "thank", "you", "right",
+    "fine", "good", "great", "stop", "wait", "hang", "on", "cancel", "nevermind",
+    "correct", "wrong", "and", "then", "next", "same", "again",
+})
+
+#: What each kind of entry is worth in a digest. **A score, not a filter**: on a
+#: quiet day the slots still fill, and on a heavy one the six that survive are
+#: the six that mattered rather than the six that happened last.
+#:
+#: The order is an argument about what a day is made of. A gate decision is the
+#: highest because somebody chose something. A write is next because the vault
+#: changed. A question the operator asked comes above the answer, because the
+#: answer is usually reconstructable from the question and what ran.
+SCORES = {
+    "confirmation": 100,
+    "error": 90,
+    "write": 70,
+    "turn": 50,
+    "interrupted": 40,
+    "reply": 20,
+    "tool": 10,
+    "ack": 5,
+}
+
+#: What the first mention of an account in a day is worth on top. Which
+#: accounts were touched is the shape of a day, and without this a day spent on
+#: one account and a day spent on six look identical in a digest.
+FIRST_MENTION = 25
 
 #: Rows that are noise in a digest: they are about Jarvis's own housekeeping
 #: rather than about the work. Still returned when a day is asked for in full.
@@ -132,13 +175,13 @@ def read_days(log: Any, days: Iterable[date]) -> list[Entry]:
 
 
 def within(available: list[date], *, days: int = DEFAULT_DAYS,
-           today: date | None = None) -> list[date]:
+           today: date | None = None, cap: int = MAX_DAYS) -> list[date]:
     """The logged days inside a window, most recent first.
 
     Days that exist, not days in the calendar: a week with three quiet days in
     it should not produce three "nothing logged" headings.
     """
-    span = max(1, min(int(days or DEFAULT_DAYS), MAX_DAYS))
+    span = max(1, min(int(days or DEFAULT_DAYS), max(1, int(cap))))
     if today is None:
         return sorted(available, reverse=True)[:span]
     earliest = today - timedelta(days=span - 1)
@@ -159,6 +202,52 @@ def matching(entries: list[Entry], about: str) -> list[Entry]:
         entry for entry in entries
         if needle in entry.detail.lower() or needle in entry.kind.lower()
     ]
+
+
+def is_acknowledgement(detail: str) -> bool:
+    """"yeah", "go ahead", "do that one" -- and not "add 292,187 for August".
+
+    Short *and* made only of acknowledgement words. Length alone would throw
+    away the shortest useful things the operator says, which are the ones with
+    a figure or a name in them.
+    """
+    words = re.findall(r"[a-z0-9,.']+", detail.lower())
+    if not words or len(words) > 4:
+        return False
+    return all(word.strip(",.'") in _ACKS for word in words)
+
+
+def mentions(detail: str, accounts: "Iterable[str]") -> list[str]:
+    """Which account names appear in this entry. A plain search."""
+    lowered = detail.lower()
+    return [name for name in accounts if name.lower() in lowered]
+
+
+def score(entry: Entry, *, accounts: "Iterable[str]" = (),
+          seen: "set[str] | None" = None) -> int:
+    """What this entry is worth in a digest.
+
+    `seen` is the accounts already surfaced for this day, and is mutated: the
+    bonus is for the *first* mention, because the fifth entry about Illes says
+    nothing the first did not.
+    """
+    if entry.kind == "tool":
+        name = entry.detail.split(" ", 1)[0]
+        base = SCORES["write" if name in WRITING else "tool"]
+    elif entry.kind == "turn":
+        base = SCORES["ack" if is_acknowledgement(entry.detail) else "turn"]
+    else:
+        base = SCORES.get(entry.kind, SCORES["tool"])
+
+    for name in mentions(entry.detail, accounts):
+        if seen is None:
+            base += FIRST_MENTION
+            break
+        if name not in seen:
+            seen.add(name)
+            base += FIRST_MENTION
+            break
+    return base
 
 
 def _said(day: date) -> str:
@@ -282,20 +371,29 @@ def recollect(
     day: date | None = None,
     about: str = "",
     today: date | None = None,
+    accounts: "Iterable[str]" = (),
+    per_day: int = DIGEST_PER_DAY,
+    full_per_day: int = FULL_PER_DAY,
+    max_days: int = MAX_DAYS,
 ) -> Recollection:
     """The whole read, assembled in Python.
 
     One day asked for is that day in full. Otherwise a digest across the
     window, most recent first, with the noisier housekeeping rows dropped --
     they are still there when the day is asked for.
+
+    **A day's slots go to what mattered, not to what happened last.** The first
+    version took the most recent entries of each day, so a heavy day was
+    represented by whatever it ended on, which is usually somebody saying
+    "thanks". See `SCORES`.
     """
     available = log.days()
     if day is not None:
         wanted = [day] if day in available else []
-        per_day, kinds = FULL_PER_DAY, None
+        cap, kinds = max(1, int(full_per_day)), None
     else:
-        wanted = within(available, days=days, today=today)
-        per_day, kinds = DIGEST_PER_DAY, set(DIGEST_KINDS)
+        wanted = within(available, days=days, today=today, cap=max_days)
+        cap, kinds = max(1, int(per_day)), set(DIGEST_KINDS)
 
     found = Recollection(days=list(wanted), about=" ".join(str(about or "").split()))
     if not wanted:
@@ -319,15 +417,25 @@ def recollect(
         if not entries_for_day:
             found.quiet.append(one)
             continue
-        # The most recent of each day first, so a long day shows how it ended
-        # rather than how it opened.
-        shown = sorted(entries_for_day, key=lambda e: e.when, reverse=True)[:per_day]
+        # Scored in the order they happened, because the account bonus is for
+        # the *first* mention and "first" is a fact about the day, not about
+        # the order this loop happens to walk in.
+        seen: set[str] = set()
+        ranked = [
+            (score(entry, accounts=accounts, seen=seen), entry)
+            for entry in sorted(entries_for_day, key=lambda e: e.when)
+        ]
+        # Highest first, and the later entry wins a tie: on a day of equals,
+        # how it ended is more use than how it opened.
+        ranked.sort(key=lambda pair: (pair[0], pair[1].when), reverse=True)
+        shown = [entry for _, entry in ranked[:cap]]
         for entry in sorted(shown, key=lambda e: e.when):
             found.lines.append(line_for(entry))
         found.shown += len(shown)
         if len(entries_for_day) > len(shown):
             found.lines.append(
                 f"  ({len(entries_for_day) - len(shown)} more on "
-                f"{_said(one)}, not shown)"
+                f"{_said(one)}, not shown -- the ones above are the ones that "
+                "changed something, were decided, or were asked)"
             )
     return found

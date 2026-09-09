@@ -1780,3 +1780,20 @@ should have been able to answer from its own output.
 
 **When a write path goes in, the read path is part of the same item.** The audit
 for this is cheap: for every folder under `Ranger/`, name the tool that reads it.
+
+### A fixture that stamps the time into itself
+
+`test_the_same_file_twice_in_one_day_writes_once` dropped "the same file" twice
+by calling a builder twice. openpyxl writes the current time into
+`docProps/core.xml` and into every zip member header, so the two calls produced
+different files whenever they straddled a second -- which they do on a slower
+machine and not here.
+
+The identity path was correct: bytes end to end, `read_bytes` throughout, no
+text-mode read anywhere near it. **The suspicion was CRLF and the cause was a
+timestamp**, which is worth remembering: not every Windows-only failure in a
+fixture is line endings.
+
+The fix is a deterministic fixture, not a fixed test. A test that means "the
+same bytes" should be handed the same bytes, and the builder that cannot
+produce them twice is the thing to fix.

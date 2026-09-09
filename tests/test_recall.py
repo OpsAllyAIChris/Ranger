@@ -407,3 +407,146 @@ def test_it_is_one_more_tool_and_not_a_second_way_in(config, vault):
         for node in ast.walk(tree) if isinstance(node, ast.Call)
     }
     assert "turn" not in called, "recall assembles text; it does not run turns"
+
+
+# -- which six, out of a hundred -------------------------------------------
+#
+# A real day ran to 154 entries and the digest showed the last six of them,
+# which on any real day is somebody saying "thanks" and Jarvis saying "no
+# problem". A bigger number is more tokens on every recall; a better six is
+# free.
+
+
+from ranger.recall import (  # noqa: E402
+    FIRST_MENTION,
+    SCORES,
+    WRITING,
+    is_acknowledgement,
+    score,
+)
+
+
+def entry(kind: str, detail: str, time: str = "09:00:00") -> Entry:
+    return Entry(date(2026, 9, 8), time, "conversation", kind, detail)
+
+
+@pytest.mark.parametrize(
+    "detail,is_ack",
+    [
+        ("yeah", True), ("go ahead", True), ("yes please", True),
+        ("do that one", True), ("ok thanks", True), ("no", True),
+        ("where are we on Illes Foods", False),
+        ("add 292,187 for August", False),
+        ("file that", False),
+        ("", False),
+    ],
+)
+def test_an_acknowledgement_is_short_and_made_of_nothing(detail: str, is_ack: bool):
+    """**Length alone would be wrong.** "add 292,187 for August" is four words
+    and is the most substantive thing anybody says all day."""
+    assert is_acknowledgement(detail) is is_ack
+
+
+def test_a_write_outranks_a_read():
+    """"What did you file on Telly" is answered by the writes. A digest full of
+    account_recall calls answers nothing."""
+    wrote = score(entry("tool", "file_to_account ok: appended to Telly"))
+    read = score(entry("tool", "account_recall ok: Illes Foods, 3 activities"))
+
+    assert wrote > read
+    assert wrote == SCORES["write"] and read == SCORES["tool"]
+
+
+def test_a_decision_outranks_everything():
+    """Somebody chose something. There is nothing in a day worth more."""
+    decided = score(entry("confirmation", "approved: remove a fact"))
+
+    assert decided == max(SCORES.values())
+    assert decided > score(entry("tool", "write_document ok"))
+    assert decided > score(entry("turn", "where are we on Illes"))
+
+
+def test_a_question_outranks_an_answer():
+    """The answer is usually reconstructable from the question and what ran.
+    The question is not reconstructable from anything."""
+    assert score(entry("turn", "where are we on Illes")) > score(
+        entry("reply", "Illes went quiet in June.")
+    )
+
+
+def test_yeah_scores_near_the_bottom():
+    assert score(entry("turn", "yeah")) < score(entry("reply", "anything"))
+
+
+def test_the_first_mention_of_an_account_is_worth_more_than_the_fifth():
+    """Which accounts a day touched is the shape of the day. Without this, a
+    day spent on one account and a day spent on six read identically."""
+    seen: set[str] = set()
+    first = score(entry("turn", "how is Illes Foods"), accounts=["Illes Foods"], seen=seen)
+    second = score(entry("turn", "and Illes Foods pricing"), accounts=["Illes Foods"],
+                   seen=seen)
+
+    assert first - second == FIRST_MENTION
+
+
+def test_the_writing_tools_are_the_registry_s_writing_tools(config, vault):
+    """**The list cannot drift.** A tool added with `writes=True` and not added
+    to WRITING would have its entries scored as reads and quietly vanish from
+    every digest."""
+    from ranger.toolset import build_registry
+
+    assert WRITING == {t.name for t in build_registry(config, vault) if t.writes}
+
+
+def test_a_heavy_day_surfaces_what_mattered_not_what_happened_last():
+    """**The reported failure, as a fixture.** 154 entries, and the six that
+    came back were the six that happened last."""
+    noise = [
+        row(f"1{n:01d}:00:00", "turn", "yeah") for n in range(5)
+    ] + [
+        row(f"1{n:01d}:30:00", "reply", "No problem.") for n in range(5)
+    ]
+    matters = [
+        row("09:05:00", "tool", "file_to_account ok: appended to Telly"),
+        row("09:10:00", "confirmation", "approved: remove a fact"),
+        row("09:20:00", "error", "the provider timed out"),
+    ]
+    log = Log({date(2026, 9, 8): rows(*(matters + noise))})
+
+    found = recollect(log, days=7, today=date(2026, 9, 8), per_day=3)
+    text = found.render()
+
+    assert "file_to_account" in text
+    assert "approved: remove a fact" in text
+    assert "the provider timed out" in text
+    assert "yeah" not in text, "the day did not end on the things that mattered"
+
+
+def test_the_not_shown_line_says_how_the_ones_above_were_chosen():
+    """Otherwise "154 not shown" reads as "and these six are arbitrary", which
+    is what they used to be."""
+    many = rows(*[row(f"09:{n:02d}:00", "turn", f"question {n}") for n in range(20)])
+    found = recollect(Log({date(2026, 9, 9): many}), days=7, today=TODAY, per_day=6)
+
+    assert "changed something, were decided, or were asked" in found.render()
+
+
+def test_the_cap_and_the_window_are_settings(config, vault):
+    """Six was a guess and the operator's usage is far heavier. Tunable without
+    a code change, and the tool reads the same numbers the CLI does."""
+    assert config.log.days == 7
+    assert config.log.per_day == 6
+    assert config.log.max_days == 31
+
+    log = Log({date(2026, 9, 9): rows(
+        *[row(f"09:{n:02d}:00", "turn", f"question {n}") for n in range(20)]
+    )})
+    assert recollect(log, days=7, today=TODAY, per_day=2).shown == 2
+    assert recollect(log, days=7, today=TODAY, per_day=15).shown == 15
+
+
+def test_the_window_cap_is_a_setting_too():
+    log = Log({date(2026, 1, 1): rows(row("09:00:00", "turn", "old"))})
+
+    assert recollect(log, days=9999, today=TODAY, max_days=5).total == 0
+    assert recollect(log, days=9999, today=TODAY, max_days=400).total == 1

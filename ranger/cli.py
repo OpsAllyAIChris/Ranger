@@ -730,12 +730,26 @@ def cmd_log(config: Config, args) -> int:
     # prints the raw table, which is the thing to look at when the digest and
     # the file seem to disagree.
     if getattr(args, "recall", False) or getattr(args, "about", ""):
+        names: list[str] = []
+        try:
+            excluded = {n.lower() for n in config.accounts.exclude_files}
+            names = [
+                item.path.stem
+                for item in Vault(config.vault).list_markdown(config.vault.accounts)
+                if item.path.name.lower() not in excluded
+            ]
+        except Exception:
+            names = []
         found = recall.recollect(
             log,
-            days=int(getattr(args, "days", 0) or recall.DEFAULT_DAYS),
+            days=int(getattr(args, "days", 0) or config.log.days),
             day=_date.fromisoformat(args.day) if args.day else None,
             about=getattr(args, "about", "") or "",
             today=_date.today(),
+            accounts=names,
+            per_day=int(getattr(args, "per_day", 0) or config.log.per_day),
+            full_per_day=config.log.full_per_day,
+            max_days=config.log.max_days,
         )
         print(found.render())
         print()
@@ -2778,7 +2792,12 @@ def main(argv: list[str] | None = None) -> int:
     )
     log_cmd.add_argument(
         "--days", type=int, default=0,
-        help=f"how far back --recall looks. Default 7, capped at 31",
+        help="how far back --recall looks. Defaults to log.days in ranger.toml",
+    )
+    log_cmd.add_argument(
+        "--per-day", type=int, default=0, dest="per_day",
+        help="entries per day in the digest. Defaults to log.per_day. Try a few "
+             "values here before changing the config",
     )
 
     beat = sub.add_parser("heartbeat", help="Tier 5: run the background loop")

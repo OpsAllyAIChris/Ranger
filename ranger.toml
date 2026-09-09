@@ -297,6 +297,27 @@ bargein_room_margin = 1.4
 # and not the ones inside the tail, which still contain Jarvis.
 bargein_room_seconds = 10.0
 
+[log]
+# Item K1. How much of its own log Jarvis reads back when asked what happened.
+# Its own section rather than [recall], which is about reading account notes.
+#
+# Every one of these is a token cost on every recall. A heavy day can run to
+# hundreds of entries, so a digest picks per_day of them by what they were
+# worth rather than by what happened last: a gate decision, then an error, then
+# a tool that wrote something, then a question you actually asked -- and a bonus
+# for the first mention of each account, because which accounts a day touched
+# is the shape of the day. "yeah" and "go ahead" score near the bottom.
+#
+# Raise per_day if six is too thin to be useful; it is the number to tune first.
+days = 7
+per_day = 6
+# When a single day is asked for in full, including the housekeeping rows a
+# digest leaves out.
+full_per_day = 60
+# The furthest back one call will ever read, whatever is asked for. A guard on
+# the token cost of a question like "what happened this year".
+max_days = 31
+
 [brief]
 # Tier 5. A morning brief has a size, not a threshold.
 #

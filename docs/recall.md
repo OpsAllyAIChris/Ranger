@@ -40,10 +40,59 @@ happened because it is not given anything to infer from — "have I looked at
 Petmate" is answered by finding the rows that mention Petmate, not by concluding
 anything about Petmate.
 
+## Which six, out of a hundred and fifty
+
+A heavy day runs to 150+ entries and a digest shows `log.per_day` of them.
+The first version took the most recent of each day, which on any real day is
+somebody saying "thanks" — **a day was represented by whatever it ended on.**
+
+A bigger number is more tokens on every recall. A better six is free, so
+entries are scored and the highest win:
+
+| worth | what it is |
+| --- | --- |
+| 100 | a gate decision — somebody chose something |
+| 90 | an error |
+| 70 | a tool that **wrote**: filed, drafted, entered, produced a document |
+| 50 | a question the operator asked |
+| 40 | an interrupted turn |
+| 20 | a reply |
+| 10 | a tool that only read |
+| 5 | "yeah", "go ahead", "do that one" |
+
+Plus **+25 for the first mention of an account that day**. Which accounts a day
+touched is the shape of the day, and without it a day spent on one account and a
+day spent on six read identically. The fifth mention of Illes says nothing the
+first did not, so only the first is worth the bonus.
+
+Two things worth stating about the shape of this:
+
+- **A score, not a filter.** On a quiet day the slots still fill; on a heavy one
+  the survivors are the ones that mattered. Filtering would produce empty
+  digests on ordinary days.
+- **An acknowledgement is short *and* made of nothing else.** Length alone would
+  throw away "add 292,187 for August", which is four words and the most
+  substantive thing said all day.
+
+The writing-tool list is checked against the registry by a test, so a tool added
+with `writes=True` cannot quietly have its entries scored as reads and vanish
+from every digest.
+
+## Tuning it
+
+Everything is in `[log]` in `ranger.toml` — its own section rather than
+`[recall]`, which is about reading account notes.
+
+    days = 7           # how far back a digest reaches
+    per_day = 6        # entries per day. The number to tune first
+    full_per_day = 60  # when one day is asked for in full
+    max_days = 31      # the furthest one call will ever read
+
+`ranger log --recall --per-day 12` tries a value without editing the config.
+
 ## Bounded, and it names what it left out
 
-A digest across a window by default: seven days, six entries a day, the most
-recent of each day first so a long day shows how it ended. Housekeeping rows
+Housekeeping rows
 (`heartbeat`, `voice`, snapshots) are dropped from a digest so the shape of a
 week is legible — **a search still reaches them**, or "have I looked at Petmate"
 could be answered "no" because the only mention was in a row the digest
@@ -83,7 +132,8 @@ can read what the last one found.
 ## From the CLI, with no browser
 
     ranger log --recall                 # the last 7 days, as the tool sees it
-    ranger log --recall --days 30       # a wider window, capped at 31
+    ranger log --recall --days 30       # a wider window, capped by log.max_days
+    ranger log --recall --per-day 12    # a deeper digest, without editing config
     ranger log --about Petmate          # every mention, across the window
     ranger log --about Telly --days 90
     ranger log 2026-09-08 --recall      # one day, in full

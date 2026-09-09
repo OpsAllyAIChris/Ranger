@@ -248,6 +248,31 @@ class WakeConfig:
 
 
 @dataclass(frozen=True)
+class LogConfig:
+    """Item K1. How much of its own log Jarvis reads back, and how far.
+
+    Its own section rather than `[recall]`, which is about reading account
+    notes. Two different things called recall in one table would be the kind of
+    collision that is obvious now and baffling in six months.
+
+    Every one of these is a token cost on every recall, which is why the
+    defaults are small and why they are settings at all: what a good digest
+    looks like depends entirely on how heavily the log is written, and that is
+    not knowable from here.
+    """
+
+    #: How many days back a digest reaches when nothing is asked for.
+    days: int = 7
+    #: Entries shown per day in a digest. The ones that scored highest, not the
+    #: ones that happened last.
+    per_day: int = 6
+    #: Entries shown when a single day is asked for in full.
+    full_per_day: int = 60
+    #: The furthest back one call will ever read, whatever is asked for.
+    max_days: int = 31
+
+
+@dataclass(frozen=True)
 class BriefConfig:
     """Tier 5. What the morning brief is allowed to say.
 
@@ -580,6 +605,7 @@ class Config:
     brief: BriefConfig
     wake: WakeConfig
     recall: RecallConfig
+    log: LogConfig
     drafts: DraftsConfig
     documents: DocumentsConfig
     imports: ImportsConfig
@@ -697,6 +723,7 @@ KNOWN_KEYS: dict[str, frozenset[str]] = {
     "recall": frozenset({
         "activities", "detail_activities", "section_chars", "body_chars", "max_chars",
     }),
+    "log": frozenset({"days", "per_day", "full_per_day", "max_days"}),
     "drafts": frozenset({"filename_format"}),
     "documents": frozenset({
         "page_size", "assembly", "assembly_particles", "assembly_seconds",
@@ -1062,6 +1089,14 @@ def load_config(path: str | Path | None = None, *, load_env: bool = True) -> Con
             "itself is the failure this setting exists to prevent."
         )
 
+    log_section = table.get("log", {})
+    log = LogConfig(
+        days=int(log_section.get("days", 7)),
+        per_day=int(log_section.get("per_day", 6)),
+        full_per_day=int(log_section.get("full_per_day", 60)),
+        max_days=int(log_section.get("max_days", 31)),
+    )
+
     brief_section = table.get("brief", {})
     brief = BriefConfig(
         lines=int(brief_section.get("lines", 5)),
@@ -1256,6 +1291,16 @@ def load_config(path: str | Path | None = None, *, load_env: bool = True) -> Con
     )
     if heartbeat.interval_seconds < 10:
         raise ConfigError("heartbeat.interval_seconds must be at least 10")
+    for name, value in (("days", log.days), ("per_day", log.per_day),
+                        ("full_per_day", log.full_per_day),
+                        ("max_days", log.max_days)):
+        if value < 1:
+            raise ConfigError(f"log.{name} must be at least 1")
+    if log.days > log.max_days:
+        raise ConfigError(
+            "log.days is above log.max_days, so the default window is one the "
+            "cap refuses. Raise max_days or lower days."
+        )
     if heartbeat.check_timeout_seconds < 1:
         raise ConfigError("heartbeat.check_timeout_seconds must be at least 1")
 
@@ -1288,6 +1333,7 @@ def load_config(path: str | Path | None = None, *, load_env: bool = True) -> Con
         brief=brief,
         wake=wake,
         recall=recall,
+        log=log,
         drafts=drafts,
         documents=documents,
         imports=imports,

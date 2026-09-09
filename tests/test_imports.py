@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 from datetime import date, datetime
+import re
 from decimal import Decimal
 from pathlib import Path
 
@@ -44,9 +45,45 @@ EXPORT = [
 ]
 
 
+def _stable(payload: bytes) -> bytes:
+    """The same workbook twice is the same bytes twice.
+
+    **openpyxl stamps the current time into `docProps/core.xml` and into every
+    zip member header.** Two calls to `workbook()` a second apart therefore
+    produce different files, and a test that drops "the same file" twice was
+    really dropping two files that happened to look alike. On Linux both calls
+    land inside the same second and it passes; on a slower machine it does not,
+    which is where it was found.
+
+    The re-drop test could reuse one payload -- and does -- but the fixture is
+    what should be deterministic, or the next test to call this twice inherits
+    the same trap.
+    """
+    import io
+    import zipfile
+
+    fixed = (1980, 1, 1, 0, 0, 0)
+    source = zipfile.ZipFile(io.BytesIO(payload))
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as out:
+        for item in sorted(source.infolist(), key=lambda i: i.filename):
+            content = source.read(item.filename)
+            if item.filename == "docProps/core.xml":
+                content = re.sub(
+                    rb">[^<]*</dcterms:(created|modified)>",
+                    rb">1980-01-01T00:00:00Z</dcterms:\1>",
+                    content,
+                )
+            info = zipfile.ZipInfo(item.filename, date_time=fixed)
+            info.compress_type = zipfile.ZIP_DEFLATED
+            info.external_attr = item.external_attr
+            out.writestr(info, content)
+    return buffer.getvalue()
+
+
 def workbook(rows=None, *, sheets=None, formula_at=None) -> bytes:
     """A .xlsx as a byte string, written by openpyxl and read by nothing that
-    knows about openpyxl."""
+    knows about openpyxl. Byte-stable across calls -- see `_stable`."""
     import io
 
     openpyxl = pytest.importorskip("openpyxl")
@@ -63,7 +100,7 @@ def workbook(rows=None, *, sheets=None, formula_at=None) -> bytes:
             extra.append(row)
     buffer = io.BytesIO()
     book.save(buffer)
-    return buffer.getvalue()
+    return _stable(buffer.getvalue())
 
 
 def drop(vault, config, payload=None, name="netsuite gp.xlsx", today=TODAY):
@@ -99,12 +136,32 @@ def test_nothing_is_parsed_by_landing_a_file(vault, config):
     assert not shapes.path_for(config).exists(), "and nothing was learned either"
 
 
+def test_the_workbook_fixture_is_the_same_bytes_every_time():
+    """**The guard for the trap above.**
+
+    openpyxl writes the current time into the file, so `workbook()` called
+    twice used to produce two different files. Every test here that means "the
+    same file" was relying on both calls landing inside the same second.
+    """
+    import time
+
+    first = workbook()
+    time.sleep(1.1)
+
+    assert workbook() == first
+
+
 def test_the_same_file_twice_in_one_day_writes_once(vault, config):
     """Not an error, and not a second copy: identical bytes under the same name
     report that they were already there. The alternative is a folder that
-    records how often a file was dragged."""
-    first = drop(vault, config)
-    second = drop(vault, config)
+    records how often a file was dragged.
+
+    One payload, dropped twice, because that is what "the same file" means. It
+    read `drop(...)` twice and synthesised a fresh workbook each time.
+    """
+    payload = workbook()
+    first = drop(vault, config, payload)
+    second = drop(vault, config, payload)
 
     assert second.already is True
     assert second.path == first.path
@@ -918,6 +975,9 @@ def legacy_xls() -> bytes:
             sheet.write(row_index, column_index, value)
     buffer = io.BytesIO()
     book.save(buffer)
+    # Not put through `_stable`: a .xls is an OLE2 compound file, not a zip.
+    # Nothing drops this one twice expecting identity, and if something ever
+    # does it needs its own normaliser rather than the .xlsx one.
     return buffer.getvalue()
 
 

@@ -1748,13 +1748,25 @@ def _what_happened(config: Config, vault: Vault, today: Callable[[], date],
                     "not a date",
                 )
 
+        # Account names, so a digest can surface the first mention of each. A
+        # day spent on one account and a day spent on six look identical
+        # without it, and which accounts were touched is the shape of a day.
+        try:
+            names = [item.path.stem for item in _account_files(config, vault)]
+        except Exception:
+            names = []
+
         try:
             found = recall.recollect(
                 log,
-                days=int(payload.get("days", recall.DEFAULT_DAYS) or recall.DEFAULT_DAYS),
+                days=int(payload.get("days", 0) or config.log.days),
                 day=one,
                 about=str(payload.get("about", "")),
                 today=today(),
+                accounts=names,
+                per_day=config.log.per_day,
+                full_per_day=config.log.full_per_day,
+                max_days=config.log.max_days,
             )
         except Exception as exc:
             return ToolResult(False, f"{type(exc).__name__}: {exc}", "could not read the log")
@@ -1796,7 +1808,7 @@ def _what_happened(config: Config, vault: Vault, today: Callable[[], date],
                     "type": "integer",
                     "description": (
                         f"How many days back, counting today. Default "
-                        f"{recall.DEFAULT_DAYS}, capped at {recall.MAX_DAYS}."
+                        f"{config.log.days}, capped at {config.log.max_days}."
                     ),
                 },
                 "day": {
