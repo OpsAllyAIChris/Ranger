@@ -1584,6 +1584,74 @@ def cmd_drafts(config: Config, args: Any) -> int:
     return 0
 
 
+def cmd_run(config: Config, args: Any) -> int:
+    """Item M at the terminal: one turn with nobody watching.
+
+    The way to exercise the headless caller without a browser, and the way to
+    see what a bound actually produces: run something that will hit one and
+    read what comes back, which is the work it managed rather than a timeout.
+    """
+    from .headless import BOUNDED, COMPLETED, FAILED, HELD, REFUSED, run
+
+    paint = _colour(sys.stdout.isatty())
+    prompt = " ".join(getattr(args, "prompt", []) or []).strip()
+    if not prompt:
+        print("usage: ranger run <what to do>", file=sys.stderr)
+        return 2
+
+    overrides: dict[str, Any] = {}
+    for flag, name in (("max_seconds", "max_seconds"), ("max_turns", "max_turns"),
+                       ("max_tools", "max_tools")):
+        value = getattr(args, flag, None)
+        if value:
+            overrides[name] = value
+
+    try:
+        require_api_key()
+    except ConfigError as exc:
+        print(paint(f"  {exc}", RED), file=sys.stderr)
+        return 2
+
+    print(paint(f"  running headless: {prompt}", DIM))
+    print(paint(f"  bounds: {overrides.get('max_seconds', config.headless.max_seconds):.0f}s, "
+                f"{overrides.get('max_turns', config.headless.max_turns)} turns, "
+                f"{overrides.get('max_tools', config.headless.max_tool_calls)} tool calls",
+                DIM))
+    print(paint("  nothing here can approve a gate: anything consequential goes to "
+                "your inbox", DIM))
+    print()
+
+    def watch(event: Any) -> None:
+        from .events import ToolCalled, ToolFinished
+
+        if isinstance(event, ToolCalled):
+            print(paint(f"  -> {event.name} {event.input}", DIM), flush=True)
+        elif isinstance(event, ToolFinished):
+            mark = "ok" if event.ok else "failed"
+            print(paint(f"  <- {event.name} {mark}: {event.summary}", DIM), flush=True)
+
+    record = asyncio.run(
+        run(config, prompt, invoked_by=getattr(args, "invoked_by", "") or "ranger run",
+            on_event=watch, **overrides)
+    )
+
+    colour = {
+        COMPLETED: TEAL, HELD: YELLOW, BOUNDED: YELLOW, FAILED: RED, REFUSED: RED,
+    }[record.outcome]
+    print()
+    print(paint(f"  {record.describe()}", colour))
+    if record.text.strip():
+        print()
+        for line in record.text.strip().splitlines():
+            print(f"  {line}")
+    if record.outcome == BOUNDED and not record.text.strip():
+        print(paint("  it stopped before saying anything; the tool calls above are "
+                    "what it managed", DIM))
+    if record.held:
+        print(paint("  something needs your yes and is waiting in 'ranger inbox'", YELLOW))
+    return 0 if record.outcome in (COMPLETED, HELD, BOUNDED) else 1
+
+
 def cmd_imports(config: Config, args: Any) -> int:
     """Dropped files at the terminal: what is there, read one, import one.
 
@@ -2510,6 +2578,16 @@ def main(argv: list[str] | None = None) -> int:
     )
     clear_cmd.add_argument("name", nargs="+", help="file name, or part of the title")
 
+    run_cmd = sub.add_parser(
+        "run", help="Item M: run one turn with nobody watching. Bounded, and it "
+                    "cannot approve its own gate"
+    )
+    run_cmd.add_argument("prompt", nargs="+", help="what to do")
+    run_cmd.add_argument("--invoked-by", default="", help="who asked for this, for the log")
+    run_cmd.add_argument("--max-seconds", type=float, default=0.0, dest="max_seconds")
+    run_cmd.add_argument("--max-turns", type=int, default=0, dest="max_turns")
+    run_cmd.add_argument("--max-tools", type=int, default=0, dest="max_tools")
+
     imports_cmd = sub.add_parser(
         "imports", help="files dropped onto the window: what is there, and what is in them"
     )
@@ -2619,6 +2697,8 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_dormant(config, args)
     if args.command == "drafts":
         return cmd_drafts(config, args)
+    if args.command == "run":
+        return cmd_run(config, args)
     if args.command == "imports":
         return cmd_imports(config, args)
     if args.command == "gp":

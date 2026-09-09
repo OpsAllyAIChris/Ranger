@@ -314,3 +314,38 @@ def test_the_encoding_check_can_actually_fail():
     assert any("read_text" in item for item in problems)
     assert any("open()" in item for item in problems)
     assert any("subprocess" in item for item in problems)
+
+
+# --- no test may read a socket with a single recv --------------------------
+#
+# `recv(4096)` returns whatever arrived in one TCP segment. On Linux that is
+# routinely the whole response; on Windows the first read came back with the
+# headers alone, and the assertion ran against a body that had never been read.
+# Neither platform is wrong. TCP does not promise message boundaries, so a test
+# that assumes one is a test that passes here and fails there -- the same shape
+# as the encoding sweep, and the same reason to make it fail here instead.
+
+
+@pytest.mark.parametrize("module", MODULES, ids=lambda p: p.name)
+def test_no_test_asserts_on_a_single_socket_read(module: Path):
+    import ast
+
+    tree = ast.parse(module.read_text(encoding="utf-8"))
+    problems: list[str] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        if getattr(node.func, "attr", "") != "recv":
+            continue
+        # A recv inside a loop is a read-until, which is the right shape.
+        line = getattr(node, "lineno", 0)
+        source = module.read_text(encoding="utf-8").splitlines()
+        window = "\n".join(source[max(0, line - 6):line])
+        if "while" in window or "for " in window:
+            continue
+        problems.append(f"{module.name}:{line}")
+
+    assert not problems, (
+        f"a single recv() at {', '.join(problems)}. Read until Content-Length "
+        "bytes are in hand: one segment is not one message."
+    )

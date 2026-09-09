@@ -505,3 +505,173 @@ def test_analysis_is_in_the_snapshot_allow_list():
 
     assert "Ranger/analysis/" in INCLUDED
     assert "!/Ranger/analysis/" in ignore_file()
+
+
+# -- the doubled total, which happened on a real file ----------------------
+#
+# The sheet reported 23,944.40 for "All rows" on a commission statement whose
+# own Total row is 11,972.20. Exactly double: the file's totals row was summed
+# alongside the rows it totals. It rendered as COMPUTED, with full provenance,
+# which is the worst version of this -- a wrong figure carrying authority.
+#
+# The exclusion existed and never ran. It was written as
+# `if group_at >= 0 and TOTAL_LABELS.match(label)`, so a question with **no
+# grouping** -- one figure for the whole file, which is what was asked -- never
+# checked at all. The fixture that found the hazard grouped by account, so the
+# suite agreed with itself.
+
+STATEMENT = [
+    ["Account", "Period", "Commission"],
+    ["Illes Foods", "Aug 2026", "5,120.40"],
+    ["Rusty Supply", "Aug 2026", "3,880.00"],
+    ["Telly Packaging", "Aug 2026", "2,971.80"],
+    ["Total", "", "11,972.20"],
+]
+
+
+def test_a_total_row_is_excluded_when_nothing_is_grouped():
+    """**The real one.** No group_by, so there was no column to look in."""
+    result = analysis.run(
+        table(STATEMENT),
+        analysis.Spec(file="statement.xls", value="Commission", title="Total commission"),
+        source="statement.xls", now=NOW,
+    )
+
+    assert result.total == Decimal("11972.20"), "not 23,944.40"
+    assert result.excluded == ["Total"]
+    assert "1 totals row(s) left out ('Total')" in result.summary()
+
+
+@pytest.mark.parametrize(
+    "label",
+    ["Total", "TOTAL", "total", "Totals", "Grand Total", "Subtotal", "Sub-Total",
+     "Total:", "Statement Total", "Report total", "Total for period", "Sum"],
+)
+def test_the_labels_a_statement_might_actually_use(label):
+    rows = [["Account", "Commission"], ["Illes Foods", "100.00"], [label, "100.00"]]
+    result = analysis.run(
+        table(rows), analysis.Spec(file="x", value="Commission", title="t"),
+        source="x", now=NOW,
+    )
+
+    assert result.excluded == [label]
+    assert result.total == Decimal("100.00")
+
+
+@pytest.mark.parametrize("label", ["Total Packaging Ltd", "Sumitomo", "Subtotal Systems Inc"])
+def test_a_company_whose_name_starts_with_a_total_word_is_not_dropped(label):
+    """Widened, not loosened. A customer called Sumitomo is data."""
+    rows = [["Account", "Commission"], [label, "100.00"], ["Illes Foods", "50.00"]]
+    result = analysis.run(
+        table(rows), analysis.Spec(file="x", group_by="Account", value="Commission",
+                                   title="t"),
+        source="x", now=NOW,
+    )
+
+    assert result.excluded == []
+    assert result.total == Decimal("150.00")
+
+
+def test_a_totals_row_with_no_label_at_all_is_flagged_rather_than_dropped():
+    """**Not a guess.** If a row might be the file's own total and nothing says
+    so, it is included and said out loud, because dropping data on a hunch is
+    its own hazard."""
+    rows = [
+        ["Account", "Commission"],
+        ["Illes Foods", "5,120.40"],
+        ["Rusty Supply", "3,880.00"],
+        ["Telly Packaging", "2,971.80"],
+        ["", "11,972.20"],
+    ]
+    result = analysis.run(
+        table(rows), analysis.Spec(file="x", value="Commission", title="t"),
+        source="x", now=NOW,
+    )
+
+    assert result.total == Decimal("23944.40"), "included, because nothing proved it"
+    assert result.doubling
+    assert "11,972.20" in result.doubling
+    assert "exactly the sum of every other row" in result.doubling
+    assert "line 5" in result.doubling, "and it says which line to go and look at"
+    assert "might be the file's own total and were INCLUDED" in result.summary()
+
+
+def test_a_genuine_row_that_equals_the_rest_is_flagged_and_kept():
+    """The rule is a flag, not a refusal. One account really can equal the
+    others, and dropping it would be the same failure the other way up."""
+    rows = [["Account", "Commission"], ["Big One", "100.00"],
+            ["A", "50.00"], ["B", "50.00"]]
+    result = analysis.run(
+        table(rows), analysis.Spec(file="x", group_by="Account", value="Commission",
+                                   title="t"),
+        source="x", now=NOW,
+    )
+
+    assert result.total == Decimal("200.00")
+    assert [row.label for row in result.rows] == ["Big One", "A", "B"]
+    assert "Big One" in result.doubling
+
+
+def test_the_report_always_says_what_it_found_about_totals_rows(vault, config):
+    """*"rows read: 4, groups out: 1"* said nothing about the one thing that had
+    gone wrong. Silence about a totals row is not the same as there not being
+    one, so the line is written whichever way it came out."""
+    clean = analysis.run(
+        table(), spec(), source="commission.xls", now=NOW,
+    )
+    written = analysis.write(vault, config, clean, today=TODAY)
+    provenance = " ".join(analysis.read_report(written, config.vault.root).provenance)
+    assert "totals rows: 1 totals row(s) left out" in provenance
+
+    nothing = analysis.run(
+        table([["Account", "Commission"], ["Illes Foods", "10.00"]]),
+        analysis.Spec(file="x", group_by="Account", value="Commission", title="t"),
+        source="x", now=NOW,
+    )
+    written = analysis.write(vault, config, nothing, today=TODAY)
+    provenance = " ".join(analysis.read_report(written, config.vault.root).provenance)
+    assert "totals rows: no totals row found in the source" in provenance
+
+
+def test_the_doubling_flag_reaches_the_written_report(vault, config):
+    rows = [["Account", "Commission"], ["Illes Foods", "100.00"],
+            ["Rusty Supply", "50.00"], ["", "150.00"]]
+    result = analysis.run(
+        table(rows), analysis.Spec(file="x", value="Commission", title="t"),
+        source="x", now=NOW,
+    )
+    written = analysis.write(vault, config, result, today=TODAY)
+    report = analysis.read_report(written, config.vault.root)
+
+    assert any("CHECK:" in line for line in report.provenance)
+    assert "might be the file's own total" in report.summary
+
+
+def test_a_totals_row_is_excluded_whichever_column_carries_the_label():
+    """A statement puts the marker wherever it has room."""
+    rows = [
+        ["Ref", "Account", "Commission"],
+        ["001", "Illes Foods", "100.00"],
+        ["", "Total", "100.00"],
+    ]
+    result = analysis.run(
+        table(rows), analysis.Spec(file="x", group_by="Account", value="Commission",
+                                   title="t"),
+        source="x", now=NOW,
+    )
+
+    assert result.excluded == ["Total"]
+    assert result.total == Decimal("100.00")
+
+
+def test_a_figure_column_holding_the_word_total_is_not_a_label():
+    """The value column is skipped when looking for the marker: a column called
+    Total is a perfectly ordinary column of figures."""
+    rows = [["Account", "Total"], ["Illes Foods", "100.00"], ["Rusty Supply", "50.00"]]
+    result = analysis.run(
+        table(rows), analysis.Spec(file="x", group_by="Account", value="Total", title="t"),
+        source="x", now=NOW,
+    )
+
+    assert result.excluded == []
+    assert result.total == Decimal("150.00")

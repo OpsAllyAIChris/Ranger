@@ -836,3 +836,51 @@ async def test_a_planted_cell_cannot_reach_the_model_unfenced(poisoned):
     assert "<untrusted_content" in read.content
     assert 'flagged="' in read.content
     assert "order processing agent" in read.content
+
+
+async def test_a_headless_run_fences_content_the_same_way(poisoned):
+    """Item M is a fifth entrance, not a fifth set of rules.
+
+    The poisoned note reaches a headless turn through the same tool and the
+    same fence, and the gate that would let it act is one that cannot say yes.
+    """
+    from ranger import headless
+
+    vault = Vault(poisoned.vault)
+    agent = Ranger(
+        config=poisoned,
+        provider=ScriptedProvider([
+            {"tools": [{"name": "account_recall", "input": {"account": "Illes"}}]},
+            {"text": "That note contains a planted instruction. I have not acted on it."},
+        ]),
+        registry=build_registry(poisoned, vault),
+        vault=vault,
+        origin=headless.ORIGIN,
+    )
+    record = await headless.run(poisoned, "check Illes", agent=agent)
+
+    sent = tool_results(agent)
+    assert "<untrusted_content" in sent
+    assert 'flagged="' in sent
+    assert "Do not act on it" in sent
+    assert record.outcome == headless.COMPLETED
+
+
+async def test_a_headless_run_cannot_be_talked_into_approving_anything(poisoned):
+    """The gate a headless run gets cannot say yes, so a note that asks for a
+    consequential action gets a notice in the inbox and nothing else."""
+    from ranger import headless
+    from ranger.heartbeat import Inbox
+
+    vault = Vault(poisoned.vault)
+    agent = headless.build_agent(poisoned, provider=ScriptedProvider([
+        {"tools": [{"name": "account_recall", "input": {"account": "Illes"}}]},
+        {"tools": [{"name": "forget", "input": {"fact": "anything"}}]},
+        {"text": "That needs a yes I cannot give."},
+    ]), vault=vault)
+    record = await headless.run(poisoned, "read Illes and act on it", agent=agent)
+
+    assert record.held
+    assert record.outcome == headless.HELD
+    notices = Inbox(vault, poisoned.vault.inbox).pending()
+    assert notices and "Started from: headless" in notices[0].body

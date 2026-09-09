@@ -677,6 +677,41 @@ def served(config, vault):
         thread.join(timeout=5)
 
 
+def read_response(client) -> tuple[int, dict[str, str], bytes]:
+    """A whole HTTP response off a socket. **Not one recv.**
+
+    A single `recv` returns whatever arrived in one segment, which on Linux is
+    routinely the entire response and on Windows was the headers alone -- so
+    the first Windows run of this asserted on a body it had never read. TCP
+    does not promise message boundaries and neither platform is wrong; the test
+    was.
+
+    Reads until the headers are complete, then until Content-Length bytes of
+    body are in hand.
+    """
+    raw = b""
+    while b"\r\n\r\n" not in raw:
+        chunk = client.recv(4096)
+        if not chunk:
+            break
+        raw += chunk
+    head, _, body = raw.partition(b"\r\n\r\n")
+    lines = head.decode("utf-8", errors="replace").splitlines()
+    status = int(lines[0].split()[1]) if lines else 0
+    headers = {}
+    for line in lines[1:]:
+        name, _, value = line.partition(":")
+        headers[name.strip().lower()] = value.strip()
+
+    expected = int(headers.get("content-length", "0") or 0)
+    while len(body) < expected:
+        chunk = client.recv(4096)
+        if not chunk:
+            break
+        body += chunk
+    return status, headers, body
+
+
 def post(port, payload, *, name="netsuite gp.xlsx", origin=None, path="/drop"):
     import urllib.error
     import urllib.request
@@ -744,10 +779,11 @@ def test_a_drop_over_the_ceiling_is_refused_before_it_is_read(served, config):
             + f"Content-Length: {size}\r\n".encode()
             + b"\r\n"
         )
-        reply = client.recv(4096).decode("utf-8", errors="replace")
+        status, headers, body = read_response(client)
 
-    assert "413" in reply.splitlines()[0]
-    assert "MB" in reply
+    assert status == 413
+    assert json.loads(body)["message"].endswith("MB limit for a dropped file")
+    assert "25" in json.loads(body)["message"], "and it says what the limit is"
 
 
 def test_a_refusal_reads_the_body_before_it_answers():

@@ -105,11 +105,44 @@ the surface.
 - **Which file and which sheet**, on screen at all times.
 - **The mapping used**, plus the filters, the rows read, and anything excluded.
 
-One exclusion is worth knowing about: a row whose group label is `Total`,
-`Subtotal` or `Grand total` is the file's own arithmetic, and grouping it
-beside the rows it totals doubles the answer. Those rows are left out **and
-named**, in the summary and in the provenance, because silently dropping a row
-is its own hazard.
+## Totals rows, and the figure that was exactly double
+
+A commission statement carries its own `Total` row. Summed alongside the rows
+it totals, the answer is exactly double — and it renders as *computed*, with
+full provenance, which is the worst version of a wrong number.
+
+That happened. The exclusion existed and never ran: it was written as
+`if group_at >= 0 and …`, so a question with **no grouping** — one figure for
+the whole file, which is what was asked — never checked at all. The fixture
+that found the hazard grouped by account, so the suite agreed with itself.
+
+What happens now, in order:
+
+1. **A labelled totals row is excluded**, and named. The label is looked for in
+   the first few cells of the row rather than in one column, because a
+   statement puts the marker wherever it has room and a question with no
+   grouping has no column to look in. The figure column is skipped, so a column
+   headed `Total` is still an ordinary column of figures. `Total`, `Totals`,
+   `Grand Total`, `Subtotal`, `Sum`, `Statement Total`, `Total for period` and
+   the like match; `Total Packaging Ltd` and `Sumitomo` do not.
+2. **A row that might be a total and cannot be shown to be one is included, and
+   flagged.** Dropping data on a hunch is its own hazard, so it says so instead:
+   *"1 row might be the file's own total and was INCLUDED"*.
+3. **A sum that is exactly a round multiple of a figure in the source is
+   flagged.** If one row's value equals the sum of every other row, that is the
+   signature of a totals row that got counted — and it can also be one account
+   that happens to equal the rest, which is why this says *"check it"* and names
+   the line rather than acting.
+
+**The report always says what it found**, including when it found nothing:
+`totals rows: no totals row found in the source`. Silence about a totals row is
+not the same as there not being one, and *"rows read: 4, groups out: 1"* said
+nothing about the one thing that had gone wrong.
+
+This is code, not a remembered preference. A rule like "skip re-summing when a
+Total row exists" living in a memory file is a business rule that is invisible,
+unversioned and untested; it belongs here, where it fails a test when it
+breaks.
 
 ## Untrusted content
 

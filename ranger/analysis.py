@@ -43,14 +43,31 @@ OPERATIONS = ("sum", "count", "average", "min", "max")
 #: the same rule the document preview follows.
 MAX_SHOWN = 200
 
-#: Labels that mean "this row is the file's own arithmetic, not data". A
-#: totals line grouped alongside the rows it totals doubles the answer, and the
-#: doubled figure looks entirely normal on screen. They are excluded **and
-#: named**: silently dropping a row is its own hazard, so the report says which
-#: ones went and why.
+#: Labels that mean "this row is the file's own arithmetic, not data".
+#:
+#: **The first version of this only looked at the grouping column**, so a
+#: question with no grouping -- one figure for the whole file -- never checked
+#: at all. On a real commission statement that summed the file's own Total row
+#: alongside the rows it totals and reported exactly double, rendered as
+#: computed, with full provenance. A doubled figure presented with authority is
+#: the worst version of this failure.
+#:
+#: So the label is looked for in the row rather than in one column, and what is
+#: found is always reported: excluded, or flagged as maybe, but never silent.
+TOTAL_WORDS = r"total|totals|sum|subtotal|sub-total|grand\s*total|balance"
 TOTAL_LABELS = re.compile(
-    r"^(grand\s+)?(total|totals|sum|subtotal|sub-total|all\s+accounts)\b[: ]*$", re.I
+    rf"^\s*(?:grand|report|statement|period|overall|running|net|final)?\s*"
+    rf"(?:{TOTAL_WORDS})\b[\s:.\-]*(?:for\b.*)?$",
+    re.I,
 )
+
+#: How many of a row's leading cells are looked at for that label. A totals row
+#: puts it in the first column it has room for, and looking at every cell would
+#: catch a note in a comments column that happens to say "total".
+LABEL_CELLS = 3
+
+#: A label cell longer than this is prose, not a marker.
+LABEL_CHARS = 40
 
 #: A hard ceiling on how many groups a single analysis may produce, so a
 #: grouping by a free-text column cannot turn into a 40,000 row report.
@@ -118,6 +135,14 @@ class Result:
     skipped: int = 0
     #: Rows left out because they were the file's own totals, by label.
     excluded: list[str] = field(default_factory=list)
+    #: Rows that might be the file's own totals and were **included**, because
+    #: excluding on a guess is its own hazard. Named, always, so the operator
+    #: can look.
+    suspected: list[str] = field(default_factory=list)
+    #: Set when one row's figure equals the sum of all the others. That is the
+    #: signature of a totals row that got counted, and it is flagged rather
+    #: than acted on: a single account really can equal the rest.
+    doubling: str = ""
     source: str = ""
     sheet: str = ""
     columns: tuple[str, ...] = ()
@@ -156,12 +181,28 @@ class Result:
             )
         if self.skipped:
             parts.append(f"{self.skipped} row(s) had no readable figure")
+        parts.append(self.totals_note())
+        return ", ".join(parts) + "."
+
+    def totals_note(self) -> str:
+        """**Always said, even when there is nothing to say.**
+
+        "rows read: 4, groups out: 1" told the operator nothing about the one
+        thing that had gone wrong. Silence about a totals row is not the same
+        as there not being one.
+        """
         if self.excluded:
-            parts.append(
+            return (
                 f"{len(self.excluded)} totals row(s) left out ("
                 + ", ".join(repr(name) for name in self.excluded[:3]) + ")"
             )
-        return ", ".join(parts) + "."
+        if self.suspected:
+            return (
+                f"{len(self.suspected)} row(s) might be the file's own total and were "
+                "INCLUDED (" + ", ".join(repr(name) for name in self.suspected[:3])
+                + "), so check this figure"
+            )
+        return "no totals row found in the source"
 
 
 def render(value: Any) -> str:
@@ -193,6 +234,31 @@ def _amount(raw: Any) -> Decimal | None:
     except InvalidOperation:
         return None
     return -value if negative and value > 0 else value
+
+
+def _row_label(row: list[str]) -> str:
+    """The first text cell in a row: what a person would call that line."""
+    for cell in row[:LABEL_CELLS]:
+        text = " ".join(str(cell or "").split())
+        if text and not re.fullmatch(r"[\d,.()\-$£€%\s]+", text):
+            return text
+    return ""
+
+
+def totals_marker(row: list[str], *, skip: int = -1) -> str:
+    """The label that makes this the file's own total, or "".
+
+    Looks at the first few cells rather than one column, because that is where
+    a totals row puts its marker, and because a question with no grouping has
+    no column to look in.
+    """
+    for index, cell in enumerate(row[:LABEL_CELLS]):
+        if index == skip:
+            continue
+        text = " ".join(str(cell or "").split())
+        if text and len(text) <= LABEL_CHARS and TOTAL_LABELS.match(text):
+            return text
+    return ""
 
 
 def check_title(spec: Spec) -> str:
@@ -268,6 +334,9 @@ def run(table: Any, spec: Spec, *, source: str = "", now: datetime | None = None
     groups: dict[str, list[Decimal]] = {}
     compared: dict[str, list[Decimal]] = {}
     excluded: list[str] = []
+    #: Every figure that went into the sum, with the row it came from, so the
+    #: arithmetic check below can look for one that equals all the others.
+    contributions: list[tuple[str, Decimal]] = []
     skipped = read = 0
 
     for index, row in enumerate(table.rows):
@@ -289,11 +358,15 @@ def run(table: Any, spec: Spec, *, source: str = "", now: datetime | None = None
             continue
 
         label = cell(group_at).strip() if group_at >= 0 else "All rows"
-        if group_at >= 0 and TOTAL_LABELS.match(label):
-            # The file's own total, grouped beside the rows it totals, would
-            # double the answer -- and a doubled figure looks entirely normal.
-            if label not in excluded:
-                excluded.append(label)
+
+        # **Looked for in the row, not in one column.** A totals row puts its
+        # marker wherever it has room, and a question with no grouping has no
+        # column to look in at all -- which is exactly how a real statement got
+        # summed twice.
+        marker = totals_marker(row, skip=value_at)
+        if marker:
+            if marker not in excluded:
+                excluded.append(marker)
             continue
         read += 1
         if not label:
@@ -307,6 +380,10 @@ def run(table: Any, spec: Spec, *, source: str = "", now: datetime | None = None
                 continue
         if in_main:
             groups.setdefault(label, []).append(figure)
+            # Named so it can be found again: a row's own text label, or the
+            # line number when it has none. "All rows" would tell nobody which
+            # line to go and look at.
+            contributions.append((_row_label(row) or f"line {index + 1}", figure))
         if in_compared:
             compared.setdefault(label, []).append(figure)
         if len(groups) > MAX_GROUPS:
@@ -349,6 +426,24 @@ def run(table: Any, spec: Spec, *, source: str = "", now: datetime | None = None
         rows.sort(key=lambda item: (item.value is None, item.value or 0),
                   reverse=spec.descending)
 
+    # **The general rule, and it is a flag rather than a refusal.** A sum that
+    # is exactly twice a figure present in the source is the signature of a
+    # totals row that got counted. It can also be one account that happens to
+    # equal the rest, which is why this says "check" rather than acting.
+    suspected: list[str] = []
+    doubling = ""
+    if spec.operation == "sum" and len(contributions) > 1:
+        everything = sum((amount for _, amount in contributions), Decimal(0))
+        for name, amount in contributions:
+            if amount and amount == everything - amount:
+                doubling = (
+                    f"one row ({name!r}) is {render(amount)}, which is exactly the sum "
+                    f"of every other row. If that is the file's own total, this figure "
+                    f"is double: check it."
+                )
+                suspected.append(name)
+                break
+
     totals = [row.value for row in rows if row.value is not None]
     compared_totals = [row.compared for row in rows if row.compared is not None]
     return Result(
@@ -363,6 +458,8 @@ def run(table: Any, spec: Spec, *, source: str = "", now: datetime | None = None
         read=read,
         skipped=skipped,
         excluded=excluded,
+        suspected=suspected,
+        doubling=doubling,
         source=source,
         sheet=spec.sheet or getattr(table, "name", ""),
         columns=tuple(headers),
@@ -446,11 +543,11 @@ def report_text(result: Result) -> str:
     tail.append(f"- rows read: {result.read}, groups out: {len(result.rows)}")
     if result.skipped:
         tail.append(f"- rows with no readable figure: {result.skipped}")
-    if result.excluded:
-        tail.append(
-            "- left out as the file's own totals: "
-            + ", ".join(repr(name) for name in result.excluded)
-        )
+    # Always, even when there is nothing to report: silence about a totals row
+    # is not the same as there not being one.
+    tail.append(f"- totals rows: {result.totals_note()}")
+    if result.doubling:
+        tail.append(f"- CHECK: {result.doubling}")
     tail.append(f"- computed: {when}")
     return "\n".join(head + body + tail) + "\n"
 

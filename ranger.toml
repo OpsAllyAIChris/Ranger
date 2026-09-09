@@ -320,6 +320,31 @@ assembly_seconds = 1.1
 preview_blocks = 400
 preview_rows = 300
 
+[headless]
+# Item M: running a turn with nobody at the other end. The same agent core the
+# browser and the microphone enter, with two differences that are not
+# negotiable: it cannot approve its own gate -- a consequential action stops,
+# writes to Ranger/inbox and waits for a keyboard -- and it is bounded.
+#
+# There is no unbounded setting here. Work nobody is watching is exactly the
+# work that needs a limit, and a runaway during a customer call is the failure
+# that would get Jarvis closed for good.
+#
+# Wall clock for one run. A bound being hit is an OUTCOME: whatever was done
+# comes back with it, so "I read four accounts and here is what I found" is
+# what you get rather than a bare timeout.
+max_seconds = 120.0
+# How many model turns, and how many tool calls in total. The tool call limit
+# is the one that actually catches a loop.
+max_turns = 6
+max_tool_calls = 20
+# Trim the standing context for headless work. 0 means the same context an
+# interactive turn gets, and that is the default on purpose: prompt caching
+# makes the standing context nearly free after the first call, and a headless
+# turn that answers wrongly because knowledge was trimmed costs more than the
+# tokens it saved. Set a number here only if you see the cost and want it.
+context_chars = 0
+
 [analysis]
 # Grouping and totalling a dropped file. Python computes every figure; the
 # model chooses which analysis answers the question and explains the result.

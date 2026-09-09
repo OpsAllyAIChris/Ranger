@@ -303,6 +303,34 @@ class DocumentsConfig:
 
 
 @dataclass(frozen=True)
+class HeadlessConfig:
+    """Running a turn with nobody watching. **The bounds, and only the bounds.**
+
+    A runaway on this laptop during a customer call is the failure that gets
+    Jarvis closed and never opened again, so every one of these is a number the
+    operator can see and change. A bound being hit is an outcome that comes
+    back with whatever work was done, not an exception.
+    """
+
+    #: Wall clock for one headless run. Long enough to read a few account notes
+    #: and write something; short enough that a loop is over before it is
+    #: noticed.
+    max_seconds: float = 120.0
+    #: How many model turns. The core already caps tool rounds inside a turn;
+    #: this caps the turns themselves.
+    max_turns: int = 6
+    #: How many tool calls in total. The one that actually catches a loop: a
+    #: confused model reaching for the same tool repeatedly hits this first.
+    max_tool_calls: int = 20
+    #: Trim the standing context for headless work. 0 means the same context an
+    #: interactive turn gets, which is the default and is deliberate: prompt
+    #: caching makes the standing context nearly free after the first call, and
+    #: a headless turn that answers wrongly because knowledge was trimmed costs
+    #: more than the tokens it saved. The real cost control is the bounds above.
+    context_chars: int = 0
+
+
+@dataclass(frozen=True)
 class AnalysisConfig:
     """Grouping and totalling a dropped file. Python's side of the seam."""
 
@@ -520,6 +548,7 @@ class Config:
     documents: DocumentsConfig
     imports: ImportsConfig
     analysis: AnalysisConfig
+    headless: HeadlessConfig
     gp: GpConfig
     voice: VoiceConfig
     stt: SttConfig
@@ -634,6 +663,9 @@ KNOWN_KEYS: dict[str, frozenset[str]] = {
         "preview_blocks", "preview_rows",
     }),
     "analysis": frozenset({"max_rows", "check_figures"}),
+    "headless": frozenset({
+        "max_seconds", "max_turns", "max_tool_calls", "context_chars",
+    }),
     "imports": frozenset({
         "max_mb", "extract_rows", "extract_sheets", "extract_on_drop",
     }),
@@ -1025,6 +1057,27 @@ def load_config(path: str | Path | None = None, *, load_env: bool = True) -> Con
     if documents.preview_blocks < 1 or documents.preview_rows < 1:
         raise ConfigError("documents.preview_blocks and preview_rows must be at least 1")
 
+    headless_section = table.get("headless", {})
+    headless = HeadlessConfig(
+        max_seconds=float(headless_section.get("max_seconds", 120.0)),
+        max_turns=int(headless_section.get("max_turns", 6)),
+        max_tool_calls=int(headless_section.get("max_tool_calls", 20)),
+        context_chars=int(headless_section.get("context_chars", 0)),
+    )
+    for name, value in (
+        ("max_seconds", headless.max_seconds),
+        ("max_turns", headless.max_turns),
+        ("max_tool_calls", headless.max_tool_calls),
+    ):
+        if value <= 0:
+            raise ConfigError(
+                f"headless.{name} must be above 0. There is no unbounded setting: "
+                "work nobody is watching is exactly the work that needs a limit."
+            )
+    if headless.context_chars < 0:
+        raise ConfigError("headless.context_chars cannot be negative. 0 means the same "
+                          "standing context an interactive turn gets.")
+
     analysis_section = table.get("analysis", {})
     analysis = AnalysisConfig(
         max_rows=int(analysis_section.get("max_rows", 200)),
@@ -1177,6 +1230,7 @@ def load_config(path: str | Path | None = None, *, load_env: bool = True) -> Con
         documents=documents,
         imports=imports,
         analysis=analysis,
+        headless=headless,
         gp=gp,
         voice=voice,
         stt=stt,
