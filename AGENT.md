@@ -1421,6 +1421,37 @@ totals doubles the answer and the doubled figure looks entirely normal.
 
 Full write-up: `docs/analysis.md`.
 
+## Item M: the headless caller
+
+The fifth caller. Speech, a typed turn, the heartbeat and the browser all enter
+`Ranger.turn()`; this is the one with no human in front of it, and it enters
+the same place. One agent core: same tools, same prompt, same fencing, same
+audit log. Three things are different and only three.
+
+**It cannot approve its own gate.** A headless run gets `HoldingGate`, which
+writes the request into the inbox and returns *held* -- never approved. There
+is no parameter to hand it a gate that could say yes. This is the spoken-yes
+rule carried one step further: work running while the operator is in a meeting
+has *less* consent authority than a voice turn, because there is nobody to
+object.
+
+**It is bounded**, in config, with no unbounded setting: wall clock, turns,
+tool calls. A bound hit is an outcome rather than an exception -- the checks
+happen between events, so what was gathered comes back with it. "I read four
+accounts and here is what I found" is worth something; a bare timeout is worth
+nothing and sends the operator back to do it by hand.
+
+**It cannot start another one.** One level, guarded in code, until the bounds
+are proven on real work.
+
+What comes back is a `Run`: prompt, outcome, text, every tool call, why it
+stopped, and `as_dict()` for persistence. That shape is chosen for what comes
+next -- jobs persist it and report progress from it, continuity reads it to
+answer "where were we" -- and `on_event` is there so a progress file can be
+written without a second API.
+
+Exercise it with `ranger run "<what to do>"`, which needs no browser.
+
 ## Closing out a session
 
 Every session ends with a debrief written to `docs/sessions/<date>.md`, and it
