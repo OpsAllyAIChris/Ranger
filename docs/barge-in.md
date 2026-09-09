@@ -172,5 +172,18 @@ That leaves two real fixes, and neither is a number in this file:
   than outranked. That is the structurally correct answer and it is a change to
   where the microphone lives, not to how it is judged.
 
+  **Chrome does see Web Audio output** — measured, not assumed: 1210 held
+  uncancelled, 534 cancelled, against a room of 282. `ranger/web/aec.html` is
+  the measurement, and it now includes the pass that decides anything: the
+  operator talking through the cancelled stream. A reduction between two
+  numbers that do not include the operator is not a margin.
+
+  Two numbers from that page are not comparable with `mic-bargein`'s: different
+  capture path (Chrome at 48kHz against PortAudio at 16kHz), different playback
+  signal, different analysis window. **Within one run they are comparable and
+  that is the only comparison to make.** If capture does move into the browser,
+  `mic-bargein` has to measure through the same path or it will keep reporting
+  on a microphone barge-in no longer uses.
+
 If calibration reports a room that holds a level close to your own voice, no
 margin can help: two signals the same size cannot be separated by size.

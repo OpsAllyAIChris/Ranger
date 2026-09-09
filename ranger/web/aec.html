@@ -67,8 +67,12 @@
       path. On a headset there is nothing to cancel and every number comes out
       near silence, which looks like success and proves nothing.</li>
   <li><strong>Normal speaker volume</strong> — the one you use for Jarvis.</li>
-  <li><strong>Say nothing while it runs.</strong> Each pass is four seconds and
-      it announces which one it is about to do.</li>
+  <li><strong>Say nothing</strong> — until the fourth pass, which counts you
+      down and then asks you to talk over it. Keep talking for the whole four
+      seconds; a pause in the middle measures the pause.</li>
+  <li>The second button repeats the whole thing with <strong>noise
+      suppression</strong> on. It is aimed at exactly the kind of room that
+      swings, so it is worth having both numbers.</li>
   <li>To answer the second question at the same time, start
       <code>ranger mic</code> in a terminal first and leave it running. If the
       capture below works while that is showing levels, PortAudio and Chrome
@@ -76,7 +80,8 @@
 </ol>
 
 <div class="row">
-  <button id="run">Run all four passes</button>
+  <button id="run">Run the five passes</button>
+  <button id="runNs" class="secondary">Again, with noise suppression on</button>
   <button id="stop" class="secondary" disabled>Stop</button>
 </div>
 <div class="meter"><i id="bar"></i></div>
@@ -191,15 +196,20 @@ function play(context, pcm) {
 }
 
 /** Open the microphone, and say precisely why if it will not open. */
-async function microphone(echoCancellation) {
+async function microphone(echoCancellation, noiseSuppression = false) {
   try {
     return await navigator.mediaDevices.getUserMedia({
       audio: {
         echoCancellation,
-        // Held with echoCancellation deliberately. Noise suppression removing
-        // the echo would answer the question with the wrong mechanism, and the
-        // real path would then behave differently the moment it was turned off.
-        noiseSuppression: false,
+        // Off for the first run, deliberately: noise suppression removing the
+        // echo would answer the cancellation question with the wrong
+        // mechanism. It gets its own run, because it is aimed squarely at a
+        // room that swings nineteen times over and that is worth measuring
+        // rather than reasoning about.
+        noiseSuppression,
+        // Off in both. AGC moves every level at once to hit a target, so it
+        // leaves the ratios roughly alone and makes the absolute numbers
+        // impossible to compare between passes.
         autoGainControl: false,
       },
     });
@@ -253,13 +263,31 @@ function close(stream) {
   for (const track of stream.getTracks()) track.stop();
 }
 
-async function pass(context, { echoCancellation, playing, label, note }) {
-  el('status').textContent = `${label} -- stay quiet...`;
-  const stream = await microphone(echoCancellation);
-  const settings = stream.getAudioTracks()[0].getSettings();
+//: The detector's own room term, from ranger.toml. Kept here only so this page
+//: can say what the detector would do with these levels; bargein.py is still
+//: the implementation and mic-bargein is still the authority.
+const ROOM_MARGIN = 1.4;
+
+async function pass(context, opts) {
+  const { echoCancellation, noiseSuppression = false, playing, talking,
+          label, note } = opts;
+  if (talking) {
+    // A pass that needs the operator to do something has to give them a beat
+    // to start doing it. Four seconds that begin while they are drawing breath
+    // measures the breath.
+    for (let n = 3; n > 0; n--) {
+      el('status').textContent = `${label} -- get ready to talk over it... ${n}`;
+      await new Promise((r) => setTimeout(r, 900));
+    }
+    el('status').textContent = `${label} -- TALK NOW, keep going until it stops`;
+  } else {
+    el('status').textContent = `${label} -- stay quiet...`;
+  }
   // A fresh device session per pass. Reusing one stream and hoping the
   // constraint re-applies is how a comparison ends up comparing one thing
   // with itself.
+  const stream = await microphone(echoCancellation, noiseSuppression);
+  const settings = stream.getAudioTracks()[0].getSettings();
   let source = null;
   if (playing) source = play(context, sentence(PASS_SECONDS + 1));
   const levels = await listen(context, stream, PASS_SECONDS,
@@ -277,34 +305,58 @@ function verdict(html, kind) {
   box.innerHTML = html;
 }
 
-async function run() {
+/**
+ * One full measurement: room, echo uncancelled, echo cancelled, the operator
+ * through the cancelled stream, and the room again.
+ *
+ * **The fourth is the one that decides anything.** The first version of this
+ * page stopped at the third and reported a reduction, which says the canceller
+ * works and says nothing about whether the operator can be heard over what is
+ * left. A ratio between two numbers that do not include the operator is not a
+ * margin.
+ */
+async function suite(context, { noiseSuppression, tag }) {
+  const label = (name) => (tag ? `${name} (${tag})` : name);
+  const room = await pass(context, {
+    echoCancellation: true, noiseSuppression, playing: false,
+    label: label('room'), note: 'nothing playing. The control.',
+  });
+  const off = await pass(context, {
+    echoCancellation: false, noiseSuppression, playing: true,
+    label: label('playing, AEC off'), note: 'what the microphone hears unhelped.',
+  });
+  const on = await pass(context, {
+    echoCancellation: true, noiseSuppression, playing: true,
+    label: label('playing, AEC on'), note: 'the residual echo.',
+  });
+  const voice = await pass(context, {
+    echoCancellation: true, noiseSuppression, playing: true, talking: true,
+    label: label('you over it, AEC on'), note: 'the number that decides it.',
+  });
+  const after = await pass(context, {
+    echoCancellation: true, noiseSuppression, playing: false,
+    label: label('room again'), note: 'the room did not change under us.',
+  });
+  return { room, off, on, voice, after };
+}
+
+async function run(noiseSuppression) {
   cancelled = false;
   results.replaceChildren();
   el('verdict').className = '';
   el('verdict').innerHTML = '';
   el('run').disabled = true;
+  el('runNs').disabled = true;
   el('stop').disabled = false;
 
   const context = new (window.AudioContext || window.webkitAudioContext)();
   if (context.state === 'suspended') await context.resume();
 
   try {
-    const room = await pass(context, {
-      echoCancellation: true, playing: false,
-      label: 'room', note: 'nothing playing. The control.',
+    const measured = await suite(context, {
+      noiseSuppression, tag: noiseSuppression ? 'NS on' : '',
     });
-    const off = await pass(context, {
-      echoCancellation: false, playing: true,
-      label: 'playing, AEC off', note: 'what the microphone hears with no help.',
-    });
-    const on = await pass(context, {
-      echoCancellation: true, playing: true,
-      label: 'playing, AEC on', note: 'the question.',
-    });
-    const after = await pass(context, {
-      echoCancellation: true, playing: false,
-      label: 'room again', note: 'the room did not change under us.',
-    });
+    const { room, off, on, voice, after } = measured;
 
     el('detail-head').hidden = false;
     el('detail').hidden = false;
@@ -313,18 +365,22 @@ async function run() {
         JSON.stringify(on.settings.echoCancellation),
       'requested echoCancellation: false -> applied: ' +
         JSON.stringify(off.settings.echoCancellation),
+      'requested noiseSuppression: ' + noiseSuppression + '  -> applied: ' +
+        JSON.stringify(on.settings.noiseSuppression),
       '',
       'full settings, AEC on:',
       JSON.stringify(on.settings, null, 2),
     ].join('\n');
 
     el('status').textContent = 'Done.';
-    judge(room.stats, off.stats, on.stats, after.stats, on.settings, off.settings);
+    judge(room.stats, off.stats, on.stats, voice.stats, after.stats,
+          on.settings, noiseSuppression);
   } catch (err) {
     el('status').textContent = '';
     verdict(`<strong>Could not finish.</strong><br>${err.message}`, 'bad');
   } finally {
     el('run').disabled = false;
+    el('runNs').disabled = false;
     el('stop').disabled = true;
     el('bar').style.width = '0%';
     try { await context.close(); } catch (e) {}
@@ -338,15 +394,20 @@ async function run() {
  * room, which looks exactly like perfect cancellation. So the echo has to be
  * shown to exist before its absence means anything.
  */
-function judge(room, off, on, after, onSettings, offSettings) {
+function judge(room, off, on, voice, after, onSettings, noiseSuppression) {
   const floor = Math.max(room.held, after.held, 1);
+  const quietest = Math.max(Math.min(room.held, after.held), 1);
 
-  if (Math.abs(room.held - after.held) > Math.max(300, floor * 1.5)) {
+  // A ratio, not a difference. This compared `Math.abs(room - after)` against
+  // `floor * 1.5`, where `floor` is the larger of the two -- and a difference
+  // between two numbers can never exceed 1.5x the larger one. The check could
+  // not fire, so a room that quadrupled mid-test read as a valid measurement.
+  if (floor / quietest > 2 && floor - quietest > 200) {
     verdict(
       `<strong>The room changed while this ran.</strong> It held ` +
       `${room.held.toFixed(0)} before and ${after.held.toFixed(0)} after, so ` +
-      `the two playing passes were not measured against the same room. ` +
-      `Run it again when it is quieter.`, 'warn');
+      `the passes were not measured against the same room. Run it again when ` +
+      `it is quieter.`, 'warn');
     return;
   }
   if (off.held < floor * 2.5) {
@@ -362,45 +423,65 @@ function judge(room, off, on, after, onSettings, offSettings) {
   if (onSettings.echoCancellation === false) {
     verdict(
       `<strong>Chrome refused the constraint.</strong> It was asked for ` +
-      `echoCancellation and reported <code>false</code>, so the "AEC on" pass ` +
-      `never had it on. That is a device or driver refusal rather than an ` +
-      `answer about Web Audio -- try the other microphone, or a different ` +
-      `input device in Windows sound settings.`, 'bad');
+      `echoCancellation and reported <code>false</code>, so the cancelled ` +
+      `passes never had it on.`, 'bad');
+    return;
+  }
+  if (voice.held <= on.held) {
+    verdict(
+      `<strong>You were not louder than the residual echo.</strong> Talking ` +
+      `over it held ${voice.held.toFixed(0)} and the residual alone held ` +
+      `${on.held.toFixed(0)}. Either the talking pass caught you between ` +
+      `sentences, or you were not talking. Run it again and keep going for the ` +
+      `whole four seconds.`, 'warn');
     return;
   }
 
+  // The detector's own rule, with these numbers in it. Three terms, take the
+  // highest, and the operator has to be above it:
+  //     bar = max(floor, room x room_margin, echo x margin)
+  const roomBar = floor * ROOM_MARGIN;
+  const ceiling = voice.held / Math.max(on.held, 1);
   const reduction = off.held / Math.max(on.held, 1);
-  const aboveRoom = on.held / floor;
-  if (reduction >= 3 && aboveRoom < 2.5) {
+  const clearsRoom = voice.held > roomBar;
+  const ns = noiseSuppression ? ' with noise suppression on' : '';
+
+  if (!clearsRoom) {
     verdict(
-      `<strong>Yes. Chrome's echo canceller sees Web Audio output.</strong><br>` +
-      `The echo held ${off.held.toFixed(0)} uncancelled and ` +
-      `${on.held.toFixed(0)} cancelled, a reduction of ` +
-      `${reduction.toFixed(1)}x, against a room holding ${floor.toFixed(0)}. ` +
-      `Cancelled, Jarvis is within ${aboveRoom.toFixed(1)}x of silence.<br><br>` +
-      `The browser microphone plan is sound: the echo would be subtracted ` +
-      `rather than outranked, and the levels that currently overlap would not.`,
-      'good');
-  } else if (reduction >= 1.6) {
-    verdict(
-      `<strong>Partly, and partly is not enough to build on.</strong><br>` +
-      `The echo held ${off.held.toFixed(0)} uncancelled and ` +
-      `${on.held.toFixed(0)} cancelled -- ${reduction.toFixed(1)}x, against a ` +
-      `room of ${floor.toFixed(0)}. Something is being cancelled, but Jarvis ` +
-      `is still ${aboveRoom.toFixed(1)}x above the room, so the separation is ` +
-      `still a level comparison and it can still be lost.<br><br>` +
-      `Worth reporting before anything is built on it.`, 'warn');
-  } else {
-    verdict(
-      `<strong>No. The echo canceller does not see Web Audio output.</strong><br>` +
-      `The echo held ${off.held.toFixed(0)} uncancelled and ` +
-      `${on.held.toFixed(0)} cancelled, which is ${reduction.toFixed(1)}x -- ` +
-      `no meaningful change, against a room of ${floor.toFixed(0)}.<br><br>` +
-      `Moving capture into the browser would not fix barge-in on this machine. ` +
-      `Do not build it. Report this number.`, 'bad');
+      `<strong>Cancellation works, and the room still does not leave room ` +
+      `for you.</strong><br>The echo went ${off.held.toFixed(0)} to ` +
+      `${on.held.toFixed(0)}, but the room holds ${floor.toFixed(0)} and you ` +
+      `hold ${voice.held.toFixed(0)}, which does not clear the room bar of ` +
+      `${roomBar.toFixed(0)}. The echo was never the only problem here.`, 'bad');
+    return;
   }
+  if (ceiling < 1.6) {
+    verdict(
+      `<strong>Still marginal${ns}. Do not build this.</strong><br>` +
+      `The echo went ${off.held.toFixed(0)} to ${on.held.toFixed(0)} ` +
+      `(${reduction.toFixed(1)}x), and you hold ${voice.held.toFixed(0)} over ` +
+      `it -- a ceiling of ${ceiling.toFixed(1)}x, which leaves almost nothing ` +
+      `between "heard" and "not heard". Moving the microphone into the browser ` +
+      `would buy a margin too thin to be worth the change.`, 'bad');
+    return;
+  }
+  verdict(
+    `<strong>Yes. Build it${ns}.</strong><br>` +
+    `The echo went ${off.held.toFixed(0)} to ${on.held.toFixed(0)} ` +
+    `(${reduction.toFixed(1)}x cancelled), the room holds ` +
+    `${floor.toFixed(0)}, and talking over it you hold ` +
+    `${voice.held.toFixed(0)}.<br><br>` +
+    `That is a ceiling of <strong>${ceiling.toFixed(1)}x</strong> on the echo ` +
+    `term and ${(voice.held / roomBar).toFixed(1)}x over the room bar. ` +
+    `Margins from 1.0 up to ${ceiling.toFixed(1)} separate you from both; ` +
+    `${Math.sqrt(ceiling).toFixed(1)} sits in the middle of that.<br><br>` +
+    `<em>These are Chrome's numbers. If capture moves into the browser they ` +
+    `are the operational ones, and mic-bargein has to measure through the ` +
+    `same path or it will keep reporting on a microphone barge-in no longer ` +
+    `uses.</em>`, 'good');
 }
 
-el('run').onclick = run;
+el('run').onclick = () => run(false);
+el('runNs').onclick = () => run(true);
 el('stop').onclick = () => { cancelled = true; el('status').textContent = 'Stopped.'; };
 </script>

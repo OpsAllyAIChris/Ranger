@@ -1736,3 +1736,16 @@ route has its own now, and a test asserts it does not read the other.
 The render harness recorded `socket.sent` by reference at three points, so a
 step added at the end of the file rewrote what the earlier steps had recorded
 and broke three unrelated tests. Snapshots everywhere now.
+
+### A guard whose condition could not be true
+
+The echo-canceller page refused a run where the room had changed between its
+two room passes -- by comparing `abs(before - after)` against `1.5 x` the
+larger of the two. A difference between two numbers is never more than the
+larger one, so the branch could not run. A room that quadrupled mid-test read
+as a valid measurement.
+
+It survived a file full of tests because those tests searched the source for
+the names in the branch. **A check that reads code is not a check that runs
+it.** The verdict function is now driven through node against a table of
+levels, and wiring the room term to a constant `true` fails.
