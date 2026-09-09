@@ -139,7 +139,7 @@ def speech_format(output_format: str) -> dict[str, Any]:
     return {"encoding": "container", "mime": CONTAINERS.get(head, "audio/mpeg")}
 
 
-async def speak(speaker: Any, text: str) -> bytes:
+async def speak(speaker: Any, text: str, *, before: str = "", after: str = "") -> bytes:
     """Collect one sentence of speech. Returned whole, not streamed.
 
     The terminal path streams into PortAudio because it is playing as it
@@ -149,7 +149,7 @@ async def speak(speaker: Any, text: str) -> bytes:
     into sentences, which is where it came from in the first place.
     """
     chunks: list[bytes] = []
-    async for chunk in speaker.stream(text):
+    async for chunk in speaker.stream(text, before=before, after=after):
         chunks.append(chunk)
     return b"".join(chunks)
 

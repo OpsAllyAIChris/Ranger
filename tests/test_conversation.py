@@ -421,7 +421,7 @@ def talking(config):
     class Mouth:
         """One chunk of audio per sentence, so a reply is several chunks."""
 
-        async def stream(self, text):
+        async def stream(self, text, *, before="", after=""):
             yield b"\x00" * max(1, len(text))
 
     class Listening:

@@ -286,7 +286,7 @@ def spoken(config, monkeypatch, capsys, **overrides):
         def __init__(self, tts, key):
             asked.append(tts)
 
-        async def stream(self, text):
+        async def stream(self, text, *, before="", after=""):
             yield b"\x00\x00" * 2400
 
     monkeypatch.setattr("ranger.tts.build_speaker", lambda tts, key: Speaker(tts, key))

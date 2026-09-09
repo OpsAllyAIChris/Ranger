@@ -112,13 +112,21 @@ class Ears:
 
 
 class Mouth:
-    """A speaker that returns a byte per character, and records the sentences."""
+    """A speaker that returns a byte per character, and records the sentences.
+
+    It records the surrounding context too. Each sentence is its own request to
+    ElevenLabs, so without `before` and `after` prosody restarts at every
+    boundary -- and a fake that quietly accepted them and dropped them would
+    let that regress without a test noticing.
+    """
 
     def __init__(self):
         self.said: list[str] = []
+        self.context: list[tuple[str, str]] = []
 
-    async def stream(self, text):
+    async def stream(self, text, *, before="", after=""):
         self.said.append(text)
+        self.context.append((before, after))
         yield b"\x00" * len(text)
 
 
@@ -469,3 +477,76 @@ def test_the_browser_builds_a_buffer_for_pcm_rather_than_decoding_it():
     assert "getInt16(" in source
     assert "32768" in source, "scaled by the magnitude of the most negative sample"
     assert "format.encoding === 'pcm'" in source
+
+
+def test_each_sentence_carries_the_one_before_it(spoken):
+    """**Prosody restarts at every boundary without this.**
+
+    Each sentence is a separate request to ElevenLabs, so a sentence that opens
+    with a figure starts cold. The one before it goes as context -- not as
+    content: the audio that comes back is for this sentence alone.
+    """
+    port, _, mouth = spoken
+    client = Client(port)
+    try:
+        client.until("panel")
+        client.send({"type": "audio", "audio": encode_audio(b"x" * 512), "mime": "audio/webm"})
+        client.until("done")
+
+        assert mouth.said == ["Illes is quiet.", "Rod has not replied."]
+        before = [pair[0] for pair in mouth.context]
+        assert before == ["", "Illes is quiet."], (
+            "the first has nothing before it; the second has the first"
+        )
+    finally:
+        client.close()
+
+
+def test_the_sentence_after_is_sent_only_when_it_is_already_known(spoken):
+    """It costs nothing here and would cost a sentence of latency to force.
+
+    One chunk of the model's output often yields several sentences at once, and
+    then the next one is already in hand. Holding a sentence back to learn what
+    follows it would add that wait to every reply -- which is exactly what
+    speaking sentence by sentence exists to remove. So it is sent when free and
+    left out otherwise, and the last sentence of a reply correctly has nothing
+    after it.
+    """
+    port, _, mouth = spoken
+    client = Client(port)
+    try:
+        client.until("panel")
+        client.send({"type": "audio", "audio": encode_audio(b"x" * 512), "mime": "audio/webm"})
+        client.until("done")
+
+        after = [pair[1] for pair in mouth.context]
+        assert after[-1] == "", "nothing follows the last sentence of a reply"
+        assert after[0] in ("", "Rod has not replied."), (
+            "either the batch already held it, or it was not forced"
+        )
+    finally:
+        client.close()
+
+
+def test_the_written_reply_still_has_the_digits(spoken):
+    """**Digits on the screen, words in the ear.**
+
+    The transform lives in the speaker. If it ever moved up into the turn, the
+    window would show spelled-out numbers and so would anything filed from that
+    reply -- the exact opposite of what the figure audit is for.
+    """
+    from ranger.saying import for_speech
+
+    written = "GP for August was $292,187."
+
+    assert "$292,187" in written
+    assert "292" not in for_speech(written)
+    # The event the browser renders is the model's own text, untouched. This is
+    # asserted against the code path rather than a live reply because the
+    # scripted mouth here says two sentences with no figures in them.
+    import inspect
+
+    from ranger.bridge import Session
+
+    assert "for_speech" not in inspect.getsource(Session._run)
+    assert "for_speech" not in inspect.getsource(Session._speak)

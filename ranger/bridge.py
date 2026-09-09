@@ -1252,6 +1252,10 @@ class Session:
 
         speaking = SentenceStream() if self.speaker is not None else None
         spoken = 0
+        #: The sentence just spoken, sent as context with the next one. Each
+        #: sentence is its own request, so without it prosody restarts at every
+        #: boundary and a sentence opening with a figure starts cold.
+        previous = ""
         self.speech = []
         self.spoken_to = -1
         # What the tools returned this turn, and what Jarvis said about it. The
@@ -1274,13 +1278,24 @@ class Session:
                     said.append(event.text)
                 self.send(event.as_dict())
                 if speaking is not None and isinstance(event, TextDelta):
-                    for sentence in speaking.feed(event.text):
-                        await self._speak(sentence, spoken)
+                    batch = speaking.feed(event.text)
+                    for position, sentence in enumerate(batch):
+                        # `after` only when it costs nothing. One chunk of the
+                        # model's output often yields several sentences, and
+                        # then the next one is already known. Holding a
+                        # sentence back to learn what follows would add a
+                        # sentence of latency to every reply, which is the
+                        # thing sentence-by-sentence speech exists to remove.
+                        ahead = batch[position + 1] if position + 1 < len(batch) else ""
+                        await self._speak(sentence, spoken, before=previous, after=ahead)
+                        previous = sentence
                         spoken += 1
             if speaking is not None:
                 leftover = speaking.flush().strip()
                 if leftover:
-                    await self._speak(leftover, spoken)
+                    # Nothing after it, and that is worth saying: the last
+                    # sentence of a reply should sound like the last one.
+                    await self._speak(leftover, spoken, before=previous)
             self._check_figures("".join(said), computed)
         except asyncio.CancelledError:
             # Barge-in, and the replacement turn is already starting. Emitting
@@ -1321,7 +1336,8 @@ class Session:
             self.window.finished()
             self._maybe_open()
 
-    async def _speak(self, sentence: str, index: int) -> None:
+    async def _speak(self, sentence: str, index: int, *, before: str = "",
+                     after: str = "") -> None:
         """One sentence of audio, sent as soon as it exists.
 
         Sentence by sentence rather than a whole reply, because that is where
@@ -1333,7 +1349,7 @@ class Session:
         from .listen import encode_audio, speak, speech_format
 
         try:
-            audio = await speak(self.speaker, sentence)
+            audio = await speak(self.speaker, sentence, before=before, after=after)
         except asyncio.CancelledError:
             raise
         except Exception as exc:

@@ -97,3 +97,78 @@ costs more than the milliseconds saved.
 
 Nothing above changes a default. When you have heard them, the winner goes in
 `ranger.local.toml` and the reasoning goes in `ranger.toml` beside the key.
+
+## Numbers are spoken as words
+
+`$292,187` sent to ElevenLabs as digits is a guess it has to make — a price, a
+part number, a year — and on a long figure it slurs the middle. Sent as
+"two hundred ninety-two thousand one hundred eighty-seven dollars" there is
+nothing left to guess at.
+
+### Where the split lives
+
+`ranger/saying.py`, applied in `ElevenLabsSpeaker.stream` and **nowhere else**.
+That is the one place in the project where text becomes audio, so the transform
+cannot reach anything that gets kept:
+
+- the window shows the model's own words, with the digits in them;
+- a filed note, a draft, a document and a GP entry are all written from the
+  model's words or from Python's figures;
+- the figure audit compares the reply's digits against what Python computed, and
+  runs on the written reply.
+
+**Digits on the screen, words in the ear.** A test asserts that `tts.py` is the
+only module in the project that imports `saying`, because spelled-out numbers in
+a filed note would be the exact opposite of what the figure audit exists for.
+
+### What it says
+
+| written | spoken |
+| --- | --- |
+| `$292,187` | two hundred ninety-two thousand one hundred eighty-seven dollars |
+| `$12.50` | twelve dollars fifty cents |
+| `$300.00` | three hundred dollars (no "zero cents") |
+| `12.5%` | twelve point five percent |
+| `2026-09-09` | September ninth, twenty twenty-six |
+| `2026-08` | August twenty twenty-six |
+| `14:30` / `9:05` | fourteen thirty / nine oh five |
+| `07700900123` | zero seven seven zero zero nine zero zero one two three |
+| `3.14` | three point one four |
+
+A decimal that is not money reads digit by digit after the point, because
+"point five one" and "point fifty-one" are different numbers to a listener and
+only one of them is what was written.
+
+### Mixed number and jargon
+
+- **`3,000 MOQ` → "three thousand MOQ".** The number is spelled out; the word is
+  left exactly as written. Guessing that MOQ should be "M O Q" is the same class
+  of mistake as guessing at the digits, and it is not one this can make from
+  three letters.
+- **`60/40 terms` → "sixty forty terms"**, which is what it is called out loud.
+- **`SKU-4471` → "SKU four four seven one".** A token with letters and digits in
+  it is a reference, not a quantity, and a person reads one digit by digit. The
+  parts are spaced, because `Q3` said as one word comes out "Qthree".
+- **`Tier 1` → "Tier one".** The space is what tells a quantity from an
+  identifier.
+- A run of seven or more unseparated digits is read out rather than counted: an
+  account number, an order number, a phone number. **A four-digit extension is
+  ambiguous and is read as a quantity** — that one is a judgement call and it may
+  be wrong for you.
+
+## Sentence context
+
+Each sentence is its own request, so without context prosody restarts at every
+boundary and a sentence opening with a figure starts cold.
+
+`previous_text` goes with every sentence after the first. `next_text` goes only
+when it is already known — one chunk of the model's output often yields several
+sentences at once, and then the following one is in hand for free. **Forcing it
+would mean holding each sentence back until the next arrived**, adding a
+sentence of latency to every reply, which is the thing speaking sentence by
+sentence exists to remove. The last sentence of a reply correctly has nothing
+after it.
+
+Both are sent through the same number transform. Handing the model `$292,187` as
+the run-up to a sentence it is being asked to read as words would tell it two
+different things about how the same figure sounds.

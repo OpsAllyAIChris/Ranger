@@ -44,9 +44,9 @@ def transport(status=200, chunks=(b"\x01\x02", b"\x03\x04"), payload=None, body=
     return httpx.MockTransport(handler), seen
 
 
-async def speak(config, mock, text="Rod owes you volumes."):
+async def speak(config, mock, text="Rod owes you volumes.", **context):
     speaker = ElevenLabsSpeaker(config.tts, "el-key", transport=mock)
-    return b"".join([chunk async for chunk in speaker.stream(text)])
+    return b"".join([chunk async for chunk in speaker.stream(text, **context)])
 
 
 # -- output format ---------------------------------------------------------
@@ -268,3 +268,52 @@ def test_the_orb_smoothing_preset_never_touches_the_audio():
     assert "uVoiceBright" in text
     for audio_word in ("AudioBuffer", "createBufferSource", "sampleRate", "decodeAudioData"):
         assert audio_word not in text, f"the scene touches {audio_word}"
+
+
+# -- numbers as words, and sentence context --------------------------------
+
+
+async def test_numbers_are_sent_as_words(config):
+    """**The one place text becomes audio, so the one place digits become
+    words.** "$292,187" is a guess the speech model has to make; on a long
+    figure it slurs the middle. This is what actually goes over the wire."""
+    mock, seen = transport()
+    await speak(config, mock, "GP for August was $292,187.")
+
+    assert seen["json"]["text"] == (
+        "GP for August was two hundred ninety-two thousand one hundred "
+        "eighty-seven dollars."
+    )
+
+
+async def test_the_neighbouring_sentences_are_sent_as_context(config):
+    """Each sentence is its own request, so without these prosody restarts at
+    every boundary and a sentence opening with a figure starts cold."""
+    mock, seen = transport()
+    await speak(config, mock, "It was $12.50.",
+                before="Rod called about the quote.", after="He wants it Friday.")
+
+    assert seen["json"]["previous_text"] == "Rod called about the quote."
+    assert seen["json"]["next_text"] == "He wants it Friday."
+    assert seen["json"]["text"] == "It was twelve dollars fifty cents."
+
+
+async def test_context_is_spoken_the_same_way_as_the_sentence(config):
+    """Otherwise the model is given "$292,187" as the run-up to a sentence it
+    is being asked to read as words, and told two different things about how
+    the same figure sounds."""
+    mock, seen = transport()
+    await speak(config, mock, "That is the figure.", before="GP was $292,187.")
+
+    assert "292" not in seen["json"]["previous_text"]
+    assert "two hundred ninety-two thousand" in seen["json"]["previous_text"]
+
+
+async def test_no_context_is_sent_when_there_is_none(config):
+    """A first sentence genuinely has nothing before it, and an empty string is
+    not the same as absent."""
+    mock, seen = transport()
+    await speak(config, mock, "Rod called.")
+
+    assert "previous_text" not in seen["json"]
+    assert "next_text" not in seen["json"]

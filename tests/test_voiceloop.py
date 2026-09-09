@@ -140,7 +140,7 @@ class FakeSpeaker:
         self.said: list[str] = []
         self.fail = fail
 
-    async def stream(self, text):
+    async def stream(self, text, *, before="", after=""):
         self.said.append(text)
         if self.fail:
             raise SpeechError(self.fail)

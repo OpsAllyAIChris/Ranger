@@ -50,7 +50,8 @@ class Voice:
 
 @runtime_checkable
 class Speaker(Protocol):
-    async def stream(self, text: str) -> AsyncIterator[bytes]: ...
+    async def stream(self, text: str, *, before: str = "",
+                     after: str = "") -> AsyncIterator[bytes]: ...
 
 
 def output_samplerate(output_format: str) -> int | None:
@@ -92,8 +93,15 @@ class ElevenLabsSpeaker:
     def _headers(self) -> dict[str, str]:
         return {"xi-api-key": self.api_key, "Accept": "*/*"}
 
-    async def stream(self, text: str) -> AsyncIterator[bytes]:
-        """Yield audio as it arrives, so speech can start before it is finished."""
+    async def stream(self, text: str, *, before: str = "", after: str = "") -> AsyncIterator[bytes]:
+        """Yield audio as it arrives, so speech can start before it is finished.
+
+        `before` and `after` are the neighbouring sentences of the same reply.
+        Each sentence is its own request, so without them prosody restarts at
+        every boundary and a sentence that opens with a figure starts cold.
+        They are context, not content: ElevenLabs uses them to decide how this
+        sentence should sound and returns audio for `text` alone.
+        """
         text = text.strip()
         if not text:
             return
@@ -120,11 +128,25 @@ class ElevenLabsSpeaker:
         if self.config.speaker_boost:
             settings["use_speaker_boost"] = True
 
+        # **The one place text becomes audio, so the one place numbers become
+        # words.** "$292,187" as digits is a guess the speech model has to
+        # make; as words there is nothing left to guess. Applied here and
+        # nowhere else, so it cannot reach the window, a filed note, a draft or
+        # a GP entry -- digits on the screen, words in the ear.
+        from .saying import for_speech
+
         body = {
-            "text": text,
+            "text": for_speech(text),
             "model_id": self.config.model_id,
             "voice_settings": settings,
         }
+        # Context for prosody, spoken the same way. Sent only when there is
+        # something to send: an empty string is not the same as absent, and a
+        # first sentence genuinely has nothing before it.
+        if before.strip():
+            body["previous_text"] = for_speech(before.strip())
+        if after.strip():
+            body["next_text"] = for_speech(after.strip())
         url = f"{API_ROOT}/text-to-speech/{self.config.voice_id}/stream"
 
         try:
