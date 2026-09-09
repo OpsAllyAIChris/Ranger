@@ -687,8 +687,13 @@ def served(config, vault, monkeypatch):
 
     make(vault, config, kind="pdf")
     make(vault, config, kind="docx")
-    (config.vault.drafts / "2026-09-08-private.md").write_text(
-        "customer email, pasted\n", encoding="utf-8"
+    # Bytes, because a test three hundred lines below asserts on these exact
+    # bytes. `write_text` opens in text mode and Windows turns the \n into
+    # \r\n, so the fixture and the literal it is compared against disagreed on
+    # the platform that matters and nowhere else. `encoding=` does not cover
+    # this: encoding and newline are two separate defaults.
+    (config.vault.drafts / "2026-09-08-private.md").write_bytes(
+        b"customer email, pasted\n"
     )
 
     # A generated document that is NOT in the drafts folder. Removing the

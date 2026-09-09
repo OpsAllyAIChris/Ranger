@@ -1759,3 +1759,15 @@ entering a GP figure. Each answer was true and each was useless.
 **A refusal is half an answer.** Where a tool declines, its content says what
 to do instead, and where a tool has no write side, the read side's description
 names the tool that does. A model only offers a route it has been told about.
+
+### Encoding and newline are two separate defaults
+
+The encoding sweep was written after a CRLF bug and it checks for an explicit
+`encoding=`. `open(p, "w", encoding="utf-8")` still translates `\n` to `\r\n`
+on Windows, so a fixture written that way and then compared against a byte
+literal fails on the operator's machine and nowhere else -- and the sweep says
+the line is fine, because it is looking at the other default.
+
+Second time this class landed in a *fixture* rather than in the code. The code
+paths that promise byte identity go through bytes end to end; the tests
+checking them did not.

@@ -386,3 +386,138 @@ def test_only_the_assembly_module_builds_a_provider(module: Path):
         "assembly.py: a second one is a construction path no test walks, which "
         "is how `ranger run` shipped broken with the suite green."
     )
+
+
+# --- a fixture asserted on as bytes must not have been translated ----------
+#
+# `encoding=` and `newline=` are two separate defaults and the encoding sweep
+# above only knows about one. `open(p, "w", encoding="utf-8")` still turns
+# every \n into \r\n on Windows, so a fixture written in text mode and then
+# compared against a byte literal disagrees with itself on the operator's
+# machine and nowhere else.
+#
+# That is the second time this class has surfaced in a fixture rather than in
+# the code. The first cost a day of looking at the account write path, which
+# was correct.
+
+
+def _writes_a_literal_newline_in_text_mode(tree) -> list[int]:
+    """Text-mode writes whose content is a literal containing a newline.
+
+    A literal, because that is when the hazard is visible: `json.dumps(...)`
+    might contain a newline and might not, and flagging it would train people
+    to add `newline=""` as noise until the real one is invisible among them.
+    """
+    import ast
+
+    def literal_with_newline(node) -> bool:
+        for part in ast.walk(node):
+            if isinstance(part, ast.Constant) and isinstance(part.value, str):
+                if "\n" in part.value or "\r" in part.value:
+                    return True
+        return False
+
+    found: list[int] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        function = node.func
+        name = function.attr if isinstance(function, ast.Attribute) else getattr(
+            function, "id", "")
+        given = {keyword.arg for keyword in node.keywords}
+        if "newline" in given:
+            continue
+        if name == "write_text" and node.args and literal_with_newline(node.args[0]):
+            found.append(node.lineno)
+        elif name == "open" and isinstance(function, ast.Name):
+            mode = ast.unparse(node.args[1]) if len(node.args) > 1 else "'r'"
+            if "b" not in mode and ("w" in mode or "a" in mode):
+                found.append(node.lineno)
+    return found
+
+
+def _asserts_byte_equality_across_a_newline(tree) -> list[int]:
+    """`x == b"...\\n"`. Equality, not `in`, and only where a newline is in it.
+
+    Both narrowings are what make this checkable rather than noisy. A substring
+    check survives translation; a literal with no newline in it cannot be
+    changed by translation at all.
+    """
+    import ast
+
+    found: list[int] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Compare):
+            continue
+        if not any(isinstance(op, (ast.Eq, ast.NotEq)) for op in node.ops):
+            continue
+        for part in (node.left, *node.comparators):
+            if isinstance(part, ast.Constant) and isinstance(part.value, bytes):
+                if b"\n" in part.value or b"\r" in part.value:
+                    found.append(node.lineno)
+    return found
+
+
+@pytest.mark.parametrize("module", MODULES, ids=lambda p: p.name)
+def test_no_test_asserts_on_bytes_it_wrote_through_a_translating_write(module: Path):
+    """A fixture compared byte for byte has to be written byte for byte.
+
+    Write it with `write_bytes`, or pass `newline=""` so the text write stops
+    translating. Either is one word; what is not acceptable is a test that
+    passes here and fails on the machine the software runs on.
+    """
+    import ast
+
+    tree = ast.parse(module.read_text(encoding="utf-8"))
+    writes = _writes_a_literal_newline_in_text_mode(tree)
+    asserts = _asserts_byte_equality_across_a_newline(tree)
+
+    assert not (writes and asserts), (
+        f"{module.name} writes a fixture in text mode at line(s) "
+        f"{writes} and asserts byte equality across a newline at line(s) "
+        f"{asserts}.\n\nOn Windows the write turns \\n into \\r\\n and the "
+        "comparison fails. Use write_bytes, or newline=\"\". Note that "
+        "encoding='utf-8' does not help: encoding and newline are separate "
+        "defaults, which is why the encoding sweep passed this."
+    )
+
+
+def test_the_newline_check_can_actually_fail():
+    """A guard that cannot fail is decoration. This is the bug it was written
+    for, reduced to four lines."""
+    import ast
+
+    bad = ast.parse(
+        'p.write_text("customer email, pasted\\n", encoding="utf-8")\n'
+        'assert body == b"customer email, pasted\\n"\n'
+    )
+
+    assert _writes_a_literal_newline_in_text_mode(bad) == [1]
+    assert _asserts_byte_equality_across_a_newline(bad) == [2]
+
+
+def test_the_newline_check_lets_the_harmless_shapes_through():
+    """It has to be quiet about the things it is not for, or the one that
+    matters is lost among them.
+
+    Each of these was in the suite when the check was written, and none of them
+    is the bug: a write with no newline in it cannot be translated, a substring
+    check survives translation, and `newline=""` is the fix rather than the
+    fault.
+    """
+    import ast
+
+    fine = ast.parse(
+        'p.write_text("not an image", encoding="utf-8")\n'
+        'p.write_text(json.dumps(data), encoding="utf-8")\n'
+        'p.write_text("a\\nb", encoding="utf-8", newline="")\n'
+        'p.write_bytes(b"a\\nb")\n'
+    )
+    assert _writes_a_literal_newline_in_text_mode(fine) == []
+
+    quiet = ast.parse(
+        'assert b"Ranger transport" in body\n'
+        'assert ring.drain() == b""\n'
+        'assert head == b"\\x89PNG"\n'
+    )
+    assert _asserts_byte_equality_across_a_newline(quiet) == []
