@@ -180,9 +180,24 @@ class Run:
 
     @property
     def held(self) -> bool:
-        """Did something stop and go to the inbox for a yes?"""
+        """Did something stop and go to the inbox for a yes?
+
+        **The gate's own outcome, matched exactly.** This was a substring
+        search for "held" anywhere in any tool's summary, and
+        `what_went_quiet` reports "3 slipping, 2 deals, 1 withheld" -- so it
+        fired on two runs that only read, and stayed quiet on the one that
+        actually wrote to an account. A prompt that cries wolf is one the
+        operator learns to scroll past inside a week, which is worse than not
+        having it.
+
+        The core reports a gate decision as a failed step whose summary is the
+        outcome itself, so that is what this looks for.
+        """
+        from .gate import HELD as GATE_HELD
+
         return self.outcome == HELD or any(
-            "held" in step.summary.casefold() for step in self.steps
+            not step.ok and step.summary.strip().casefold() == GATE_HELD
+            for step in self.steps
         )
 
     def tools_used(self) -> list[str]:
@@ -286,8 +301,16 @@ def build_agent(
 
     return assemble(
         config,
-        # **The one thing that is different, and the reason this file exists.**
+        # **The two things that are different, and the reason this file exists.**
+        #
+        # The gate cannot say yes: it writes the request into the inbox and
+        # returns held.
         gate=HoldingGate(Inbox(Vault(config.vault), config.vault.inbox)),
+        # And every tool that writes goes through it. Filing into an account is
+        # ungated when a person is sitting there, because a card on every note
+        # becomes a reflex; with nobody there that reasoning inverts, since the
+        # operator sees what was written only once it is permanent.
+        hold_writes=True,
         origin=origin,
         api_key=api_key,
         provider=provider,

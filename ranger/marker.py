@@ -178,6 +178,46 @@ def as_bytes(text: str, newline: bytes = b"\n") -> bytes:
     return encoded.replace(b"\n", newline) if newline != b"\n" else encoded
 
 
+#: A dated context line under an entry. **Every one of these carries its own
+#: date**, because the entry's date says when it was written and says nothing
+#: about when what it contains was true.
+CONTEXT_LINE = "- {when}: {what} ({source})"
+
+
+def entry_with_context(
+    note: str,
+    source: str,
+    context: "list[tuple[str, str, str]] | None" = None,
+    when: date | None = None,
+) -> str:
+    """One appended block: the operator's words, then anything added, dated.
+
+    **What the operator said and what Jarvis added are not the same sentence.**
+    A note that blends them reads as one statement from the operator, and the
+    added half is the half nobody can check. So the operator's line is the
+    entry, and everything Jarvis knew already goes underneath it, one item at a
+    time, each with the date it was true and where it came from.
+
+    The failure this is shaped against was real and was not invention: a true
+    fact from months earlier, filed in the present tense with no date, reading
+    as the current state of the account. Worse than a wrong fact, because it is
+    credible and it compounds -- it is read every day and becomes the input to
+    everything concluded later.
+    """
+    block = entry(note, source, when)
+    if not context:
+        return block
+    lines = [
+        CONTEXT_LINE.format(
+            when=" ".join(str(item_when).split()),
+            what=" ".join(str(what).split()),
+            source=" ".join(str(item_source).split()) or "Jarvis",
+        )
+        for item_when, what, item_source in context
+    ]
+    return block + "\n".join(lines) + "\n"
+
+
 def entry(note: str, source: str, when: date | None = None) -> str:
     """One appended block, in the format the note already uses.
 

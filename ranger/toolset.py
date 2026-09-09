@@ -533,6 +533,25 @@ def _forget(config: Config, vault: Vault) -> Tool:
 # -- 6. file into an account ------------------------------------------------
 
 
+def _figures_in(text: str) -> list[str]:
+    """Figure-shaped numbers in a piece of text.
+
+    The same definition the reply audit uses, so "a figure" means one thing in
+    this repository. Deliberately not every digit: a date in a sentence, or
+    "two units", is not the shape that gets acted on.
+    """
+    from .figures import figures
+
+    import re as _re
+
+    found = list(figures(text))
+    # Plus bare thousands-scale integers, which are what a quantity looks like
+    # in this business: "3000 MOQ" is exactly the case, and it carries no
+    # separator or decimal point to be caught by the shapes above.
+    found += [match for match in _re.findall(r"(?<![\w.,])\d{3,}(?![\w.,])", text)]
+    return sorted(set(found))
+
+
 def _file_to_account(config: Config, vault: Vault, today: Callable[[], date]) -> Tool:
     """Append Ranger's own context to an account note, below the marker.
 
@@ -550,7 +569,7 @@ def _file_to_account(config: Config, vault: Vault, today: Callable[[], date]) ->
     """
 
     async def handler(payload: dict[str, Any]) -> ToolResult:
-        from .marker import MarkerError, entry
+        from .marker import MarkerError, entry_with_context
         from .vault import VaultError
 
         account = str(payload.get("account", "")).strip()
@@ -562,6 +581,47 @@ def _file_to_account(config: Config, vault: Vault, today: Callable[[], date]) ->
                               "no account named")
         if not note:
             return ToolResult(False, "There was no note text to append.", "nothing to file")
+
+        # **A figure in the note is a fact from somewhere, and somewhere has a
+        # date.** This is the enforceable half of "retrieved context carries its
+        # date": the note is what the operator said, and a number they did not
+        # say came out of history. It goes in `context`, where a date is
+        # required, or it does not get written.
+        #
+        # The case this is shaped against: "waiting on their reply" became
+        # "Countered board's 3,000 MOQ ask with 5,000 at 60/40 terms" -- every
+        # figure true, none of them from the operator, all of them filed in the
+        # present tense with no date.
+        stray = _figures_in(note)
+        if stray:
+            return ToolResult(
+                False,
+                f"That note has figures in it that are not dated: {', '.join(stray)}. "
+                "The note is what the operator said. Anything you are adding from what "
+                "you already knew goes in `context`, one item at a time, each with the "
+                "date it was true and where it came from. If you cannot say when it was "
+                "true, leave it out.",
+                "undated figures in the note",
+            )
+
+        context: list[tuple[str, str, str]] = []
+        for raw in payload.get("context", []) or []:
+            if not isinstance(raw, dict):
+                continue
+            what = " ".join(str(raw.get("what", "")).split())
+            item_when = " ".join(str(raw.get("when", "")).split())
+            item_source = " ".join(str(raw.get("source", "")).split())
+            if not what:
+                continue
+            if not item_when:
+                return ToolResult(
+                    False,
+                    f"Context needs the date it was true: {what[:60]!r} has none. "
+                    "If you cannot say when, leave it out -- a line with no date is "
+                    "read as the state of the account today.",
+                    "context with no date",
+                )
+            context.append((item_when, what, item_source or "Jarvis"))
 
         files = _account_files(config, vault)
         names = [item.path.stem for item in files]
@@ -584,7 +644,9 @@ def _file_to_account(config: Config, vault: Vault, today: Callable[[], date]) ->
         item = next(f for f in files if f.path.stem == resolution.match)
 
         try:
-            vault.append_below_marker(item.path, entry(note, source, today()))
+            vault.append_below_marker(
+                item.path, entry_with_context(note, source, context, today())
+            )
         except (MarkerError, VaultError) as exc:
             # Fail closed, and say which refusal it was. A refusal the operator
             # cannot act on is a refusal they will work around.
@@ -610,10 +672,13 @@ def _file_to_account(config: Config, vault: Vault, today: Callable[[], date]) ->
         description=(
             "Append a note to an account's own file, below the Ranger Context marker, "
             "so it becomes part of that account's permanent record. Use this whenever "
-            "the operator tells you something about an account that is worth keeping: "
-            "what was said on a call, what a contact wants, what was agreed, what "
-            "changed. Prefer this over a draft for anything that belongs in the account "
-            "history rather than in an email. Nothing above the marker is ever touched."
+            "the operator tells you something about an account that is worth keeping. "
+            "Prefer this over a draft for anything that belongs in the account history "
+            "rather than in an email. Nothing above the marker is ever touched. "
+            "**Transcribe, do not elaborate**: the note is what the operator said, in "
+            "their words. Anything you are adding from what you already knew goes in "
+            "`context`, one item at a time, each with the date it was true -- and if "
+            "you cannot say when it was true, leave it out."
         ),
         input_schema={
             "type": "object",
@@ -625,9 +690,50 @@ def _file_to_account(config: Config, vault: Vault, today: Callable[[], date]) ->
                 "note": {
                     "type": "string",
                     "description": (
-                        "What to record, in one or two sentences. Written for the "
-                        "operator to read in six months, not for you to read back."
+                        "What the operator said, in one or two sentences and in their "
+                        "words. Not a summary of the account, not what you know about "
+                        "it, and no figures they did not say -- those belong in "
+                        "`context`, dated. If they said 'we are waiting on their "
+                        "reply', that sentence is the whole note."
                     ),
+                },
+                "context": {
+                    "type": "array",
+                    "description": (
+                        "Anything you are adding that the operator did not just say. "
+                        "Each item is dated and sourced, and appears under the note "
+                        "rather than inside it, so what they said stays theirs. Leave "
+                        "it out entirely rather than guessing at a date."
+                    ),
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "what": {
+                                "type": "string",
+                                "description": (
+                                    "The fact, in the past tense: 'countered at 3,000 "
+                                    "MOQ'. Not 'the ball is in their court', which is a "
+                                    "claim about today."
+                                ),
+                            },
+                            "when": {
+                                "type": "string",
+                                "description": (
+                                    "When it was true: '2026-06-14', 'June 2026', 'Q2'. "
+                                    "Required. Without it the line reads as the state of "
+                                    "the account today."
+                                ),
+                            },
+                            "source": {
+                                "type": "string",
+                                "description": (
+                                    "Where you got it: 'the account note', 'the June "
+                                    "call'. Defaults to Jarvis."
+                                ),
+                            },
+                        },
+                        "required": ["what", "when"],
+                    },
                 },
                 "source": {
                     "type": "string",

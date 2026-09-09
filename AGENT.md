@@ -1455,6 +1455,51 @@ reset cannot reach into the copy. The test that proves it holds the spawned
 task on a gate until the outer run has finished, so the ordering that failed on
 Windows is the ordering the test runs every time.
 
+## Consequentiality depends on the caller
+
+Filing into an existing account is gate-free at the keyboard and gated
+headless. The tool did not change; the caller's claim on consent did.
+
+A card on every filed note becomes a reflex inside a week, and a card clicked
+without reading manufactures a record of review that did not happen -- so when
+the operator is sitting there watching the note being written, the gate costs
+more than it protects. With nobody there the premise is gone: they see what was
+written only once it is permanent. So a headless run sets `hold_writes` and
+every tool that writes stops at a gate that cannot say yes. Reads stay free.
+
+One property on the core, set by the caller, rather than a second list of tool
+names somewhere it can drift. `docs/consent.md` has the table, and a test
+asserts the table matches the registry, so a tool added later fails until
+somebody classifies it.
+
+## What it files is what was said, and everything else is dated
+
+Asked to file "we are waiting on their reply", Jarvis filed a true fact from
+months earlier -- a 3,000 MOQ counter -- in the present tense, with no date,
+reading as the current state of the account. **Worse than invention, because it
+is credible and it compounds**: the note is read every day and becomes the input
+to everything concluded later.
+
+The phrase that invited it was in the tool's own schema: *"Written for the
+operator to read in six months, not for you to read back."* That is an
+instruction to fill in background so it makes sense later.
+
+- The note is what the operator said. `context` is where anything else goes,
+  one item at a time, each with the date it was true and where it came from.
+- **A figure in the note with no date is refused.** That is the enforceable
+  half: a quantity came from somewhere, and somewhere had a date. It is the
+  same rule as the analysis title guard, and it catches the real case.
+- A context item with no date is refused. If you cannot say when, leave it out.
+- `ranger accounts audit` reads back what is already filed and flags lines that
+  lost their date. It writes nothing: a correction is a new dated entry that
+  supersedes, written by a person who knows what was actually true.
+
+The audit keys on attribution, and that is the whole of its signal-to-noise: a
+present-tense line sourced to the operator is a person saying what is true now,
+and the entry's date covers it. The same sentence sourced to Jarvis is Jarvis
+asserting the state of an account. An audit that flagged both would be one
+nobody reads twice.
+
 ## A path only the CLI takes is a path the suite does not cover
 
 `ranger run` died on every invocation with a `TypeError`, while the suite was

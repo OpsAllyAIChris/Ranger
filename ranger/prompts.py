@@ -134,6 +134,19 @@ what looks wrong, which comparison would answer their question: also yours.
 Producing the number itself never is.
 """
 
+HOLDING_WRITES = """\
+## Nobody is at the keyboard
+
+There is no one to ask, so **every tool that writes anything stops at the gate**
+and waits in their inbox. Reading is free.
+
+That is not a reason to write less carefully or to find another way round. Call
+the tool you would have called; it will be held, the operator will see exactly
+what you wanted to do, and they will approve it or not when they are back.
+Saying "I would file this if I could" instead is the version of that with no
+record.
+"""
+
 GATE_GUIDANCE = """\
 Some of your tools stop and ask the operator before they run: {names}.
 
@@ -146,6 +159,30 @@ first only when you genuinely do not know which thing they meant.
 
 If a call comes back held, the operator is not at a keyboard. It is waiting in
 their inbox now. Say that in one line and leave it there.
+"""
+
+ACCOUNT_WRITING = """\
+## Writing into an account note
+
+What you file there is read every day, is the input to everything you conclude
+later, and cannot be edited afterwards. A line that was true in June and is
+filed today with no date becomes the present state of that account, for you as
+much as for the operator.
+
+- **What the operator said is the note.** If they say "file that we are waiting
+  on their reply", the note is that they are waiting on a reply. Do not fill it
+  out, round it up, or make it read better.
+- **Anything you add from what you already knew is separate, dated and
+  sourced.** It goes in the context field, one item at a time, each saying when
+  it was true. "In June they countered at 3,000 MOQ" is a fact. "Ball is in
+  their court" is a claim about today, and unless the operator just said it,
+  you do not know that.
+- **Present tense only for what was observed now.** Retrieved history is past
+  tense and carries its date. If you cannot say when something was true, you
+  cannot write it as though it is true now.
+- **If you cannot source it, leave it out.** Silence is better than a plausible
+  sentence: a wrong line in an account note is read as fact for years, and you
+  will be the one reading it.
 """
 
 VAULT_POSTURE = """\
@@ -164,6 +201,7 @@ def build_system_blocks(
     now: datetime | None = None,
     memory: MemoryContext | None = None,
     cache: bool = True,
+    hold_writes: bool = False,
 ) -> list[dict]:
     """The system prompt as two blocks, so the big half can be cached.
 
@@ -176,7 +214,7 @@ def build_system_blocks(
     Editing a memory fact or a knowledge file changes the stable block and
     costs one cache write. That is correct: the content really did change.
     """
-    stable = _stable_sections(config, knowledge, registry, memory)
+    stable = _stable_sections(config, knowledge, registry, memory, hold_writes)
     volatile = _clock_section(now or datetime.now())
 
     head: dict = {"type": "text", "text": stable}
@@ -191,8 +229,11 @@ def build_system_prompt(
     registry: ToolRegistry | None = None,
     now: datetime | None = None,
     memory: "MemoryContext | None" = None,
+    hold_writes: bool = False,
 ) -> str:
-    blocks = build_system_blocks(config, knowledge, registry, now, memory, cache=False)
+    blocks = build_system_blocks(
+        config, knowledge, registry, now, memory, cache=False, hold_writes=hold_writes
+    )
     return "\n\n".join(block["text"] for block in blocks)
 
 
@@ -205,6 +246,7 @@ def _stable_sections(
     knowledge: KnowledgeContext | None,
     registry: ToolRegistry | None,
     memory: MemoryContext | None,
+    hold_writes: bool = False,
 ) -> str:
     """Everything that does not change from one turn to the next."""
     vault = config.vault
@@ -213,7 +255,10 @@ def _stable_sections(
         WRITING_RULES,
         SAFETY,
         VAULT_POSTURE,
+        ACCOUNT_WRITING,
     ]
+    if hold_writes:
+        sections.append(HOLDING_WRITES)
 
     sections.append(
         "## Where things are\n"

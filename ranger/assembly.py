@@ -32,6 +32,7 @@ def build_agent(
     origin: str = "conversation",
     api_key: str | None = None,
     provider: Any = None,
+    hold_writes: bool = False,
 ) -> Ranger:
     """The one way a caller assembles a core.
 
@@ -63,4 +64,5 @@ def build_agent(
         gate=gate,  # None means DenyingGate, and that is the point
         audit=audit,
         origin=origin,
+        hold_writes=hold_writes,
     )

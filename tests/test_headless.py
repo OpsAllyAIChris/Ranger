@@ -686,3 +686,151 @@ def test_the_shared_assembly_builds_a_real_provider_too(config, monkeypatch):
 
     assert agent.provider.__class__.__name__ == "AnthropicProvider"
     assert isinstance(agent.gate, DenyingGate), "and a caller that wires no gate refuses"
+
+
+# -- consequentiality depends on the caller --------------------------------
+#
+# `ranger run` printed "nothing here can approve a gate" and then completed a
+# write to an account unattended. Filing into an existing account is ungated on
+# purpose -- a card on every filed note becomes a reflex inside a week, and a
+# card clicked without reading manufactures a record of review that did not
+# happen. That reasoning is about a person being present. With nobody there it
+# inverts: the operator sees what was written only after it is permanent.
+
+
+def writing_tools(config, vault):
+    return sorted(tool.name for tool in build_registry(config, vault) if tool.writes)
+
+
+@pytest.mark.parametrize(
+    "tool_name",
+    ["file_to_account", "draft_and_hold", "remember", "clear_draft", "write_document",
+     "analyse"],
+)
+async def test_every_writing_tool_holds_when_nobody_is_there(config, vault, tool_name):
+    """**Not a spot check.** Parametrised over the writing tools by name, and
+    the test below fails if that list stops matching the registry -- so a tool
+    added later fails until somebody classifies it."""
+    from ranger.gate import HELD
+
+    payloads = {
+        "file_to_account": {"account": "Illes", "note": "Waiting on their reply."},
+        "draft_and_hold": {"title": "Follow up", "body": "Short note."},
+        "remember": {"fact": "Chris prefers mornings"},
+        "clear_draft": {"name": "anything"},
+        "write_document": {"format": "docx", "title": "Report",
+                           "blocks": [{"kind": "text", "text": "hello"}]},
+        "analyse": {"file": "anything", "group_by": "a", "value": "b"},
+    }
+    agent = agent_for(config, vault, [
+        {"tools": [{"name": tool_name, "input": payloads[tool_name]}]},
+        {"text": "That is waiting on you."},
+    ])
+    agent.hold_writes = True
+    record = await headless.run(config, "do the thing", agent=agent)
+
+    assert record.held, f"{tool_name} completed unattended"
+    assert [step.summary for step in record.steps] == [HELD]
+    assert record.outcome == headless.HELD
+
+
+def test_the_writing_tools_are_exactly_the_ones_the_test_covers(config, vault):
+    """So a tool added later fails here until it is classified and covered."""
+    covered = {
+        "file_to_account", "draft_and_hold", "remember", "clear_draft",
+        "write_document", "analyse", "forget",
+    }
+    assert set(writing_tools(config, vault)) == covered
+
+
+async def test_reads_stay_free_when_nobody_is_there(config, vault):
+    """Only writes. A headless run that could not read would be useless, and
+    reading changes nothing the operator would want to see first."""
+    agent = agent_for(config, vault, [
+        {"tools": [{"name": "account_recall", "input": {"account": "Illes"}}]},
+        {"text": "Nothing has moved."},
+    ])
+    agent.hold_writes = True
+    record = await headless.run(config, "how is Illes", agent=agent)
+
+    assert record.outcome == headless.COMPLETED
+    assert not record.held
+    assert record.steps and record.steps[0].ok
+
+
+def test_the_headless_agent_holds_writes_and_the_shared_one_does_not(config, monkeypatch):
+    """The caller decides, and it is a property of the core rather than a list
+    kept somewhere else."""
+    pytest.importorskip("anthropic", reason="the real provider needs the SDK")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key-not-used")
+
+    from ranger.assembly import build_agent
+
+    assert headless.build_agent(config).hold_writes is True
+    assert build_agent(config).hold_writes is False, "the window keeps filing gate-free"
+
+
+def test_the_prompt_says_so_when_writes_are_being_held(config, vault):
+    agent = agent_for(config, vault, [])
+    agent.hold_writes = True
+    flat = " ".join(agent.system_prompt().split())
+
+    assert "Nobody is at the keyboard" in flat
+    assert "every tool that writes anything stops at the gate" in flat
+    assert "Reading is free" in flat
+
+
+# -- the inbox line fires on the gate, not on a word -----------------------
+
+
+def test_a_read_whose_summary_contains_the_word_held_is_not_a_hold(config, vault):
+    """**The exact false positive.** `what_went_quiet` reports "3 slipping, 2
+    deals, 1 withheld", and "withheld" contains "held" -- so two runs that only
+    read announced something waiting in the inbox, and the run that actually
+    wrote to an account announced nothing."""
+    record = Run = headless.Run(prompt="x")
+    record.steps = [
+        headless.Step(name="what_went_quiet", ok=True,
+                      summary="3 slipping, 2 deals, 1 withheld")
+    ]
+
+    assert not record.held
+
+
+def test_a_real_hold_is_a_failed_step_whose_summary_is_the_gate_outcome(config, vault):
+    from ranger.gate import HELD
+
+    record = headless.Run(prompt="x")
+    record.steps = [headless.Step(name="forget", ok=False, summary=HELD)]
+
+    assert record.held
+
+
+def test_a_declined_gate_is_not_a_hold(config, vault):
+    """Declined is answered. Held is waiting. Only one of them belongs in an
+    inbox line."""
+    from ranger.gate import DECLINED
+
+    record = headless.Run(prompt="x")
+    record.steps = [headless.Step(name="forget", ok=False, summary=DECLINED)]
+
+    assert not record.held
+
+
+def test_the_documented_table_matches_the_registry(config, vault):
+    """The table in docs/consent.md is generated from these two flags, so a
+    tool added later makes the documentation wrong and this fails."""
+    from pathlib import Path
+
+    doc = (Path(__file__).resolve().parent.parent / "docs" / "consent.md")
+    text = doc.read_text(encoding="utf-8")
+
+    for tool in build_registry(config, vault):
+        row = [line for line in text.splitlines() if line.startswith(f"| `{tool.name}`")]
+        assert row, f"{tool.name} is not in the consent table"
+        keyboard = "**gate**" if tool.confirm else "free"
+        headless_cell = "**gate**" if (tool.confirm or tool.writes) else "free"
+        cells = [cell.strip() for cell in row[0].strip("|").split("|")]
+        assert cells[1] == ("write" if tool.writes else "read"), tool.name
+        assert cells[2] == keyboard, f"{tool.name} at the keyboard"
+        assert cells[3] == headless_cell, f"{tool.name} headless"

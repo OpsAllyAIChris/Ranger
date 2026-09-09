@@ -1698,7 +1698,16 @@ def cmd_run(config: Config, args: Any) -> int:
         print(paint("  it stopped before saying anything; the tool calls above are "
                     "what it managed", DIM))
     if record.held:
-        print(paint("  something needs your yes and is waiting in 'ranger inbox'", YELLOW))
+        # Fires on the gate's own outcome and nothing else. It used to be a
+        # substring search for "held", and `what_went_quiet` reports "... 1
+        # withheld", so it appeared on runs that only read and stayed quiet on
+        # the run that wrote to an account. A prompt that cries wolf is one the
+        # operator learns to scroll past.
+        waiting = [step.name for step in record.steps if not step.ok]
+        print(paint(
+            f"  {', '.join(waiting) or 'something'} needs your yes and is waiting in "
+            "'ranger inbox'", YELLOW,
+        ))
     return 0 if record.outcome in (COMPLETED, HELD, BOUNDED) else 1
 
 
@@ -2085,6 +2094,48 @@ def cmd_vault_guard(config: Config, args: Any) -> int:
     print(paint(refusal, YELLOW))
     print()
     print(paint(f"  {len(notes_with_context(folder))} notes, in {folder}", DIM))
+    return 1
+
+
+def cmd_accounts_audit(config: Config, args: Any) -> int:
+    """Read back what has been filed below the markers. **Writes nothing.**
+
+    Jarvis filed a true fact from months earlier in the present tense with no
+    date, reading as the current state of the account. The tool that writes
+    them is fixed; this is for the ones already on disk, and it reports rather
+    than repairs -- delete-never means a correction is a new dated entry
+    written by a person who knows what was actually true.
+    """
+    from .timeblind import audit_notes
+    from .vault import Vault
+
+    paint = _colour(sys.stdout.isatty())
+    report = audit_notes(Vault(config.vault), config)
+
+    print(paint(f"  {report.summary()}", BOLD))
+    if report.unreadable:
+        print(paint(f"  {len(report.unreadable)} notes could not be read:", YELLOW))
+        for line in report.unreadable[:5]:
+            print(paint(f"      {line}", DIM))
+    if not report.findings:
+        if report.entries:
+            print(paint("  every filed entry either carries a date or says nothing "
+                        "about the present", DIM))
+        return 0
+
+    print()
+    for finding in report.findings:
+        print(paint(f"  {finding.account}  {finding.when}", YELLOW))
+        print(f"    {finding.text[:150]}")
+        print(paint(f"    {finding.reason}", DIM))
+        if finding.figures:
+            print(paint(f"    figures: {', '.join(finding.figures)}", DIM))
+        print()
+
+    print(paint("  Nothing has been changed. A correction is a new dated entry that", DIM))
+    print(paint("  supersedes the old one: tell Jarvis what was actually true and when,", DIM))
+    print(paint("  or write it in Obsidian. The old line stays, because it is the", DIM))
+    print(paint("  record of what was believed.", DIM))
     return 1
 
 
@@ -2690,6 +2741,11 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     accounts_sub.add_parser(
+        "audit",
+        help="read back what has been filed below the markers, looking for lines "
+             "that lost their date. Writes nothing",
+    )
+    accounts_sub.add_parser(
         "survey", help="the Tier values and opportunity stages actually in the vault"
     )
 
@@ -2778,7 +2834,9 @@ def main(argv: list[str] | None = None) -> int:
             return cmd_accounts_survey(config, args)
         if args.accounts_command == "migrate":
             return cmd_accounts_migrate(config, args)
-        print("usage: ranger accounts survey|migrate", file=sys.stderr)
+        if args.accounts_command == "audit":
+            return cmd_accounts_audit(config, args)
+        print("usage: ranger accounts survey|migrate|audit", file=sys.stderr)
         return 2
     if args.command == "open":
         return cmd_open(config, args)

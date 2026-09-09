@@ -50,6 +50,7 @@ class Ranger:
         gate: Gate | None = None,
         audit: Any = None,
         origin: str = "conversation",
+        hold_writes: bool = False,
     ) -> None:
         self.config = config
         self.provider = provider
@@ -63,6 +64,19 @@ class Ranger:
         self.gate = gate or DenyingGate()
         self.audit = audit
         self.origin = origin
+        #: **Consequentiality depends on the caller, not on the tool alone.**
+        #:
+        #: Filing into an account that already exists is ungated when a person
+        #: is sitting there: a card on every filed note becomes a reflex inside
+        #: a week, and a card clicked without reading manufactures a record of
+        #: review that did not happen. That reasoning is about a person being
+        #: present. With nobody there it inverts -- the operator sees what was
+        #: written only after it is permanent -- so a caller with no keyboard
+        #: sets this and every tool that writes stops at the gate.
+        #:
+        #: Reads stay free either way. The tool does not change; the caller's
+        #: claim on consent does.
+        self.hold_writes = hold_writes
         self.messages: list[dict[str, Any]] = []
         self._state = State.IDLE
         self._knowledge: KnowledgeContext | None = None
@@ -133,7 +147,8 @@ class Ranger:
 
     def system_prompt(self, now: datetime | None = None) -> str:
         return build_system_prompt(
-            self.config, self.knowledge(), self.registry, now, memory=self.memory()
+            self.config, self.knowledge(), self.registry, now, memory=self.memory(),
+            hold_writes=self.hold_writes,
         )
 
     def system_blocks(self, now: datetime | None = None) -> list[dict]:
@@ -145,6 +160,7 @@ class Ranger:
             now,
             memory=self.memory(),
             cache=self.config.model.cache_prompt,
+            hold_writes=self.hold_writes,
         )
 
     # -- the entry point -----------------------------------------------
@@ -296,7 +312,7 @@ class Ranger:
                 yield ToolCalled(request.name, request.input)
                 tool = self.registry.get(request.name)
 
-                if tool is not None and tool.confirm:
+                if tool is not None and (tool.confirm or (self.hold_writes and tool.writes)):
                     action = tool.describe_action(request.input)
                     ask = ConfirmationRequest(
                         tool=request.name,
