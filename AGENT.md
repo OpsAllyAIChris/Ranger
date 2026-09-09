@@ -1749,3 +1749,13 @@ It survived a file full of tests because those tests searched the source for
 the names in the branch. **A check that reads code is not a check that runs
 it.** The verdict function is now driven through node against a table of
 levels, and wiring the room term to a constant `true` fails.
+
+### Correct about the limit, silent about the route
+
+Three times now Jarvis has answered "I cannot do that" where a supported path
+was one step away: the GP computation refusal, reading its own drafts, and
+entering a GP figure. Each answer was true and each was useless.
+
+**A refusal is half an answer.** Where a tool declines, its content says what
+to do instead, and where a tool has no write side, the read side's description
+names the tool that does. A model only offers a route it has been told about.

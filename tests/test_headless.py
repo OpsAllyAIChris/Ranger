@@ -738,7 +738,7 @@ def test_the_writing_tools_are_exactly_the_ones_the_test_covers(config, vault):
     """So a tool added later fails here until it is classified and covered."""
     covered = {
         "file_to_account", "draft_and_hold", "remember", "clear_draft",
-        "write_document", "analyse", "forget",
+        "write_document", "analyse", "forget", "enter_gross_profit",
     }
     assert set(writing_tools(config, vault)) == covered
 

@@ -567,16 +567,145 @@ async def test_the_model_is_told_absence_is_not_zero(config, vault):
     assert "$0" not in result.content
 
 
-def test_the_model_has_no_way_to_record_a_figure(config, vault):
-    """A model that could enter GP could enter one it inferred from a
-    conversation. Figures come from the operator's keyboard or not at all."""
+def test_the_model_cannot_record_a_figure_the_operator_did_not_state(config, vault):
+    """**The accountant rule, and it did not move.**
+
+    This test used to assert that no tool could record a GP figure at all,
+    because a model that could record one could record one it inferred. The
+    tool exists now, and the rule is held up by something stronger than its
+    absence: Python compares the amount against the operator's own words and
+    refuses anything that is not there, before the gate ever sees it.
+
+    So what is asserted is no longer "there is no write side". It is "the write
+    side cannot be handed a figure nobody said".
+    """
+    import asyncio
+
+    from ranger import heard
     from ranger.toolset import build_registry
 
     registry = build_registry(config, vault)
-    for tool in registry:
-        if "gp" in tool.name or "gross" in tool.name:
-            assert not tool.writes, f"{tool.name} writes GP figures"
-    assert "record_gp" not in registry.names()
+    tool = registry.get("enter_gross_profit")
+    assert tool is not None and tool.writes and tool.confirm
+
+    heard.remember(["what was August GP?"])
+    result = asyncio.run(tool.handler({"amount": "292187", "period": "2026-08"}))
+
+    assert not result.ok
+    assert "not a figure the operator has said" in result.content
+    assert not list((config.vault.ranger / "gp").glob("*.md")), "nothing written"
+
+
+def test_a_figure_the_operator_stated_can_be_entered(config, vault):
+    """The other half. A rule that refuses everything is not a rule, it is a
+    broken tool, and this is the case the operator asked for."""
+    import asyncio
+
+    from ranger import gp, heard
+    from ranger.toolset import build_registry
+
+    tool = build_registry(config, vault).get("enter_gross_profit")
+    heard.remember(["GP for August was 292,187", "put that in"])
+    result = asyncio.run(tool.handler({"amount": "292187", "period": "2026-08"}))
+
+    assert result.ok, result.content
+    ledger = gp.ledger_for(config, vault)
+    entry = ledger.current()["2026-08"]
+    assert entry.amount == Decimal("292187")
+    assert "spoken" in entry.source, "attributed to the operator, spoken"
+
+
+def test_a_rounded_version_of_a_stated_figure_is_not_the_stated_figure(config, vault):
+    """"About 292 thousand" is 292,000, and entering that when they said
+    292,187 is the invention this exists to stop -- with the added problem that
+    it would look approved, because the operator did say a number."""
+    import asyncio
+
+    from ranger import heard
+    from ranger.toolset import build_registry
+
+    tool = build_registry(config, vault).get("enter_gross_profit")
+    heard.remember(["GP was about 292 thousand"])
+
+    refused = asyncio.run(tool.handler({"amount": "292187", "period": "2026-08"}))
+    allowed = asyncio.run(tool.handler({"amount": "292000", "period": "2026-08"}))
+
+    assert not refused.ok
+    assert allowed.ok, "what they actually said is what can go in"
+
+
+def test_the_refusal_names_the_route_rather_than_stopping(config, vault):
+    """The pattern this build keeps having to fix: correct about the limit,
+    silent about the road. A refusal that does not say what to do next sends
+    the operator to the panel to find out whether one exists."""
+    import asyncio
+
+    from ranger import heard
+    from ranger.toolset import build_registry
+
+    tool = build_registry(config, vault).get("enter_gross_profit")
+    heard.remember(["what is my GP?"])
+    result = asyncio.run(tool.handler({"amount": "50000", "period": "2026-08"}))
+
+    assert "Ask them for the figure" in result.content
+    assert "drop it in the window" in result.content
+
+
+def test_a_correction_supersedes_and_keeps_the_first(config, vault):
+    """Never an edit, never a delete. Both entries stay on disk and the later
+    one is the figure."""
+    import asyncio
+
+    from ranger import gp, heard
+    from ranger.toolset import build_registry
+
+    tool = build_registry(config, vault).get("enter_gross_profit")
+    heard.remember(["August was 292,180", "no, 292,187"])
+    asyncio.run(tool.handler({"amount": "292180", "period": "2026-08"}))
+    second = asyncio.run(tool.handler({"amount": "292187", "period": "2026-08"}))
+
+    assert second.ok
+    assert "supersedes" in second.content
+    ledger = gp.ledger_for(config, vault)
+    assert len([e for e in ledger.entries if e.period == "2026-08"]) == 2
+    assert ledger.current()["2026-08"].amount == Decimal("292187")
+
+
+def test_the_card_shows_the_figure_and_the_period(config, vault):
+    """What the operator approves. A misheard 292,187 as 292,180 is caught
+    here or not at all, so the figure is spelled out as well as formatted."""
+    from ranger.toolset import build_registry
+
+    tool = build_registry(config, vault).get("enter_gross_profit")
+    card = tool.describe_action({"amount": "292187", "period": "2026-08"})
+
+    assert "292,187.00" in card
+    assert "2026-08" in card
+    assert "2 9 2 1 8 7" in card or "292187" in card
+    assert "nothing already entered is changed or removed" in card
+
+
+def test_the_tool_tells_the_model_how_a_correction_is_made(config, vault):
+    """So that "erase the August figure" is answered with the route rather than
+    with "I can't do that", which is correct about the limit and useless."""
+    from ranger.toolset import build_registry
+
+    tool = build_registry(config, vault).get("enter_gross_profit")
+
+    assert "supersedes" in tool.description
+    assert "erase" in tool.description
+    assert "no way to edit or delete" in tool.description
+
+
+def test_the_read_tool_points_at_the_write_tool(config, vault):
+    """It used to say "this tool cannot record a figure" and stop there, which
+    is how the model learned to refuse instead of offering the route."""
+    from ranger.toolset import build_registry
+
+    read = build_registry(config, vault).get("gross_profit")
+
+    assert "enter_gross_profit" in read.description
+    assert "Offer the route" in read.description
 
 
 def test_the_gp_folder_is_in_the_snapshot_allow_list():
@@ -680,3 +809,97 @@ def test_the_same_second_correction_is_right_in_every_surface(config, vault, cap
     # figure that stands at the bottom.
     assert "44,000" in lines[0] and "superseded" in lines[0]
     assert "45,500" in lines[1] and "superseded" not in lines[1]
+
+
+def test_the_words_come_from_the_turn_not_from_the_model(config, vault):
+    """**Where the evidence comes from matters more than the check.**
+
+    If the operator's words were a tool argument the model filled in, the model
+    could simply assert that the figure was said. They arrive through a
+    ContextVar that `core.turn` sets from the conversation's user messages, so
+    the model is not in that path and cannot be.
+    """
+    import ast
+    import asyncio
+    import inspect
+
+    from ranger import gp, toolset
+    from ranger.core import Ranger
+    from ranger.gate import APPROVED, ScriptedGate
+    from ranger.testing import ScriptedProvider
+    from ranger.toolset import build_registry
+
+    # Run a real turn rather than searching core.py for the call. Blanking the
+    # words that get remembered left every source-reading check in this file
+    # passing, because the call was still there -- it was just being handed
+    # nothing.
+    gate = ScriptedGate([APPROVED])
+    agent = Ranger(
+        config=config,
+        provider=ScriptedProvider([
+            {"tools": [{"name": "enter_gross_profit",
+                        "input": {"amount": "292187", "period": "2026-08"}}]},
+            {"text": "Entered."},
+        ]),
+        registry=build_registry(config, vault),
+        vault=vault,
+        gate=gate,
+    )
+
+    async def drive():
+        async for _ in agent.turn("GP for August was 292,187, put that in"):
+            pass
+
+    asyncio.run(drive())
+
+    entered = gp.ledger_for(config, vault).current()
+    assert "2026-08" in entered, (
+        "the tool saw the operator's words because core.turn put them there"
+    )
+    assert entered["2026-08"].amount == Decimal("292187")
+
+    # And the tool reads them rather than taking them as input.
+    tool_source = inspect.getsource(toolset._enter_gross_profit)
+    schema = ast.literal_eval(
+        [node for node in ast.walk(ast.parse(tool_source))
+         if isinstance(node, ast.keyword) and node.arg == "input_schema"][0].value
+    )
+    assert set(schema["properties"]) == {"amount", "period", "note"}, (
+        "nothing in the schema lets the model claim what the operator said"
+    )
+    assert "heard.stated(amount)" in tool_source
+
+
+def test_a_figure_said_several_turns_ago_still_counts(config, vault):
+    """"Add a GP entry" and "292,187" are routinely two turns, and a check that
+    only looked at the latest line would refuse the operator's own figure."""
+    import asyncio
+
+    from ranger import heard
+    from ranger.toolset import build_registry
+
+    tool = build_registry(config, vault).get("enter_gross_profit")
+    heard.remember(["August GP came in at 292,187", "ok", "yes, put it in"])
+
+    assert asyncio.run(tool.handler({"amount": "292187", "period": "2026-08"})).ok
+
+
+def test_the_entry_records_that_it_was_spoken(config, vault):
+    """Attribution, in the front matter and not in a sentence. In six months
+    "who entered this and how" is the question."""
+    import asyncio
+
+    from ranger import gp, heard
+    from ranger.toolset import build_registry
+
+    tool = build_registry(config, vault).get("enter_gross_profit")
+    heard.remember(["August was 292,187"])
+    asyncio.run(tool.handler({"amount": "292187", "period": "2026-08"}))
+
+    written = next((config.vault.ranger / "gp").rglob("*.md"))
+    text = written.read_text(encoding="utf-8")
+
+    assert "source: spoken to Jarvis, confirmed at the keyboard" in text
+    assert "recorded:" in text
+    # And it survives the round trip, so the panel and the CLI can show it.
+    assert "spoken" in gp.parse_entry(text).source

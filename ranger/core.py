@@ -179,6 +179,22 @@ class Ranger:
         the operator's words, and whatever Jarvis managed to say back.
         """
         checkpoint = list(self.messages)
+
+        # What the operator themselves has said, for any tool that must not act
+        # on a number nobody gave it. Set here because this is the one place
+        # every caller passes through, and set fresh each turn so it can never
+        # be stale -- a later turn overwrites it rather than adding to it.
+        #
+        # Their whole side of the conversation, not just this line: "add a GP
+        # entry" and "292,187" are routinely two turns.
+        from . import heard
+
+        heard.remember([
+            *(str(message.get("content", "")) for message in self.messages
+              if message.get("role") == "user"),
+            user_input,
+        ])
+
         said: list[str] = []
         stream = self._run_turn(user_input)
         try:

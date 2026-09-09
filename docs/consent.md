@@ -11,8 +11,21 @@ Every tool carries two flags, and they mean different things:
 
 - `writes` — it changes something in the vault.
 - `confirm` — it is consequential enough that a person answers for it **even
-  when they are sitting there**. One tool has this: `forget`, which removes a
-  fact.
+  when they are sitting there**. Two tools have this:
+
+  - `forget`, which removes a fact.
+  - `enter_gross_profit`, where the figure *is* the whole content. A misheard
+    292,187 as 292,180 is a number that will be quoted at a customer, and
+    seeing it before it lands is the only thing that catches it. This is what a
+    card is actually for: rare, high consequence, and unreadable after the
+    fact. Filing a note is none of those, which is why it does not gate.
+
+  `enter_gross_profit` also carries a check that has nothing to do with
+  consent: Python compares the amount against the operator's own words this
+  conversation and refuses a figure that is not in them. **The gate asks
+  whether the operator agrees; that check asks whether they said it at all.**
+  A model that read a total off a spreadsheet, or added up a column, or
+  inferred a month from the others, is refused before the card is ever drawn.
 
 ## The two callers
 
@@ -42,6 +55,7 @@ second list of tool names kept somewhere it can drift.
 | `analyse` | write | free | **gate** |
 | `clear_draft` | write | free | **gate** |
 | `draft_and_hold` | write | free | **gate** |
+| `enter_gross_profit` | write | **gate** | **gate** |
 | `file_to_account` | write | free | **gate** |
 | `forget` | write | **gate** | **gate** |
 | `gross_profit` | read | free | free |

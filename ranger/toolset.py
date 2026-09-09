@@ -1438,11 +1438,13 @@ def _gross_profit(config: Config, vault: Vault, today: Callable[[], date]) -> To
     back, and the description says so in as many words, because a model that
     adds up twelve months itself will occasionally get it wrong and be believed.
 
-    There is no write side, and there is not going to be one. GP figures are
-    entered by the operator in the panel or with `ranger gp add`. A model that
-    could record a figure could record one it inferred from a conversation, and
-    a figure nobody typed is exactly the thing this whole module exists to keep
-    out of the vault.
+    The write side is `_enter_gross_profit`, and the reason it can exist is
+    that it does not trust the model with the figure: Python checks the amount
+    against the operator's own words, and the gate puts it on a card to be
+    approved at the keyboard. A model that could record a figure it inferred
+    from a conversation is exactly what this module exists to keep out of the
+    vault, and that is still true -- an inferred figure is refused before it
+    reaches the card.
     """
 
     async def handler(payload: dict[str, Any]) -> ToolResult:
@@ -1522,12 +1524,186 @@ def _gross_profit(config: Config, vault: Vault, today: Callable[[], date]) -> To
             "Python once they said which columns were which. Read the numbers back as "
             "given and never calculate, "
             "estimate or project one yourself. If a month has not been entered, say "
-            "so; it is not zero. This tool cannot record a figure: figures are "
-            "entered in the panel, or read out of a dropped export by Python once "
-            "the operator has confirmed which columns are which."
+            "so; it is not zero. This tool only reads. To record a figure the "
+            "operator states, use enter_gross_profit; they can also type one in the "
+            "panel, or drop an export in the window for Python to read once they "
+            "have confirmed which columns are which. Offer the route rather than "
+            "saying it cannot be done."
         ),
         input_schema={"type": "object", "properties": {}},
         handler=handler,
+    )
+
+
+def _enter_gross_profit(config: Config, vault: Vault, today: Callable[[], date]) -> Tool:
+    """Enter a GP figure **the operator stated**. Gated, and checked.
+
+    The accountant rule is unchanged and this does not bend it: Jarvis never
+    derives a figure. Not from a spreadsheet, not from a column, not inferred
+    from the other months. What changed is that a figure the operator says out
+    loud no longer has to be typed again by hand -- which is the whole point of
+    a voice assistant, and was the thing it could not do.
+
+    Two things hold the rule up, and neither is the tool description:
+
+    - **Python checks the figure was said.** `heard.stated` compares the amount
+      numerically against the operator's own turns this conversation. A figure
+      that is not in their words is refused before the gate ever sees it, and
+      the refusal says what to do about it. A rounded version does not count.
+    - **The gate.** `confirm=True`, so the card shows the figure and the period
+      and nothing is written until the operator approves at the keyboard. A
+      misheard 292,187 as 292,180 dies there, which is the failure this is
+      most likely to have and the one the operator can actually catch.
+
+    Create-only, like every other write in this module. A correction is a new
+    entry that supersedes the old one; there is no edit and no delete, and the
+    description tells the model to explain that rather than refuse.
+    """
+
+    async def handler(payload: dict[str, Any]) -> ToolResult:
+        from decimal import Decimal
+
+        from . import gp, heard
+
+        raw = str(payload.get("amount", "")).strip()
+        period_said = str(payload.get("period", "")).strip()
+        try:
+            amount = gp.parse_amount(raw)
+        except gp.BadEntry as exc:
+            return ToolResult(False, str(exc), "not a figure")
+        try:
+            period = gp.parse_period(period_said, today=today())
+        except gp.BadEntry as exc:
+            return ToolResult(False, str(exc), "not a period")
+
+        if not heard.stated(amount):
+            # The whole rule, enforced rather than requested. Say what to do
+            # next: an assistant that refuses without naming the route is the
+            # thing this build keeps having to fix.
+            return ToolResult(
+                False,
+                (
+                    f"{gp.money(amount, config.gp.currency)} is not a figure the "
+                    "operator has said in this conversation, so it cannot be "
+                    "entered. Gross profit figures are only ever the ones they "
+                    "state: never worked out from a spreadsheet, a column, or the "
+                    "other months. Ask them for the figure and enter what they "
+                    "say. If they have a file, the route is to drop it in the "
+                    "window, where Python reads it once they confirm the columns."
+                ),
+                "figure was not stated",
+            )
+
+        try:
+            entry = gp.record(
+                config, vault, amount, period=period,
+                note=str(payload.get("note", "")).strip(),
+                source="spoken to Jarvis, confirmed at the keyboard",
+            )
+        except Exception as exc:
+            return ToolResult(False, f"{type(exc).__name__}: {exc}", "could not enter it")
+
+        ledger, total = gp.summary(config, vault, today())
+        current = ledger.current().get(entry.period)
+        superseded = (
+            current is not None
+            and len([e for e in ledger.entries if e.period == entry.period]) > 1
+        )
+        money = gp.money(entry.amount, config.gp.currency)
+        lines = [
+            f"Entered {money} for {entry.period}, recorded "
+            f"{entry.recorded.strftime('%Y-%m-%d %H:%M')} as spoken by the operator.",
+        ]
+        if superseded:
+            lines.append(
+                f"That supersedes the earlier figure for {entry.period}. The old "
+                "entry is still on disk beside it -- nothing was edited or removed, "
+                "which is how a correction is meant to look."
+            )
+        if total.ytd is not None:
+            lines.append(
+                f"{total.year} to date is now {gp.money(total.ytd, config.gp.currency)} "
+                f"from {total.months_counted} month(s). That was computed in Python; "
+                "read it back as it is."
+            )
+        return ToolResult(ok=True, content="\n".join(lines),
+                          summary=f"{entry.period} {money}")
+
+    def describe(payload: dict[str, Any]) -> str:
+        """The card. The figure and the period, in full, and nothing else.
+
+        Rendered from the payload rather than from anything the model wrote, so
+        what is approved is what will be written. The figure is spelled out
+        digit by digit as well, because 292,187 and 292,180 look alike at a
+        glance and telling them apart is the entire job of this card.
+        """
+        from . import gp
+
+        raw = str(payload.get("amount", "")).strip()
+        try:
+            amount = gp.parse_amount(raw)
+            money = gp.money(amount, config.gp.currency)
+            spelled = " ".join(f"{amount:.2f}".replace(".", " point "). split())
+        except Exception:
+            money, spelled = raw or "(no figure)", raw
+        period = str(payload.get("period", "")).strip() or "(no period)"
+        return (
+            f"Enter a gross profit figure of {money} for {period}. "
+            f"Read it back: {spelled}. "
+            "It is recorded as your figure, spoken, and nothing already entered "
+            "is changed or removed."
+        )
+
+    return Tool(
+        name="enter_gross_profit",
+        description=(
+            "Record a gross profit figure THE OPERATOR HAS STATED, for a month they "
+            "have stated. Use it when they say a figure and ask for it to go in -- "
+            "'GP for August was 292,187, put that in'. They confirm it at the "
+            "keyboard before anything is written, and the figure is checked against "
+            "their own words first: a figure they did not say is refused, so never "
+            "supply one you worked out. Do not read a total off a spreadsheet, do not "
+            "add up a column, do not infer a month from the others, and do not round. "
+            "If they want a file entered, the route is to drop it into the window, "
+            "where Python reads it once they confirm which columns are which. "
+            "TO CORRECT A FIGURE, enter the right one for the same month: the new "
+            "entry supersedes the old and both stay on disk. There is no way to edit "
+            "or delete an entry and there is not meant to be, so if they ask to erase "
+            "one, tell them a superseding entry is how a correction is made here and "
+            "offer to enter the correct figure."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "amount": {
+                    "type": "string",
+                    "description": (
+                        "The figure exactly as the operator said it: '292187', "
+                        "'292,187.50'. Never a figure you calculated, rounded or read "
+                        "out of a file."
+                    ),
+                },
+                "period": {
+                    "type": "string",
+                    "description": (
+                        "The month they named: '2026-08', 'August 2026', 'August', "
+                        "'last month'."
+                    ),
+                },
+                "note": {
+                    "type": "string",
+                    "description": (
+                        "Anything they said about the figure, in their words. "
+                        "Optional. No figures of your own."
+                    ),
+                },
+            },
+            "required": ["amount", "period"],
+        },
+        handler=handler,
+        writes=True,
+        confirm=True,
+        describe=describe,
     )
 
 
@@ -1551,6 +1727,7 @@ def build_registry(
             _read_own_file(config, vault),
             _clear_draft(config, vault, audit),
             _gross_profit(config, vault, today),
+            _enter_gross_profit(config, vault, today),
             _write_document(config, vault, today),
             _read_import(config, vault),
             _analyse(config, vault, today),

@@ -85,6 +85,11 @@ class Entry:
     amount: Decimal
     recorded: datetime
     note: str = ""
+    #: Where the figure came from: "typed in the panel", "ranger gp add",
+    #: "spoken to Jarvis". Attribution, in the front matter rather than in the
+    #: note, because in six months "who entered this and how" is the question
+    #: and a sentence somebody wrote is not an answer that can be counted on.
+    source: str = ""
     path: Path | None = None
 
     @property
@@ -97,6 +102,10 @@ class Entry:
             f"period: {self.period}",
             f"amount: {self.amount}",
             f"recorded: {self.recorded.isoformat(timespec='seconds')}",
+        ]
+        if self.source:
+            lines.append(f"source: {self.source}")
+        lines += [
             "---",
             "",
             f"# Gross profit for {self.period}",
@@ -132,12 +141,14 @@ def parse_entry(text: str, path: Path | None = None) -> Entry | None:
         recorded = datetime.fromisoformat(fields.get("recorded", ""))
     except ValueError:
         recorded = datetime.min
+    source = fields.get("source", "").strip()
     body = text[front.end():]
     note = "\n".join(
         line for line in body.splitlines()
         if line.strip() and not line.startswith("#") and not line.strip().startswith("$")
     ).strip()
-    return Entry(period=period, amount=amount, recorded=recorded, note=note, path=path)
+    return Entry(period=period, amount=amount, recorded=recorded, note=note,
+                 source=source, path=path)
 
 
 def order(entry: Entry) -> tuple[datetime, int]:
@@ -305,6 +316,7 @@ def record(
     *,
     period: Any = "",
     note: str = "",
+    source: str = "",
     now: datetime | None = None,
 ) -> Entry:
     """Enter a figure. The only write path, used by the panel and the CLI alike.
@@ -314,9 +326,12 @@ def record(
     the same month is a correction, which is a new note beside the old one, not
     an edit of it.
 
-    Nothing about this is an agent action. The operator types a number they
-    were given; the model is not in the path and cannot be, which is the point
-    of the whole module.
+    The number is always the operator's. It is typed in the panel, typed at the
+    terminal, read out of an export by Python once they have said which columns
+    are which, or spoken by them and confirmed at the keyboard. What never
+    happens is a figure arriving from somewhere none of those describe, which
+    is why `source` is recorded and why the spoken route checks the figure
+    against the operator's own words before it can even reach the gate.
     """
     now = now or datetime.now()
     entry = Entry(
@@ -324,6 +339,7 @@ def record(
         amount=parse_amount(amount),
         recorded=now.replace(microsecond=0),
         note=(note or "").strip(),
+        source=(source or "").strip(),
     )
     path = write(vault, folder_for(config), entry)
     return Entry(
@@ -331,6 +347,7 @@ def record(
         amount=entry.amount,
         recorded=entry.recorded,
         note=entry.note,
+        source=entry.source,
         path=path,
     )
 
@@ -644,10 +661,14 @@ def apply_import(
             amount=change.amount,
             recorded=(now + timedelta(seconds=offset)).replace(microsecond=0),
             note=f"Imported from {source}." if source else "Imported.",
+            source=(
+                f"read by Python from {source}, columns confirmed by the operator"
+                if source else "read by Python from a dropped file"
+            ),
         )
         path = write(vault, folder_for(config), entry)
         written.append(
             Entry(period=entry.period, amount=entry.amount, recorded=entry.recorded,
-                  note=entry.note, path=path)
+                  note=entry.note, source=entry.source, path=path)
         )
     return written

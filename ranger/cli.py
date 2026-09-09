@@ -2038,6 +2038,7 @@ def cmd_gp(config: Config, args: Any) -> int:
                 amount,
                 period=getattr(args, "period", "") or "",
                 note=getattr(args, "note", "") or "",
+                source="typed at the terminal",
             )
         except gp.BadEntry as exc:
             print(paint(f"  {exc}", YELLOW), file=sys.stderr)

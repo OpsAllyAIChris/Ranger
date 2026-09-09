@@ -39,14 +39,15 @@ def test_the_registry_holds_exactly_the_intended_tools(registry):
     read Ranger's own folders back, clearing, and the GP read. An eleventh is a
     scope decision.
 
-    `gross_profit` reads figures Python added up and has no write side, which
-    is checked in test_gp.py: a model that could record a GP figure could
-    record one it inferred from a conversation."""
+    `gross_profit` reads figures Python added up. `enter_gross_profit` records
+    one the operator stated -- gated, and refused outright if the figure is not
+    in their own words, which is checked in test_gp.py."""
     assert registry.names() == [
         "account_recall",
         "analyse",
         "clear_draft",
         "draft_and_hold",
+        "enter_gross_profit",
         "file_to_account",
         "forget",
         "gross_profit",
@@ -65,9 +66,16 @@ def test_every_tool_has_a_description_a_model_can_act_on(registry):
         assert tool.input_schema["type"] == "object"
 
 
-def test_only_forget_needs_the_confirmation_gate(registry):
-    """Nothing here sends or spends. forget rewrites a file, which does not
-    happen without the operator's yes.
+def test_which_tools_need_the_confirmation_gate(registry):
+    """Nothing here sends or spends. Two tools gate, for different reasons.
+
+    forget rewrites a file, which does not happen without the operator's yes.
+
+    enter_gross_profit gates because the figure is the whole content: a
+    misheard 292,187 as 292,180 is a number that will be quoted at a customer,
+    and seeing it before it lands is the only thing that catches it. This is
+    the case a card is actually for -- rare, high consequence, and unreadable
+    after the fact.
 
     clear_draft writes and does not gate either, for a reason stronger than
     consistency with draft creation: it moves the file rather than deleting it,
@@ -91,11 +99,15 @@ def test_only_forget_needs_the_confirmation_gate(registry):
     the file lands in the drafts folder, nothing sends it, and the preview that
     opens from the file on disk is the review.
     """
-    assert [t.name for t in registry if t.confirm] == ["forget"]
+    assert sorted(t.name for t in registry if t.confirm) == [
+        "enter_gross_profit",
+        "forget",
+    ]
     assert sorted(t.name for t in registry if t.writes) == [
         "analyse",
         "clear_draft",
         "draft_and_hold",
+        "enter_gross_profit",
         "file_to_account",
         "forget",
         "remember",
