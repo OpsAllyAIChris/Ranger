@@ -108,6 +108,27 @@ recommendation that the code would not have honoured is worse than none.
 If no margin does all three, it says so and offers no number. That is a real
 state of the world and naming it is the useful answer.
 
+**Every pass is judged against every room**, not each round against its own.
+The room floor is continuous and your speaking level is independent of it, so
+over an afternoon the loudest room and the quietest speech will meet, and the
+detector will be in that state when they do. An earlier version paired each
+round with itself — which kept the loud-room round away from the quiet-voice
+round, and reported a workable margin for a machine whose room is louder than
+its operator.
+
+Alongside the scan, the levels are compared directly, because "no margin works"
+is not advice and the lever depends on which two levels collided:
+
+- **The room holds a level near your voice** → a headset. Nothing in the config
+  separates two signals of the same size.
+- **The echo holds a level near your voice** → turn the speaker down. Jarvis is
+  reaching the microphone as loudly as you do, and no ratio lets one through
+  without the other.
+
+A margin is never printed beside either of those. One run printed
+"set wake.bargein_margin = 5.6" directly above "no margin can", and the number
+is the half that gets typed in.
+
 ## What the log says
 
 Every interruption writes one line:

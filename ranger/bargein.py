@@ -526,7 +526,7 @@ class Advice:
         return round((self.low * self.high) ** 0.5, 1)
 
 
-def advise(
+def scan(
     echo: "Sequence[Pass]",
     voice: "Sequence[Pass]",
     room: "Sequence[Pass]",
@@ -536,7 +536,7 @@ def advise(
     highest: float = 6.0,
     step: float = 0.05,
     **settings,
-) -> Advice:
+) -> "tuple[float | None, float | None]":
     """Scan margins, keep the ones every pass agrees with.
 
     Three constraints, and all three are measured rather than assumed:
@@ -559,7 +559,7 @@ def advise(
       next time.
     """
     if not echo or not voice:
-        return Advice(None, None, "nothing was recorded")
+        return None, None
 
     head = int(LEARN_SECONDS / 0.08) + 1
     ambients: list[list[bytes]] = [list(item.frames) for item in room] or [[]]
@@ -567,25 +567,26 @@ def advise(
     def learning(item: Pass) -> list[bytes]:
         return list(item.frames[:head])
 
-    # Calibration is run in rounds, and within a round the three passes are
-    # seconds apart: that room is the room those replies were spoken into. So
-    # a round is judged against itself. Judging every pass against every other
-    # room asks whether the quietest voice of the morning would be heard over
-    # the noisiest minute of it -- a real question, but a different one, and it
-    # is asked below as a warning rather than allowed to decide the margin.
-    rounds: list[tuple[Pass, Pass | None, list[bytes]]]
-    if len(voice) == len(echo) and (not room or len(room) == len(echo)):
-        rounds = [
-            (echo[index], voice[index], ambients[index] if room else [])
-            for index in range(len(echo))
-        ]
-    else:
-        rounds = [
-            (reply, spoken, ambient)
-            for reply in echo
-            for spoken in voice
-            for ambient in ambients
-        ]
+    # **Every pass against every room, not each round against its own.**
+    #
+    # An earlier version paired round 1's room with round 1's voice, on the
+    # reasoning that within a round the passes are seconds apart. That is true
+    # and it is the wrong question. The room floor is continuous and the
+    # operator's level is independent of it, so over an afternoon the loudest
+    # room and the quietest speech meet -- and the detector will be in that
+    # state when they do. Pairing by round meant the loud-room round and the
+    # quiet-voice round never met, so a machine whose room is louder than its
+    # operator got a workable-looking answer.
+    #
+    # It was introduced to stop a combined verdict coming out pessimistic, and
+    # it worked by not asking the question that made it pessimistic. Worst case
+    # against worst case is the operational question.
+    rounds: list[tuple[Pass, Pass | None, list[bytes]]] = [
+        (reply, spoken, ambient)
+        for reply in echo
+        for spoken in voice
+        for ambient in ambients
+    ]
 
     def interrupts_on_nothing(margin: float) -> bool:
         for reply, _, ambient in rounds:
@@ -623,22 +624,126 @@ def advise(
         if hears_every_voice(margin):
             high = margin
             break
+    return low, high
 
+
+def advise(
+    echo: "Sequence[Pass]",
+    voice: "Sequence[Pass]",
+    room: "Sequence[Pass]",
+    *,
+    floor: float = SILENCE_RMS,
+    lowest: float = 1.0,
+    highest: float = 6.0,
+    step: float = 0.05,
+    **settings,
+) -> Advice:
+    """What margin to use, if any, and what to say when there is none.
+
+    **The scan decides and the levels explain.** `scan` replays the recordings
+    through a real Detector and is the only thing that decides whether a margin
+    exists. `overlaps` says the same thing in levels the operator can act on --
+    a room the size of their voice, an echo the size of their voice -- because
+    "no margin works" is not advice and "turn the speaker down" is.
+
+    The two are near enough equivalent by construction: both compare the worst
+    room and the worst echo against the quietest speech, one by replaying and
+    one by arithmetic. That redundancy is deliberate and `reconcile` treats a
+    disagreement between them as a fault, because printing a margin next to
+    "no margin can work" is how the wrong number gets typed in.
+    """
+    if not echo or not voice:
+        return Advice(None, None, "nothing was recorded")
+
+    low, high = scan(
+        echo, voice, room,
+        floor=floor, lowest=lowest, highest=highest, step=step, **settings
+    )
+    warnings, overlapping = overlaps(
+        echo, voice, room,
+        room_margin=float(settings.get("room_margin", DEFAULT_ROOM_MARGIN)),
+    )
+    return reconcile(low, high, warnings, overlapping,
+                     lowest=lowest, highest=highest)
+
+
+def overlaps(
+    echo: "Sequence[Pass]",
+    voice: "Sequence[Pass]",
+    room: "Sequence[Pass]",
+    *,
+    room_margin: float = DEFAULT_ROOM_MARGIN,
+) -> "tuple[list[str], bool]":
+    """Which levels are the same size as the operator's voice.
+
+    Two signals the same size cannot be separated by size, so this is where
+    "no margin can work" comes from -- and, more usefully, which lever moves
+    it. A room the size of the voice is answered by a headset; an echo the
+    size of the voice is answered by turning the speaker down. Neither is
+    answered by a number in the config.
+
+    Explanation, not decision. `scan` decides.
+    """
     warnings: list[str] = []
-    if room and voice:
+    overlapping = False
+    if not voice:
+        return warnings, overlapping
+    quietest = min(item.held() for item in voice)
+    if room:
         loudest = max(item.held() for item in room)
-        quietest = min(item.held() for item in voice)
-        if loudest * DEFAULT_ROOM_MARGIN >= quietest:
+        if loudest * room_margin >= quietest:
+            overlapping = True
             warnings.append(
                 f"the loudest room you measured holds {loudest:.0f} and the "
                 f"quietest you spoke holds {quietest:.0f}. In that room, at that "
                 "volume, nothing separates you from it -- no margin can, because "
-                "the two levels are the same. A headset changes both numbers at "
-                "once; nothing in this file does."
+                "the two levels are the same size. A headset changes both numbers "
+                "at once; nothing in this file does."
             )
+    if echo:
+        loudest = max(item.held() for item in echo)
+        if loudest >= quietest:
+            overlapping = True
+            warnings.append(
+                f"the loudest echo you measured holds {loudest:.0f} and the "
+                f"quietest you spoke holds {quietest:.0f}. Jarvis is reaching the "
+                "microphone as loudly as you do, so no margin above 1.0 can let "
+                "you through without letting him through. Turning the speaker "
+                "down moves this one; the margin does not."
+            )
+    return warnings, overlapping
 
-    if low is not None and high is not None and low <= high:
-        return Advice(low, high, "measured on every pass", warnings)
+
+def reconcile(
+    low: "float | None",
+    high: "float | None",
+    warnings: "Sequence[str]",
+    overlapping: bool,
+    *,
+    lowest: float = 1.0,
+    highest: float = 6.0,
+) -> Advice:
+    """One scan and one set of overlaps, into one answer or into none.
+
+    **A number is never returned alongside "no margin can work."** A run
+    printed both at once, and the number is the half that gets typed in.
+
+    The two findings should agree, since they compare the same worst cases.
+    If they ever stop agreeing, this says so and offers nothing, rather than
+    picking whichever of the two is friendlier.
+    """
+    said = list(warnings)
+    found = low is not None and high is not None and low <= high
+    if overlapping:
+        if found:
+            said.append(
+                f"the margin scan still found {low:.2f} to {high:.2f} despite "
+                "that, which it should not have. No margin is offered, because "
+                "the two checks disagree and one of them is wrong."
+            )
+        return Advice(None, None, "no gap: the levels overlap", said)
+    if found:
+        return Advice(low, high, "measured on every pass", said)
 
     if low is None and high is None:
         binding = (
@@ -660,4 +765,4 @@ def advise(
             f"no gap: keeping the room and the echo out needs {low:.2f}, "
             f"and your voice only holds up to {high:.2f}"
         )
-    return Advice(None, None, binding, warnings)
+    return Advice(None, None, binding, said)

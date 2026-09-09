@@ -1616,6 +1616,14 @@ def cmd_mic_bargein(config: Config, args: Any) -> int:
     )
     print()
     print(paint("  what fits", BOLD))
+    # The warnings print first and the number second, so that a contradiction
+    # between them is impossible to miss rather than easy to skim past. There
+    # should be no contradiction to see -- advise() refuses to return a margin
+    # alongside an overlap -- but this printed one once and the number is the
+    # half that gets typed in.
+    for warning in answer.lines:
+        print(paint(f"     {warning}", YELLOW))
+        print()
     if answer.workable:
         print(paint(f"     margins from {answer.low:.2f} to {answer.high:.2f} "
                     "never fire on the room or the echo", TEAL))
@@ -1627,14 +1635,14 @@ def cmd_mic_bargein(config: Config, args: Any) -> int:
                         YELLOW))
     else:
         print(paint(f"     {answer.binding}", YELLOW))
-        print(paint("     no margin is offered because none of them work. "
-                    "A headset", YELLOW))
-        print(paint("     removes the problem rather than tuning it: it raises "
-                    "your level", YELLOW))
-        print(paint("     and lowers both the others at the same time.", YELLOW))
-    for warning in answer.lines:
-        print()
-        print(paint(f"     {warning}", YELLOW))
+        print(paint("     No margin is offered, because none of them work. "
+                    "Tuning has", YELLOW))
+        print(paint("     nothing left to give here: a headset raises your "
+                    "level and lowers", YELLOW))
+        print(paint("     the echo and the room at the same time, which is a "
+                    "different", YELLOW))
+        print(paint("     lever rather than a better setting of this one.",
+                    YELLOW))
     return 0
 
 

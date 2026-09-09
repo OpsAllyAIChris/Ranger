@@ -1698,3 +1698,25 @@ Both sides of a ratio have to be the same kind of measurement. The symptom was
 "sometimes it works", which is what a threshold nobody can reach looks like
 when peaks occasionally align.
 
+### Two guards that mask each other are one guard with a spare
+
+Barge-in's calibration had a margin scan and an overlap check, both correct,
+both catching the same cases. Breaking either left every test passing, because
+whichever survived caught what the other would have. Neither was necessary; one
+was load-bearing and nobody could tell which.
+
+The fix was to split the decision from the explanation and test each where it
+lives: the scan asked directly, the reconciliation asked with a disagreement
+handed to it that `advise` cannot currently produce.
+
+### A pairing chosen because it gave the friendlier answer
+
+The scan paired each calibration round's room with its own voice, on the
+reasoning that within a round the passes are seconds apart. True, and the wrong
+question: the room floor is continuous and the operator's level is independent
+of it, so the loudest room and the quietest speech meet in use. The pairing was
+introduced to stop a combined verdict coming out pessimistic, and it worked by
+not asking the question that made it pessimistic.
+
+**When a change makes an answer more comfortable, that is the moment to ask
+what it stopped measuring.**

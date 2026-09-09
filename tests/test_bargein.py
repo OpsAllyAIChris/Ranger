@@ -663,14 +663,13 @@ def test_three_measured_runs_minutes_apart_have_no_common_margin():
 
     together = advise(echoes, voices, rooms)
 
-    assert together.workable, "one margin now covers all three runs"
-    assert together.low <= DEFAULT_MARGIN <= together.high, (
-        "and the shipped default is inside it"
-    )
-
-    # The room in run 1 is the thing to say out loud rather than tune around:
-    # it holds a level close to the operator's own, and no threshold separates
-    # two signals that are the same size.
+    # No margin, and this is a correction. A version of this test asserted a
+    # workable 1.15-1.65 here, and that answer came from pairing each round's
+    # room with its own voice -- which kept run 1's loud room away from run 2's
+    # quiet voice. Run 1's room holds 1267 and run 2's voice holds 1581; the
+    # room margin closes what is left. There was never a working number.
+    assert not together.workable
+    assert together.suggested is None
     assert any("headset" in line for line in together.lines)
 
     # And why it did not work before. The detector took the loudest single
@@ -836,3 +835,121 @@ def test_the_room_window_is_the_length_it_is_configured_to_be():
         clock.tick()
 
     assert long.room > 2000, "a 30s window still remembers it"
+
+
+def test_a_number_is_never_printed_beside_no_margin_can_work():
+    """**The contradiction this exists to stop.**
+
+    One run reported "margins from 5.30 to 6.00 ... set 5.6" directly above
+    "nothing separates you from it -- no margin can". Both cannot be true, and
+    the number is the half that gets typed in.
+
+    The scan and the overlap check disagreed because they compared different
+    things: the scan paired each round's room with its own voice, the overlap
+    check compared the worst room to the worst voice. They compare the same
+    worst cases now, and this refuses a margin if they ever diverge again.
+    """
+    echo = [recording(mostly=900, peaks=3600, seed=1)]
+    voice = [recording(mostly=3549, peaks=5086, seed=2)]
+    room = [recording(mostly=5311, peaks=9000, seed=3)]
+
+    answer = advise(echo, voice, room)
+
+    assert not answer.workable and answer.suggested is None
+    assert answer.lines, "and it says why, rather than printing nothing at all"
+
+
+def test_the_measured_run_that_contradicted_itself(capsys=None):
+    """**The operator's numbers, as a fixture.** Run on 36ca5bc::
+
+        room:        held  283-5311   (19x swing)
+        echo:        held  656-3964   (6x swing)
+        you over it: held 3549-5086
+
+    Two independent reasons there is no margin, and the second is the one that
+    does not go away with a quieter room: the loudest echo (3964) is above the
+    quietest speech (3549), so Jarvis reaches the microphone as loudly as the
+    operator does. No ratio lets one through and not the other.
+    """
+    rooms = [recording(mostly=283, seed=11), recording(mostly=5311, seed=12)]
+    echoes = [recording(mostly=656, seed=21), recording(mostly=3964, seed=22)]
+    voices = [recording(mostly=3549, seed=31), recording(mostly=5086, seed=32)]
+
+    answer = advise(echoes, voices, rooms)
+
+    assert not answer.workable
+    assert any("speaker down" in line for line in answer.lines), (
+        "the echo overlap has its own lever and it is not the margin"
+    )
+    assert any("headset" in line for line in answer.lines)
+
+
+def test_the_scan_asks_the_loudest_room_about_the_quietest_voice():
+    """The pairing bug, isolated.
+
+    Round one: a loud room, and the operator speaking loudly enough to be heard
+    over it. Round two: a silent room, and the operator murmuring. Judged round
+    by round both look fine. In use the fan from round one runs while the
+    operator murmurs like round two, and nothing is heard.
+    """
+    echoes = [recording(mostly=700, seed=41), recording(mostly=700, seed=42)]
+    voices = [recording(mostly=9000, seed=51), recording(mostly=1400, seed=52)]
+    rooms = [recording(mostly=4000, seed=61), recording(mostly=60, seed=62)]
+
+    assert not advise(echoes, voices, rooms).workable
+
+    # And each round, on its own, does have an answer. Nothing was wrong with
+    # either reading; pairing them was what hid the problem.
+    assert advise([echoes[0]], [voices[0]], [rooms[0]]).workable
+    assert advise([echoes[1]], [voices[1]], [rooms[1]]).workable
+
+
+def test_the_scan_alone_refuses_the_pairing_it_was_given():
+    """The pairing, isolated from the overlap check.
+
+    Both breaks -- restoring the round pairing, and disabling the overlap gate
+    -- left every test in this file passing, because each mechanism catches
+    what the other catches and neither was necessary on its own. **Two guards
+    that mask each other are one guard with a spare.** So the scan is asked
+    directly here, with no overlap check in front of it.
+    """
+    from ranger.bargein import scan
+
+    echoes = [recording(mostly=700, seed=41), recording(mostly=700, seed=42)]
+    voices = [recording(mostly=9000, seed=51), recording(mostly=1400, seed=52)]
+    rooms = [recording(mostly=4000, seed=61), recording(mostly=60, seed=62)]
+
+    low, high = scan(echoes, voices, rooms)
+    assert not (low is not None and high is not None and low <= high), (
+        "the loud room and the quiet voice have to meet"
+    )
+
+    # Round by round each is fine, which is what made the pairing look right.
+    for index in (0, 1):
+        low, high = scan([echoes[index]], [voices[index]], [rooms[index]])
+        assert low is not None and high is not None and low <= high
+
+
+def test_a_scan_and_an_overlap_that_disagree_produce_no_number():
+    """The gate, isolated. It cannot be reached through `advise` today, because
+    the scan and the overlap check compare the same worst cases and agree. It
+    exists for the day one of them changes, so it is tested where it lives
+    rather than asserted to be unreachable."""
+    from ranger.bargein import reconcile
+
+    answer = reconcile(5.3, 6.0, ["the levels are the same size"], True)
+
+    assert answer.suggested is None and not answer.workable
+    assert any("disagree" in line for line in answer.lines)
+    assert any("5.30 to 6.00" in line for line in answer.lines), (
+        "and it says what it refused, so the disagreement is not silent"
+    )
+
+
+def test_a_scan_with_no_overlap_keeps_its_range():
+    """The other half of the gate: it must not swallow a good answer."""
+    from ranger.bargein import reconcile
+
+    answer = reconcile(1.2, 1.8, [], False)
+
+    assert answer.workable and answer.suggested == 1.5
