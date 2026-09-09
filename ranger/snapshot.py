@@ -53,6 +53,9 @@ INCLUDED = (
     # per-file ceiling still applies, and a file over it is named in the log
     # rather than silently skipped.
     "Ranger/imports/",
+    # Tables Python computed and the panel drew. Small, text, and the record of
+    # what a figure was when it was quoted.
+    "Ranger/analysis/",
 )
 
 #: Markdown sitting directly in `Ranger/`, not recursively: aliases.md,

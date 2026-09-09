@@ -44,6 +44,7 @@ def test_the_registry_holds_exactly_the_intended_tools(registry):
     record one it inferred from a conversation."""
     assert registry.names() == [
         "account_recall",
+        "analyse",
         "clear_draft",
         "draft_and_hold",
         "file_to_account",
@@ -82,12 +83,17 @@ def test_only_forget_needs_the_confirmation_gate(registry):
     sidecar, which is why it does not carry `writes`: it produces nothing the
     operator did not already drop there, and it is create-only.
 
+    analyse writes and does not gate: it computes a table and writes it under
+    Ranger/ before the panel renders it, which is what makes the number on
+    screen reproducible afterwards. Nothing leaves the machine.
+
     write_document writes and does not gate, consistent with draft_and_hold:
     the file lands in the drafts folder, nothing sends it, and the preview that
     opens from the file on disk is the review.
     """
     assert [t.name for t in registry if t.confirm] == ["forget"]
     assert sorted(t.name for t in registry if t.writes) == [
+        "analyse",
         "clear_draft",
         "draft_and_hold",
         "file_to_account",

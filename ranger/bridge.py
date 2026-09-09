@@ -62,6 +62,9 @@ IMPORT_PROPOSE = "import_propose"
 #: The operator confirmed a mapping at the keyboard. This is the only way a new
 #: shape is ever learned.
 IMPORT_APPLY = "import_apply"
+#: Export the analysis on screen as a document. A format change of the file
+#: that is already being looked at, never a second computation.
+ANALYSIS_EXPORT = "analysis_export"
 #: A gross profit figure typed into the panel. The operator's own keystrokes,
 #: not an agent action: the model is not in this path and must not be. See
 #: dashlets.py for why the whole command centre works this way.
@@ -208,6 +211,8 @@ class Session:
             return self._import_propose(message)
         if kind == IMPORT_APPLY:
             return self._import_apply(message)
+        if kind == ANALYSIS_EXPORT:
+            return self._analysis_export(message)
         if kind == STOP:
             if not self.stop():
                 self.emit("error", message="nothing was running")
@@ -823,6 +828,76 @@ class Session:
         )
         return True
 
+    def _analysis_landed(self, event: Any) -> None:
+        """An `analyse` call that succeeded. Show the file it wrote.
+
+        The sheet renders the report **off disk**, not the result object that
+        produced it, so what is on screen exists as a file and an export of it
+        is a format change rather than a second computation that might
+        disagree.
+        """
+        from . import analysis
+
+        if getattr(event, "name", "") != "analyse" or not getattr(event, "ok", False):
+            return
+        folder = analysis.folder_for(self.agent.config)
+        try:
+            newest = max(folder.glob("*.md"), key=lambda p: p.stat().st_mtime)
+        except (ValueError, OSError):
+            return
+        self._send_analysis(newest)
+
+    def _send_analysis(self, path) -> bool:
+        from . import analysis
+
+        try:
+            report = analysis.read_report(
+                path, self.agent.config.vault.root,
+                max_rows=self.agent.config.analysis.max_rows,
+            )
+        except Exception as exc:
+            self.emit("error", message=f"could not read that analysis: {exc}")
+            return False
+        self.emit("analysis", **report.as_dict())
+        return True
+
+    def _analysis_export(self, message: dict[str, Any]) -> None:
+        """The table on screen, as a document. **The same file, reformatted.**
+
+        Built from the report on disk rather than from the computation, so the
+        spreadsheet the operator gets cannot disagree with the table they were
+        looking at when they asked for it.
+        """
+        from . import analysis, documents
+
+        relative = str(message.get("relative", "")).strip()
+        kind = str(message.get("format", "xlsx")).strip().lower()
+        try:
+            target = self.agent.vault.resolve_read(self.agent.config.vault.root / relative)
+        except Exception:
+            self.emit("error", message="no analysis by that name")
+            return
+        if not target.is_file() or target.parent.parent.name != analysis.FOLDER:
+            self.emit("error", message="that is not an analysis Jarvis wrote")
+            return
+
+        report = analysis.read_report(target, self.agent.config.vault.root, max_rows=100_000)
+        try:
+            made = documents.generate(
+                self.agent.vault, self.agent.config.vault.drafts,
+                analysis.to_document(report), kind,
+                page_size=self.agent.config.documents.page_size,
+            )
+        except documents.MissingLibrary as exc:
+            self.emit("error", message=str(exc))
+            return
+        except Exception as exc:
+            self.emit("error", message=f"could not export it: {exc}")
+            return
+        self.emit("notice", level="info", message=f"exported to {made.relative}")
+        self.push_panel()
+        self._send_document(made.path, assembly=False)
+
     def _document_landed(self, event: Any) -> None:
         """A write_document tool call that succeeded. Open the preview.
 
@@ -1103,6 +1178,11 @@ class Session:
 
         speaking = SentenceStream() if self.speaker is not None else None
         spoken = 0
+        # What the tools returned this turn, and what Jarvis said about it. The
+        # two are compared at the end: a figure in the reply that no tool
+        # computed is reported rather than left to look like the rest.
+        computed: list[str] = [text]
+        said: list[str] = []
         if self.window is not None:
             self.window.begin()
 
@@ -1111,6 +1191,11 @@ class Session:
                 if isinstance(event, ToolFinished):
                     self._remember_tool(event)
                     self._document_landed(event)
+                    self._analysis_landed(event)
+                    computed.append(event.summary or "")
+                    computed.append(getattr(event, "content", "") or "")
+                if isinstance(event, TextDelta):
+                    said.append(event.text)
                 self.send(event.as_dict())
                 if speaking is not None and isinstance(event, TextDelta):
                     for sentence in speaking.feed(event.text):
@@ -1120,6 +1205,7 @@ class Session:
                 leftover = speaking.flush().strip()
                 if leftover:
                     await self._speak(leftover, spoken)
+            self._check_figures("".join(said), computed)
         except asyncio.CancelledError:
             # Barge-in, and the replacement turn is already starting. Emitting
             # idle or done here would tell the front end the new turn had
@@ -1189,6 +1275,35 @@ class Session:
                 # has no header to work it out from.
                 format=speech_format(self.agent.config.tts.output_format),
             )
+
+    def _check_figures(self, said: str, computed: list[str]) -> None:
+        """Every figure Jarvis stated, checked against what Python returned.
+
+        **This is what makes "the model does not do arithmetic" a property
+        rather than an intention.** The prompt says it, the analysis tool has
+        nowhere to put a number, and this is the third thing: a figure in the
+        reply that no tool produced is named in the panel and written to the
+        log.
+
+        It reports rather than rewrites. A wrong number that has been pointed
+        at is recoverable; silently editing what Jarvis said would be worse
+        than the problem, and would hide the fact that it happened at all.
+        """
+        from .figures import notice, unverified
+
+        if not self.agent.config.analysis.check_figures:
+            return
+        found = unverified(said, computed)
+        if not found:
+            return
+        message = notice(found)
+        self.emit("notice", level="warn", message=message)
+        audit = getattr(self.agent, "audit", None)
+        if audit is not None:
+            try:
+                audit.write("unverified figure", message)
+            except Exception:
+                pass
 
     def _remember_tool(self, event: Any) -> None:
         self.tools.insert(0, {"name": event.name, "ok": event.ok, "summary": event.summary})

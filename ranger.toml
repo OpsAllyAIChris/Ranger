@@ -320,6 +320,24 @@ assembly_seconds = 1.1
 preview_blocks = 400
 preview_rows = 300
 
+[analysis]
+# Grouping and totalling a dropped file. Python computes every figure; the
+# model chooses which analysis answers the question and explains the result.
+# Each table is written to Ranger/analysis/<date>/ before it is shown, so what
+# is on screen exists on disk and an export is a format change of that file
+# rather than a second computation that might disagree.
+#
+# How many rows the panel draws. The maths always runs over every row in the
+# file; this is only what is rendered, and the sheet says how many it is not
+# showing.
+max_rows = 200
+# Check every figure Jarvis states against what the tools actually returned,
+# and say so in the panel when one came from nowhere. The failure this catches
+# is a summary sentence containing a number nobody computed, which looks
+# exactly as right as the rest of the answer. Turning it off is supported and
+# is a worse place to be.
+check_figures = true
+
 [imports]
 # Files dropped onto the window. They land in Ranger/imports/<date>/ under
 # their own name, create-only, and NOTHING IS PARSED ON DROP: a file dropped by

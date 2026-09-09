@@ -111,7 +111,36 @@ out.assembled = assembled;
 window.dispatch('keydown', { key: 'Escape' });
 out.states.push(state('closed'));
 
-// 5. A mapping proposal, which is the other thing the sheet is used for.
+// 5. An analysis, in the same sheet.
+socket.deliver({
+  kind: 'analysis',
+  title: 'Commission by account, August against July',
+  summary: '3 Account(s), total of Commission, totalling 3,530.75.',
+  columns: ['Account', 'Commission', 'Commission (Jul 2026)', 'Change', 'Rows'],
+  rows: [
+    ['Illes Foods', '1,240.50', '1,100.00', '140.50', '1'],
+    ['Rusty Supply', '980.00', '1,010.00', '-30.00', '1'],
+  ],
+  provenance: ['file: commission.xls', 'sheet: Table 1', 'rows read: 8, groups out: 3'],
+  total_rows: 3,
+  truncated: true,
+  source: 'commission.xls',
+  sheet: 'Table 1',
+  relative: 'Ranger/analysis/2026-09-09/commission 100000.md',
+});
+out.states.push(state('analysis'));
+out.analysis = preview.describe();
+
+const exporter = preview
+  .walk()
+  .find((node) => node.textContent === 'export xlsx' && typeof node.onclick === 'function');
+if (exporter) exporter.onclick();
+out.sentAfterExport = [...socket.sent];
+
+window.dispatch('keydown', { key: 'Escape' });
+out.states.push(state('analysis closed'));
+
+// 6. A mapping proposal, which is the other thing the sheet is used for.
 socket.deliver({
   kind: 'import_proposal',
   name: 'netsuite gp.xlsx',

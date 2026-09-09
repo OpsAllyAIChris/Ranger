@@ -7,7 +7,7 @@ is another entry here and no change to the core.
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Callable
 
@@ -24,6 +24,7 @@ from .config import Config
 from .drafts import DraftRejected, hold_draft
 from .memory import append_fact, find_fact, load_memory
 from .tools import Tool, ToolRegistry, ToolResult
+from .analysis import OPERATIONS as ANALYSIS_OPERATIONS
 from .documents import KINDS as KINDS_FOR_SCHEMA
 from .ownfiles import FOLDERS
 from .untrusted import fence, scan
@@ -985,6 +986,174 @@ def _read_import(config: Config, vault: Vault) -> Tool:
     )
 
 
+def _analyse(config: Config, vault: Vault, today: Callable[[], date]) -> Tool:
+    """Group and total a dropped file. **Python computes every figure.**
+
+    The model chooses the analysis; it cannot perform one. There is no field in
+    this schema that takes a number, an expression or a formula: it names a
+    file, two columns, an operation from a fixed list, and optionally an exact
+    value to filter on. Everything else is arithmetic, and arithmetic happens
+    in `analysis.py`.
+
+    The result is written to a file under `Ranger/analysis/` before anything is
+    shown, and the panel renders that file. So the table on screen exists on
+    disk, the export is a format change of the file that was seen rather than a
+    second computation, and a figure quoted at four o'clock is reproducible at
+    six.
+    """
+
+    async def handler(payload: dict[str, Any]) -> ToolResult:
+        from . import analysis, imports
+
+        name = str(payload.get("file", "")).strip()
+        found, candidates = imports.find(vault, config, name)
+        if found is None:
+            if candidates:
+                listed = "\n".join(f"  {item.line()}" for item in candidates[:10])
+                return ToolResult(
+                    ok=True,
+                    content=f"{name!r} matches {len(candidates)} dropped files:\n{listed}",
+                    summary="ambiguous",
+                )
+            return ToolResult(
+                ok=True,
+                content=(
+                    f"Nothing dropped matches {name!r}. Use read_import with no name "
+                    "to see what is there."
+                ),
+                summary="no match",
+            )
+
+        tables = imports.tables_of(found.path)
+        if not tables:
+            return ToolResult(
+                False,
+                f"{found.name} has no table in it, so there is nothing to add up. "
+                "It is still readable with read_import.",
+                "not a table",
+            )
+        wanted = str(payload.get("sheet", "")).strip().casefold()
+        table = next(
+            (t for t in tables if t.name.casefold() == wanted), tables[0]
+        ) if wanted else tables[0]
+
+        def one(raw: Any) -> analysis.Filter | None:
+            if not isinstance(raw, dict):
+                return None
+            column = str(raw.get("column", "")).strip()
+            equals = str(raw.get("equals", "")).strip()
+            return analysis.Filter(column=column, equals=equals) if column and equals else None
+
+        spec = analysis.Spec(
+            file=found.name,
+            group_by=str(payload.get("group_by", "")).strip(),
+            value=str(payload.get("value", "")).strip(),
+            operation=str(payload.get("operation", "sum")).strip().lower(),
+            sheet=table.name,
+            where=one(payload.get("where")),
+            compare_to=one(payload.get("compare_to")),
+            sort=str(payload.get("sort", "value")).strip().lower(),
+            descending=bool(payload.get("descending", True)),
+            title=str(payload.get("title", "")).strip(),
+        )
+        try:
+            result = analysis.run(table, spec, source=found.name, now=datetime.now())
+            written = analysis.write(vault, config, result, today=today())
+        except analysis.AnalysisError as exc:
+            return ToolResult(False, str(exc), "refused")
+        except Exception as exc:
+            return ToolResult(False, f"{type(exc).__name__}: {exc}", "could not compute")
+
+        report = analysis.read_report(written, config.vault.root, max_rows=12)
+        lines = [
+            "Computed in Python and written to " + report.relative + ", which is what "
+            "the operator is looking at. **Every figure below came from that "
+            "arithmetic. Do not restate a number that is not in it, and do not work "
+            "out a new one.**",
+            "",
+            result.summary(),
+            "",
+            "| " + " | ".join(report.columns) + " |",
+        ]
+        lines += ["| " + " | ".join(row) + " |" for row in report.rows]
+        if report.truncated:
+            lines.append(f"({report.total_rows - len(report.rows)} more rows on screen.)")
+        return ToolResult(
+            ok=True, content="\n".join(lines), summary=f"analysed {found.name}"
+        )
+
+    return Tool(
+        name="analyse",
+        description=(
+            "Group and total a file the operator dropped: commission by account, "
+            "spend by month, this month against last. Use it whenever they ask a "
+            "question of a dropped file that has a number in the answer. You choose "
+            "which columns and which operation answer their question; Python does the "
+            "arithmetic and writes the table, and the panel shows it. You cannot pass "
+            "a figure to this tool and you must not state one it did not return. If "
+            "two columns could both be the figure, ask the operator which rather than "
+            "picking one."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "file": {"type": "string",
+                         "description": "Part of the dropped file's name."},
+                "sheet": {"type": "string", "description": "Sheet name, if it matters."},
+                "group_by": {
+                    "type": "string",
+                    "description": (
+                        "The column to group by, spelled as it is in the file's header "
+                        "row: 'Account', 'Period'. Leave empty for one total row."
+                    ),
+                },
+                "value": {
+                    "type": "string",
+                    "description": "The column of figures, as it is spelled in the file.",
+                },
+                "operation": {
+                    "type": "string",
+                    "enum": list(ANALYSIS_OPERATIONS),
+                    "description": "What to do to the figure column.",
+                },
+                "where": {
+                    "type": "object",
+                    "description": (
+                        "Optional exact filter, e.g. column 'Period', equals "
+                        "'Aug 2026'. Exact match on the value as written in the file."
+                    ),
+                    "properties": {
+                        "column": {"type": "string"}, "equals": {"type": "string"},
+                    },
+                },
+                "compare_to": {
+                    "type": "object",
+                    "description": (
+                        "Optional second filter to compare against, giving a change "
+                        "column. Use it for month against month."
+                    ),
+                    "properties": {
+                        "column": {"type": "string"}, "equals": {"type": "string"},
+                    },
+                },
+                "sort": {"type": "string", "enum": ["value", "label"]},
+                "descending": {"type": "boolean"},
+                "title": {
+                    "type": "string",
+                    "description": (
+                        "What the question was, in the operator's words. **No figures "
+                        "in it**: the numbers are in the table underneath and a title "
+                        "carrying one that Python did not compute is refused."
+                    ),
+                },
+            },
+            "required": ["file"],
+        },
+        handler=handler,
+        writes=True,
+    )
+
+
 def _write_document(config: Config, vault: Vault, today: Callable[[], date]) -> Tool:
     """Item D. A .docx, .xlsx or .pdf, into the drafts folder.
 
@@ -1278,5 +1447,6 @@ def build_registry(
             _gross_profit(config, vault, today),
             _write_document(config, vault, today),
             _read_import(config, vault),
+            _analyse(config, vault, today),
         ]
     )

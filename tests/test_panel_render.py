@@ -320,3 +320,60 @@ def test_the_drag_target_is_not_the_microphone_colour():
     for hex_colour in re.findall(r"#([0-9a-fA-F]{6})", block):
         red, green, blue = (int(hex_colour[i:i + 2], 16) for i in (0, 2, 4))
         assert green + blue > red, f"#{hex_colour} is a warm colour"
+
+
+# -- the analysis, in the same sheet ---------------------------------------
+
+
+@needs_node
+def test_an_analysis_opens_the_same_sheet_not_a_second_one(rendered):
+    """One surface, two sources. Same open, same orb offset, same close."""
+    opened = state(rendered, "analysis")
+
+    assert opened["preview"]["hidden"] is False
+    assert opened["preview"]["children"] == 3, "chrome, provenance line, body"
+    assert "previewing" in opened["bodyClass"]
+    assert opened["offsets"][-1] > 0
+
+
+@needs_node
+def test_escape_closes_an_analysis_and_the_orb_goes_back(rendered):
+    closed = state(rendered, "analysis closed")
+
+    assert closed["preview"]["hidden"] is True
+    assert closed["preview"]["children"] == 0
+    assert closed["offsets"][-1] == 0
+
+
+@needs_node
+def test_the_table_keeps_the_source_headers_and_says_where_it_came_from(rendered):
+    texts = [node["text"] for node in walk(rendered["analysis"])]
+
+    assert "Account" in texts and "Commission (Jul 2026)" in texts
+    assert any("Computed in Python from commission.xls" in text for text in texts)
+    assert any("Nothing here was written by a model" in text for text in texts)
+    assert any("file: commission.xls" in text for text in texts)
+
+
+@needs_node
+def test_a_truncated_table_says_how_many_rows_it_is_not_showing(rendered):
+    texts = [node["text"] for node in walk(rendered["analysis"])]
+    assert any("showing 2 of 3 rows" in text for text in texts)
+
+
+@needs_node
+def test_the_sheet_can_export_what_is_on_it(rendered):
+    """A format change of the file being looked at, by its path -- not a
+    request to compute it again."""
+    assert rendered["sentAfterExport"][-1] == {
+        "type": "analysis_export",
+        "relative": "Ranger/analysis/2026-09-09/commission 100000.md",
+        "format": "xlsx",
+    }
+
+
+@needs_node
+def test_the_analysis_sheet_has_the_same_close_control(rendered):
+    labels = [node["text"] for node in walk(rendered["analysis"]) if node["clickable"]]
+    assert "close" in labels
+    assert "copy" in labels

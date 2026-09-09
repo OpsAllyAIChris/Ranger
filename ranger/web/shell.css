@@ -452,6 +452,11 @@ body.dropping::after {
   pointer-events: none;
 }
 .preview-badge.import { color: var(--accent); }
+.preview-badge.analysis { color: var(--accent); }
+/* A computed table is dense by nature: numbers right-aligned, rows tight. */
+.preview-body.analysis .preview-grid td:not(:first-child) { text-align: right;
+  font-family: var(--mono); font-size: 11px; }
+.preview-body.analysis .preview-grid th:not(:first-child) { text-align: right; }
 .import-form { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 12px; }
 .import-pick { display: flex; flex-direction: column; gap: 4px; font-size: 11px;
                color: var(--ink-dim); }

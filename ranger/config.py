@@ -303,6 +303,20 @@ class DocumentsConfig:
 
 
 @dataclass(frozen=True)
+class AnalysisConfig:
+    """Grouping and totalling a dropped file. Python's side of the seam."""
+
+    #: How many rows of a result the panel draws. The computation always runs
+    #: over every row in the file; this is what is rendered, and the sheet says
+    #: how many it is not showing -- the same rule the document preview keeps.
+    max_rows: int = 200
+    #: Check every figure Jarvis states against what the tools returned, and
+    #: say so when one of them came from nowhere. Off is supported and is a
+    #: worse place to be: a made-up figure looks exactly like a computed one.
+    check_figures: bool = True
+
+
+@dataclass(frozen=True)
 class ImportsConfig:
     """Dropped files. What is allowed in, and how much of it is read.
 
@@ -505,6 +519,7 @@ class Config:
     drafts: DraftsConfig
     documents: DocumentsConfig
     imports: ImportsConfig
+    analysis: AnalysisConfig
     gp: GpConfig
     voice: VoiceConfig
     stt: SttConfig
@@ -618,6 +633,7 @@ KNOWN_KEYS: dict[str, frozenset[str]] = {
         "page_size", "assembly", "assembly_particles", "assembly_seconds",
         "preview_blocks", "preview_rows",
     }),
+    "analysis": frozenset({"max_rows", "check_figures"}),
     "imports": frozenset({
         "max_mb", "extract_rows", "extract_sheets", "extract_on_drop",
     }),
@@ -1009,6 +1025,14 @@ def load_config(path: str | Path | None = None, *, load_env: bool = True) -> Con
     if documents.preview_blocks < 1 or documents.preview_rows < 1:
         raise ConfigError("documents.preview_blocks and preview_rows must be at least 1")
 
+    analysis_section = table.get("analysis", {})
+    analysis = AnalysisConfig(
+        max_rows=int(analysis_section.get("max_rows", 200)),
+        check_figures=bool(analysis_section.get("check_figures", True)),
+    )
+    if analysis.max_rows < 1:
+        raise ConfigError("analysis.max_rows must be at least 1")
+
     imports_section = table.get("imports", {})
     imports = ImportsConfig(
         max_mb=float(imports_section.get("max_mb", 25.0)),
@@ -1152,6 +1176,7 @@ def load_config(path: str | Path | None = None, *, load_env: bool = True) -> Con
         drafts=drafts,
         documents=documents,
         imports=imports,
+        analysis=analysis,
         gp=gp,
         voice=voice,
         stt=stt,

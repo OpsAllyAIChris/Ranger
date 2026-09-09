@@ -723,6 +723,96 @@ export function createShell(orb) {
     if (orb && orb.setOffset) orb.setOffset(4.2);
   }
 
+  // An analysis, in the same sheet. Not a second panel: same open and close,
+  // same orb offset, same escape order, same close control. What is drawn is a
+  // file Python wrote under Ranger/analysis before anything reached the
+  // browser, so "export this" is a format change of the thing on screen.
+  function openAnalysis(event) {
+    endAssembly();
+    previewOpen = event.relative;
+
+    const head = document.createElement('div');
+    head.className = 'preview-head';
+    const name = document.createElement('div');
+    name.className = 'preview-name';
+    const badge = document.createElement('span');
+    badge.className = 'preview-badge analysis';
+    badge.textContent = 'computed';
+    const label = document.createElement('span');
+    label.textContent = event.title || 'Analysis';
+    name.append(badge, label);
+
+    const actions = document.createElement('div');
+    actions.className = 'preview-actions';
+    const excel = document.createElement('button');
+    excel.className = 'ghost clickable';
+    excel.textContent = 'export xlsx';
+    excel.title = 'the same table, as a workbook in your drafts folder';
+    excel.onclick = () =>
+      send({ type: 'analysis_export', relative: event.relative, format: 'xlsx' });
+    const copy = document.createElement('button');
+    copy.className = 'ghost clickable';
+    copy.textContent = 'copy';
+    copy.title = 'copy the table as text';
+    copy.onclick = () => {
+      const text = [event.columns.join('\t')]
+        .concat((event.rows || []).map((row) => row.join('\t')))
+        .join('\n');
+      if (navigator.clipboard) navigator.clipboard.writeText(text).catch(() => {});
+      toast('copied ' + (event.rows || []).length + ' rows');
+    };
+    const close = document.createElement('button');
+    close.className = 'ghost clickable';
+    close.textContent = 'close';
+    close.onclick = closePreview;
+    actions.append(excel, copy, close);
+    head.append(name, actions);
+
+    // Which file and which sheet, always on screen. A table with no source on
+    // it is a number nobody can check afterwards.
+    const caveat = document.createElement('div');
+    caveat.className = 'preview-caveat';
+    caveat.textContent =
+      'Computed in Python from ' + (event.source || 'a dropped file') +
+      (event.sheet ? ' (' + event.sheet + ')' : '') + '. Nothing here was written by a model.';
+
+    const body = document.createElement('div');
+    body.className = 'preview-body analysis';
+
+    if (event.summary) {
+      const summary = document.createElement('div');
+      summary.className = 'preview-p';
+      summary.textContent = event.summary;
+      body.append(summary);
+    }
+
+    // Headers as they were in the source, never renamed: a column renamed on
+    // the way to the screen is a column that cannot be found again in the
+    // operator's own export.
+    body.append(grid([event.columns || []].concat(event.rows || []), true));
+
+    if (event.truncated) {
+      body.append(more((event.rows || []).length, event.total_rows, 'rows'));
+    }
+    if ((event.provenance || []).length) {
+      const where = document.createElement('div');
+      where.className = 'preview-h preview-h3';
+      where.textContent = 'Where this came from';
+      body.append(where);
+      for (const line of event.provenance) {
+        const item = document.createElement('div');
+        item.className = 'preview-bullet';
+        item.textContent = line;
+        body.append(item);
+      }
+    }
+
+    el.preview.replaceChildren(head, caveat, body);
+    el.preview.hidden = false;
+    document.body.classList.add('previewing');
+    if (orb && orb.setOffset) orb.setOffset(4.2);
+  }
+
   function openPreview(event) {
     // The content is drawn first and the flourish plays over it. The animation
     // never gates the document: if the particles are switched off, or the
@@ -1152,6 +1242,9 @@ export function createShell(orb) {
         break;
       case 'panel':
         drawPanel(event);
+        break;
+      case 'analysis':
+        openAnalysis(event);
         break;
       case 'import_proposal':
         openProposal(event);

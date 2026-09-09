@@ -1390,6 +1390,37 @@ be the figure, ask rather than pick.
 Full write-up, including what happens when the same file is dropped twice:
 `docs/imports.md`.
 
+## Analysis, and the line between Python and the model
+
+**Python: every number.** Sums, counts, averages, deltas, grouping, ordering.
+**The model: which analysis answers the question**, what the columns mean, what
+the result implies. The model never emits a figure, including in the sentence
+above a table.
+
+Three things enforce that, because one of them would be a hope:
+
+- The `analyse` tool has nowhere to put a number: a file, two columns, an
+  operation from a fixed enum, an exact filter value. No expression field.
+- A title carrying a digit that did not come from the spec's own filters is
+  refused, and the summary line is written by Python.
+- Every figure Jarvis states is checked after the turn against what the tools
+  returned and what the operator said. Anything left over is named in the panel
+  and written to the log. It reports rather than rewrites: a wrong number that
+  has been pointed at is recoverable, and a silent edit would hide it.
+
+Every table is computed, **written to `Ranger/analysis/<date>/` and rendered
+back out of that file** -- preview the artifact, restated for computed output.
+So an export is a format change of the thing on screen rather than a second
+computation, and a figure quoted at four is reproducible at six.
+
+One surface: the analysis opens the same sheet a document preview does, with
+the same open, close, orb offset and escape order. A row whose label is `Total`
+is the file's own arithmetic and is left out of a grouping -- and named, in the
+summary and the provenance, because a totals row grouped beside the rows it
+totals doubles the answer and the doubled figure looks entirely normal.
+
+Full write-up: `docs/analysis.md`.
+
 ## Closing out a session
 
 Every session ends with a debrief written to `docs/sessions/<date>.md`, and it
