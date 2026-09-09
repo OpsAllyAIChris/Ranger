@@ -1771,3 +1771,12 @@ the line is fine, because it is looking at the other default.
 Second time this class landed in a *fixture* rather than in the code. The code
 paths that promise byte identity go through bytes end to end; the tests
 checking them did not.
+
+### Write-only paths, the fourth time
+
+Drafts, the account marker, GP, and now the log: four things Jarvis produced and
+could not read back. Each was found by the operator asking a question Jarvis
+should have been able to answer from its own output.
+
+**When a write path goes in, the read path is part of the same item.** The audit
+for this is cheap: for every folder under `Ranger/`, name the tool that reads it.

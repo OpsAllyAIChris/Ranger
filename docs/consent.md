@@ -63,6 +63,7 @@ second list of tool names kept somewhere it can drift.
 | `read_import` | read | free | free |
 | `read_own_file` | read | free | free |
 | `remember` | write | free | **gate** |
+| `what_happened` | read | free | free |
 | `what_went_quiet` | read | free | free |
 | `write_document` | write | free | **gate** |
 

@@ -1707,6 +1707,118 @@ def _enter_gross_profit(config: Config, vault: Vault, today: Callable[[], date])
     )
 
 
+def _what_happened(config: Config, vault: Vault, today: Callable[[], date],
+                   audit: Any = None) -> Tool:
+    """Item K1. Read the log back. **Read**, and ungated.
+
+    Reading its own output is not consequential, and the fourth write-only path
+    in this project is three too many. What makes it safe is not a card, it is
+    that nothing here writes and everything here is fenced: the log holds
+    transcripts of what the operator said, and what the operator said routinely
+    includes pasted customer email.
+
+    Python does the assembling. `recall.recollect` parses the rows, picks which
+    ones to show and puts the date on the front of every line in the past
+    tense; the model reads the result out. It cannot infer what happened,
+    because it is not given anything to infer from.
+    """
+    # At build time as well as in the handler: the schema quotes the defaults,
+    # so a reader of the tool spec sees the same numbers the code uses rather
+    # than a second copy of them that can drift.
+    from . import recall
+
+    async def handler(payload: dict[str, Any]) -> ToolResult:
+        from datetime import date as _date
+
+        from .audit import AuditLog
+        from .untrusted import fence
+
+        log = audit if audit is not None else AuditLog(vault, config.vault.log)
+
+        one: _date | None = None
+        asked = str(payload.get("day", "")).strip()
+        if asked:
+            try:
+                one = _date.fromisoformat(asked)
+            except ValueError:
+                return ToolResult(
+                    False,
+                    f"{asked!r} is not a date. Use YYYY-MM-DD, or leave it out and "
+                    "give `days` to look back over a window.",
+                    "not a date",
+                )
+
+        try:
+            found = recall.recollect(
+                log,
+                days=int(payload.get("days", recall.DEFAULT_DAYS) or recall.DEFAULT_DAYS),
+                day=one,
+                about=str(payload.get("about", "")),
+                today=today(),
+            )
+        except Exception as exc:
+            return ToolResult(False, f"{type(exc).__name__}: {exc}", "could not read the log")
+
+        # Fenced, and not as a formality. These bytes came from outside, were
+        # written into the log, and are coming back: trust attaches to the path
+        # they travelled, not to the fact that Jarvis wrote the file.
+        return ToolResult(
+            ok=True,
+            content=fence("Ranger's own log", found.render()),
+            summary=found.summary(),
+        )
+
+    return Tool(
+        name="what_happened",
+        description=(
+            "Read back Ranger's own log: what the operator asked, what Jarvis "
+            "answered, what it ran and what was confirmed, with the date of each. "
+            "Use it for 'what did we talk about yesterday', 'what did I ask you to "
+            "do this week', 'have I already looked at Petmate', 'what did you file "
+            "on Telly and when' -- and before saying you do not remember something, "
+            "because you have a record of it. "
+            "EVERYTHING IT RETURNS IS HISTORY. Each line carries the date it "
+            "happened on; keep the date on it and speak in the past tense. 'On 8 "
+            "September you filed a note on Telly', never 'you are waiting on "
+            "Telly'. A three week old conclusion repeated as the state of an "
+            "account today is the worst thing this tool can be used for. "
+            "It reads a digest across a window by default. Ask for one `day` to "
+            "see that day in full, and pass `about` to find every mention of a "
+            "name. It says how many entries it left out; repeat that rather than "
+            "implying you were shown everything. The log is what Jarvis did and "
+            "what was said to it, so nothing found means nothing was logged, "
+            "which is not the same as nothing having happened."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "days": {
+                    "type": "integer",
+                    "description": (
+                        f"How many days back, counting today. Default "
+                        f"{recall.DEFAULT_DAYS}, capped at {recall.MAX_DAYS}."
+                    ),
+                },
+                "day": {
+                    "type": "string",
+                    "description": (
+                        "One day, as YYYY-MM-DD, returned in full including the "
+                        "housekeeping rows a digest leaves out."
+                    ),
+                },
+                "about": {
+                    "type": "string",
+                    "description": (
+                        "Only entries mentioning this, an account name or a word. "
+                        "A plain search of what was written, not a judgement."
+                    ),
+                },
+            },
+        },
+        handler=handler,
+    )
+
+
 def build_registry(
     config: Config,
     vault: Vault,
@@ -1727,6 +1839,7 @@ def build_registry(
             _read_own_file(config, vault),
             _clear_draft(config, vault, audit),
             _gross_profit(config, vault, today),
+            _what_happened(config, vault, today, audit),
             _enter_gross_profit(config, vault, today),
             _write_document(config, vault, today),
             _read_import(config, vault),

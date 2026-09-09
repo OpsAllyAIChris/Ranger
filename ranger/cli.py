@@ -713,12 +713,34 @@ def cmd_log(config: Config, args) -> int:
     from .audit import AuditLog
     from .vault import Vault
 
+    from datetime import date as _date
+
+    from . import recall
+
+    paint = _colour(sys.stdout.isatty())
     log = AuditLog(Vault(config.vault), config.vault.log)
     days = log.days()
     if not days:
         print("  nothing logged yet.")
         return 0
-    from datetime import date as _date
+
+    # `--recall` is the tool's own view, assembled by the same Python the model
+    # is given, so the operator can see exactly what Jarvis would be reading
+    # rather than a prettier version of it. Without it this command still
+    # prints the raw table, which is the thing to look at when the digest and
+    # the file seem to disagree.
+    if getattr(args, "recall", False) or getattr(args, "about", ""):
+        found = recall.recollect(
+            log,
+            days=int(getattr(args, "days", 0) or recall.DEFAULT_DAYS),
+            day=_date.fromisoformat(args.day) if args.day else None,
+            about=getattr(args, "about", "") or "",
+            today=_date.today(),
+        )
+        print(found.render())
+        print()
+        print(paint(f"  {found.summary()}", DIM))
+        return 0
 
     when = _date.fromisoformat(args.day) if args.day else days[0]
     text = log.read(when)
@@ -2745,6 +2767,19 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("resume", help="Tier 6: start proactive behaviour again")
     log_cmd = sub.add_parser("log", help="Tier 6: the audit trail")
     log_cmd.add_argument("day", nargs="?", help="a date, YYYY-MM-DD. Defaults to today")
+    log_cmd.add_argument(
+        "--recall", action="store_true",
+        help="what Jarvis reads when asked what happened: a digest with dates, "
+             "assembled by the same Python the tool uses",
+    )
+    log_cmd.add_argument(
+        "--about", default="",
+        help="only entries mentioning this. Implies --recall",
+    )
+    log_cmd.add_argument(
+        "--days", type=int, default=0,
+        help=f"how far back --recall looks. Default 7, capped at 31",
+    )
 
     beat = sub.add_parser("heartbeat", help="Tier 5: run the background loop")
     beat.add_argument("--once", action="store_true", help="one pass, then exit")

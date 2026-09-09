@@ -55,6 +55,7 @@ def test_the_registry_holds_exactly_the_intended_tools(registry):
         "read_import",
         "read_own_file",
         "remember",
+        "what_happened",
         "what_went_quiet",
         "write_document",
     ]
