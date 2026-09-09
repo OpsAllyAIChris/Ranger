@@ -170,8 +170,8 @@ async def test_too_many_tool_calls_stops_it_and_keeps_the_work(config, vault):
     record = await go(config, vault, script, max_tools=2)
 
     assert record.outcome == headless.BOUNDED
-    assert "more than 2 tool calls" in record.why
-    assert len(record.steps) >= 2, "the calls it did make are in the record"
+    assert "used its 2 tool call(s)" in record.why
+    assert len(record.steps) == 2, "exactly the allowance, not one more"
     assert record.partial
 
 
@@ -234,26 +234,148 @@ async def test_the_bounds_are_config_and_there_is_no_unbounded_setting(config_fi
 # -- one level --------------------------------------------------------------
 
 
-async def test_a_headless_run_cannot_start_another(config, vault):
-    """One level, until the bounds are proven on real work. A headless turn
-    that can start headless turns is a bound that multiplies."""
-    inner: list = []
+class Reenters:
+    """A provider that starts a second headless run from inside the first.
 
-    async def nested(event):
-        if not inner:
-            inner.append(await headless.run(config, "and another",
-                                            agent=agent_for(config, vault, [{"text": "no"}])))
+    **The earliest possible moment**, and a deterministic one: this happens
+    during the outer run's very first provider call, with no sleeps and no
+    reliance on when the event loop chooses to run anything.
+    """
 
-    await headless.run(
-        config, "do a thing",
-        agent=agent_for(config, vault, [{"text": "done"}]),
-        on_event=lambda event: asyncio.ensure_future(nested(event)),
-    )
-    await asyncio.sleep(0)
-    await asyncio.sleep(0)
+    def __init__(self, config, make_agent, mode: str = "await") -> None:
+        self.config = config
+        self.make_agent = make_agent
+        self.mode = mode
+        self.inner: list = []
+        self.spawned: list = []
+        self.gate = asyncio.Event()
 
+    async def stream(self, *args, **kwargs):
+        if self.mode == "await":
+            # Directly awaited: shares the outer run's context.
+            self.inner.append(
+                await headless.run(self.config, "and another", agent=self.make_agent())
+            )
+        elif self.mode == "concurrent":
+            # A task, awaited while the outer run is still live.
+            task = asyncio.create_task(
+                headless.run(self.config, "and another", agent=self.make_agent())
+            )
+            self.inner.append(await task)
+        else:
+            # A task created inside the run that **cannot** run until the outer
+            # run has finished, because its first act is to wait on a gate the
+            # test opens afterwards. That is the Windows ordering, made
+            # deterministic: no sleeps, no hoping the scheduler cooperates.
+            #
+            # With a module flag the guard is clear by then and it goes ahead.
+            # With a context variable the task carries the guard it was created
+            # under, whenever it eventually runs.
+            async def later():
+                await self.gate.wait()
+                return await headless.run(
+                    self.config, "and another", agent=self.make_agent()
+                )
+
+            self.spawned.append(asyncio.create_task(later()))
+        yield {"type": "text", "text": "done"}
+
+
+def reentering(config, vault, mode: str):
+    agent = agent_for(config, vault, [])
+    agent.provider = Reenters(config, lambda: agent_for(config, vault, [{"text": "no"}]),
+                              mode)
+    return agent
+
+
+async def test_a_run_cannot_start_another_from_inside_the_first_call(config, vault):
+    """**The earliest possible moment.** Not scheduled, not hoped for: the
+    nested call happens inside the outer run's first provider call."""
+    agent = reentering(config, vault, "await")
+    await headless.run(config, "do a thing", agent=agent)
+
+    inner = agent.provider.inner
     assert inner and inner[0].outcome == headless.REFUSED
     assert "already in progress" in inner[0].why
+
+
+async def test_a_run_cannot_start_another_concurrently(config, vault):
+    """A task, running while the outer run is still live."""
+    agent = reentering(config, vault, "concurrent")
+    await headless.run(config, "do a thing", agent=agent)
+
+    inner = agent.provider.inner
+    assert inner and inner[0].outcome == headless.REFUSED
+
+
+async def test_work_spawned_inside_a_run_is_refused_even_after_it_finishes(
+    config, vault
+):
+    """**The one that failed on Windows and passed here.**
+
+    A task created inside a run, executed after the run has finished. A module
+    flag is clear by then, so it went ahead -- on Linux the scheduler happened
+    to interleave it inside the run and it was refused, which is why the suite
+    said the guard held. The task now carries the guard it was created under.
+    """
+    agent = reentering(config, vault, "later")
+    outer = await headless.run(config, "do a thing", agent=agent)
+
+    assert outer.outcome == headless.COMPLETED, "the outer run has finished"
+    assert not headless.inside(), "and the guard is no longer held out here"
+
+    spawned = agent.provider.spawned
+    assert spawned, "a task really was created inside the run"
+    assert not spawned[0].done(), "and it has not run yet: it is waiting on the gate"
+
+    agent.provider.gate.set()
+    inner = await spawned[0]
+
+    assert inner.outcome == headless.REFUSED, (
+        "work spawned by a run is headless work whenever it runs; a guard that "
+        "only holds while the run is on the stack is a guard the scheduler owns"
+    )
+
+
+async def test_the_guard_is_visible_to_a_synchronous_callback(config, vault):
+    """Callbacks run in the run's own context, so they can see it too. That is
+    what stops a sync caller from starting one behind the guard's back."""
+    seen: list[bool] = []
+    await go(config, vault, [{"text": "done"}],
+             on_event=lambda event: seen.append(headless.inside()))
+
+    assert seen and all(seen), "inside the run"
+    assert not headless.inside(), "and not outside it"
+
+
+async def test_two_unrelated_runs_are_not_each_others_problem(config, vault):
+    """The guard is about nesting, not about the clock. Two runs started from
+    unrelated contexts are not nested, and refusing one of them would be a
+    queue pretending to be a safety bound -- which is the distinction M2's job
+    queue is going to need."""
+    first, second = await asyncio.gather(
+        headless.run(config, "one", agent=agent_for(config, vault, [{"text": "a"}])),
+        headless.run(config, "two", agent=agent_for(config, vault, [{"text": "b"}])),
+    )
+
+    assert first.outcome == headless.COMPLETED
+    assert second.outcome == headless.COMPLETED
+
+
+async def test_the_guard_is_not_a_module_flag(config, vault):
+    """Named, because the shape is the bug. A flag answers "is a run in
+    progress right now", which is a question about the clock; the guard has to
+    answer "was this work started by a run", which is about the caller."""
+    import ast
+
+    source = (Path(__file__).resolve().parent.parent / "ranger" / "headless.py")
+    tree = ast.parse(source.read_text(encoding="utf-8"))
+    globals_assigned = [
+        node.names[0] for node in ast.walk(tree) if isinstance(node, ast.Global)
+    ]
+
+    assert not globals_assigned, f"headless.py rebinds module state: {globals_assigned}"
+    assert "ContextVar" in source.read_text(encoding="utf-8")
 
 
 async def test_the_guard_is_released_even_when_a_run_fails(config, vault):
@@ -268,6 +390,7 @@ async def test_the_guard_is_released_even_when_a_run_fails(config, vault):
 
     assert first.outcome == headless.FAILED
     assert "the provider fell over" in first.why
+    assert not headless.inside(), "the guard is released by the failure path too"
 
     second = await go(config, vault, [{"text": "fine"}])
     assert second.outcome == headless.COMPLETED, "the next run is not refused"
@@ -389,3 +512,94 @@ def test_the_cli_runs_one_and_prints_what_happened(config, vault, capsys, monkey
     assert "can approve a gate" in out, "the terminal says what it cannot do"
     assert "account_recall" in out, "the tool calls are visible as they happen"
     assert "Illes is active." in out
+
+
+# -- the audit of the other bounds -----------------------------------------
+#
+# The nested guard failed on Windows because it was observed rather than
+# enforced. These are the rest of them, checked for the same shape.
+
+
+async def test_the_turn_bound_is_applied_where_the_core_enforces_it(config, vault,
+                                                                    monkeypatch):
+    """**A bound that could not fire at any setting.**
+
+    It was a check on TurnComplete events, and `turn()` emits exactly one of
+    those, at the end. The count never reached two, so `max_turns` was inert at
+    every value while sitting in config looking like a limit. It is now applied
+    to the agent, where the core counts tool rounds and stops on them.
+    """
+    from dataclasses import replace
+
+    monkeypatch.setattr("ranger.provider.build_provider", lambda cfg: ScriptedProvider([]))
+    tight = replace(config, headless=replace(config.headless, max_turns=2))
+    agent = headless.build_agent(tight, vault=vault)
+
+    assert agent.config.model.max_tool_rounds == 2, (
+        "the bound has to reach the code that enforces it"
+    )
+
+
+async def test_running_out_of_tool_rounds_is_reported_as_bounded(config, vault):
+    """And a run that hit it says so. Reporting "completed" for a turn the core
+    cut off would be saying the work finished when it did not."""
+    from dataclasses import replace
+
+    script = [{"tools": [{"name": "account_recall", "input": {"account": "Illes"}}]}
+              for _ in range(8)]
+    tight = replace(config, model=replace(config.model, max_tool_rounds=2))
+    agent = agent_for(tight, vault, script)
+    record = await headless.run(tight, "check everything", agent=agent, max_tools=50)
+
+    assert record.outcome == headless.BOUNDED
+    assert "tool rounds" in record.why
+    assert record.steps, "and the work it did is still in the record"
+
+
+async def test_the_tool_bound_allows_exactly_what_it_says(config, vault):
+    """It was `>` after appending, so an allowance of two let three through.
+    Not an ordering bug, but a bound that did not do what it said."""
+    script = [{"tools": [{"name": "account_recall", "input": {"account": "Illes"}}]}
+              for _ in range(6)] + [{"text": "done"}]
+
+    for allowed in (1, 2, 3):
+        record = await go(config, vault, list(script), max_tools=allowed)
+        assert len(record.steps) == allowed, f"{allowed} allowed, {len(record.steps)} made"
+
+
+async def test_a_tool_that_never_returns_still_ends_the_run(config, vault, monkeypatch):
+    """The wall clock is checked between events, so a tool that hangs is not
+    caught by it. The hard backstop is what covers that, and it is structural:
+    it cancels rather than waiting to be noticed."""
+    monkeypatch.setattr(headless, "HARD_GRACE_SECONDS", 0.05)
+
+    from ranger.tools import Tool, ToolResult
+
+    async def hangs(payload):
+        await asyncio.sleep(30)
+        return ToolResult(True, "never", "never")  # pragma: no cover
+
+    agent = agent_for(config, vault, [
+        {"tools": [{"name": "hangs", "input": {}}]},
+        {"text": "done"},
+    ])
+    agent.registry.register(Tool(name="hangs", description="x" * 90,
+                                 input_schema={"type": "object"}, handler=hangs))
+
+    record = await headless.run(config, "do it", agent=agent, max_seconds=0.05)
+
+    assert record.outcome == headless.BOUNDED
+    assert "stopped answering" in record.why
+
+
+def test_no_bound_is_left_to_the_scheduler():
+    """The rule, as a test. Every bound is either enforced by code that counts
+    (the core's tool rounds), by a structural cancel (the hard backstop), or by
+    a value the calling context carries (the nested guard). None of them is a
+    module flag read at a moment that happens to be the right one."""
+    source = (Path(__file__).resolve().parent.parent / "ranger" / "headless.py")
+    text = source.read_text(encoding="utf-8")
+
+    assert "ContextVar" in text
+    assert "asyncio.wait_for" in text, "the backstop cancels rather than asking"
+    assert "global " not in text, "no module state is rebound at all"

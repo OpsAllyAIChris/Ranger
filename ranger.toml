@@ -334,9 +334,14 @@ preview_rows = 300
 # comes back with it, so "I read four accounts and here is what I found" is
 # what you get rather than a bare timeout.
 max_seconds = 120.0
-# How many model turns, and how many tool calls in total. The tool call limit
-# is the one that actually catches a loop.
+# How many rounds of model-and-tools one run may take. This is applied to the
+# agent the run builds, where the core counts the rounds and stops on them --
+# it was a check on completed turns, and a turn emits exactly one of those, so
+# it could not fire at any setting while sitting here looking like a limit.
 max_turns = 6
+# How many tool calls in total. The one that actually catches a loop: a
+# confused model reaching for the same tool repeatedly hits this first. It
+# allows exactly this many; it used to allow one more.
 max_tool_calls = 20
 # Trim the standing context for headless work. 0 means the same context an
 # interactive turn gets, and that is the default on purpose: prompt caching

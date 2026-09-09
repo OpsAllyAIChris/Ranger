@@ -52,6 +52,7 @@ import asyncio
 import time
 from dataclasses import dataclass, field
 from datetime import datetime
+from contextvars import ContextVar
 from typing import Any, Callable
 
 from .config import Config
@@ -74,9 +75,64 @@ REFUSED = "refused"
 #: provider's own timeout is the first line of that defence.
 HARD_GRACE_SECONDS = 30.0
 
-#: True while a headless run is in progress in this process. One level, and the
-#: guard is here rather than in a docstring.
-_running = False
+#: How deep in headless work the *current context* is. Not a module flag, and
+#: the difference is the whole of a real defect.
+#:
+#: **A flag answers "is a run in progress right now", which is a question about
+#: the clock.** The question that has to be answered is "was this work started
+#: by a run", which is a question about the caller. A task spawned inside a run
+#: and executed after it finished sees a clear flag and proceeds -- so the
+#: guard held on Linux, where the scheduler happened to interleave the spawned
+#: task inside the run, and did not hold on Windows, where it did not. A safety
+#: bound that depends on the scheduler is not a bound.
+#:
+#: A `ContextVar` is structural because **asyncio copies the current context
+#: into a task when the task is created**. Work spawned from inside a run
+#: carries the guard with it, whenever it eventually runs, and the outer run's
+#: reset cannot reach into the copy. Synchronous callbacks see it too, because
+#: they run in the same context.
+#:
+#: It is also the right *meaning*: two independent runs started from unrelated
+#: contexts are not nested and are not each other's problem. That distinction
+#: is what M2's job queue will need.
+_depth: ContextVar[int] = ContextVar("ranger_headless_depth", default=0)
+
+
+def inside() -> bool:
+    """Is the caller inside headless work? True in anything a run spawned."""
+    return _depth.get() > 0
+
+
+class Nested(Exception):
+    """A headless run tried to start inside another one."""
+
+
+class _OneLevel:
+    """Holds the guard for a run's whole lifetime, setup and teardown included.
+
+    **There is no instant between "a run exists" and "the guard is set"**,
+    because entering this is what makes the run exist: building the agent,
+    writing to the log and consuming the turn all happen inside it, and the
+    only way past `__enter__` is to have taken the guard.
+    """
+
+    def __init__(self) -> None:
+        self._token: Any = None
+
+    def __enter__(self) -> "_OneLevel":
+        if _depth.get() > 0:
+            raise Nested(
+                "a headless run is already in progress in this context, and one "
+                "cannot start another"
+            )
+        self._token = _depth.set(_depth.get() + 1)
+        return self
+
+    def __exit__(self, *exception: Any) -> bool:
+        if self._token is not None:
+            _depth.reset(self._token)
+            self._token = None
+        return False
 
 
 @dataclass
@@ -221,6 +277,20 @@ def build_agent(
     if trimmed:
         config = replace(config, context=replace(config.context, budget_chars=trimmed))
 
+    # **The turn bound, enforced by the code that already counts.** It was
+    # written as a check on TurnComplete events, and `turn()` emits exactly one
+    # of those -- at the end -- so the count never reached two and the bound
+    # could not fire at any setting. It exists in config and is documented, so
+    # an inert check is worse than no check: it reads as a limit that holds.
+    #
+    # What it can bound is the model-and-tool loop inside the turn, which the
+    # core enforces itself and reports on. Lowering that number here means the
+    # bound is applied by tested code on every path, including the ones that
+    # never emit an event.
+    rounds = min(config.model.max_tool_rounds, config.headless.max_turns)
+    if rounds != config.model.max_tool_rounds:
+        config = replace(config, model=replace(config.model, max_tool_rounds=rounds))
+
     return Ranger(
         config=config,
         provider=provider or build_provider(config),
@@ -260,31 +330,59 @@ async def run(
     partial answer in it, and "I read four of six accounts" is the answer worth
     having.
     """
-    global _running
+    record = Run(prompt=prompt, invoked_by=invoked_by, started=datetime.now())
 
+    if not str(prompt or "").strip():
+        record.outcome = REFUSED
+        record.why = "there was nothing to do: the prompt was empty"
+        record.finished = datetime.now()
+        return record
+
+    # **The guard is taken before anything else exists.** A headless turn that
+    # can start headless turns is a bound that multiplies, so the only way into
+    # the work below is to hold this, and holding it is what makes the run a
+    # run. Nothing is built, logged or awaited outside it.
+    try:
+        guard = _OneLevel().__enter__()
+    except Nested as exc:
+        record.outcome = REFUSED
+        record.why = str(exc)
+        record.finished = datetime.now()
+        return record
+
+    try:
+        return await _guarded(
+            config, prompt, record,
+            invoked_by=invoked_by, agent=agent, on_event=on_event,
+            max_seconds=max_seconds, max_turns=max_turns, max_tools=max_tools,
+            audit=audit, vault=vault, provider=provider,
+        )
+    finally:
+        guard.__exit__()
+
+
+async def _guarded(
+    config: Config,
+    prompt: str,
+    record: Run,
+    *,
+    invoked_by: str,
+    agent: Any,
+    on_event: Callable[[Any], None] | None,
+    max_seconds: float | None,
+    max_turns: int | None,
+    max_tools: int | None,
+    audit: Any,
+    vault: Any,
+    provider: Any,
+) -> Run:
+    """The run itself. Only ever called with the one-level guard held."""
     from .events import Notice, TextDelta, ToolFinished, TurnComplete
 
     limits = config.headless
     seconds = max_seconds if max_seconds is not None else limits.max_seconds
     turns_allowed = max_turns if max_turns is not None else limits.max_turns
     tools_allowed = max_tools if max_tools is not None else limits.max_tool_calls
-
-    record = Run(prompt=prompt, invoked_by=invoked_by, started=datetime.now())
-
-    if _running:
-        # A headless turn that can start headless turns is a bound that
-        # multiplies. One level until the bounds are proven on real work.
-        record.outcome = REFUSED
-        record.why = (
-            "a headless run is already in progress, and one cannot start another"
-        )
-        record.finished = datetime.now()
-        return record
-    if not str(prompt or "").strip():
-        record.outcome = REFUSED
-        record.why = "there was nothing to do: the prompt was empty"
-        record.finished = datetime.now()
-        return record
 
     agent = agent or build_agent(config, provider=provider, vault=vault, audit=audit)
     log = getattr(agent, "audit", None)
@@ -299,7 +397,6 @@ async def run(
 
     note("headless started", f"{invoked_by}: {prompt[:160]}")
     started = time.monotonic()
-    _running = True
     try:
         await _consume(
             agent, prompt, record, on_event,
@@ -321,7 +418,6 @@ async def run(
         record.outcome = FAILED
         record.why = f"{type(exc).__name__}: {exc}"
     finally:
-        _running = False
         record.finished = datetime.now()
         record.seconds = time.monotonic() - started
         if record.held and record.outcome == COMPLETED:
@@ -367,6 +463,12 @@ async def _consume(
                                          summary=event.summary))
             elif isinstance(event, Notice):
                 record.notices.append(event.message)
+                # The core ran out of tool rounds. That is a bound being hit,
+                # and a run that reported "completed" for it would be saying
+                # the work finished when it was cut off.
+                if "stopped after" in event.message and "tool rounds" in event.message:
+                    record.outcome = BOUNDED
+                    record.why = event.message
             elif isinstance(event, TurnComplete):
                 record.turns += 1
                 if event.reply:
@@ -382,15 +484,19 @@ async def _consume(
                     f"{len(record.steps)} tool call(s) done"
                 )
                 break
-            if len(record.steps) > tools_allowed:
+            # `>=`, not `>`. The bound is on calls *made*, so stopping once the
+            # allowance is used means exactly that many ran; `>` let one more
+            # through than the operator asked for, every time.
+            if len(record.steps) >= tools_allowed:
                 record.outcome = BOUNDED
                 record.why = (
-                    f"it made more than {tools_allowed} tool calls, so it was stopped"
+                    f"it used its {tools_allowed} tool call(s), so it was stopped"
                 )
                 break
-            if record.turns > turns_allowed:
-                record.outcome = BOUNDED
-                record.why = f"it took more than {turns_allowed} turns, so it was stopped"
-                break
+            # There is deliberately no check on `record.turns` here. `turn()`
+            # emits one TurnComplete, so a count of them can only ever reach
+            # one: the turn bound is applied to the agent in `build_agent`,
+            # where the core enforces it. A second check that cannot fire would
+            # read as a limit that holds.
 
     await asyncio.wait_for(drive(), timeout=seconds + HARD_GRACE_SECONDS)

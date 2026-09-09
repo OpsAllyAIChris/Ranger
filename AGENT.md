@@ -1421,6 +1421,40 @@ totals doubles the answer and the doubled figure looks entirely normal.
 
 Full write-up: `docs/analysis.md`.
 
+## A bound that passes on one platform was never enforced
+
+The third one of these, and now a rule.
+
+`test_a_headless_run_cannot_start_another` passed on Linux and failed on
+Windows: a headless run started another headless run. The guard was a module
+flag -- set when a run began, cleared when it ended -- and a flag answers *"is
+a run in progress right now"*, which is a question about the clock. The
+question that has to be answered is *"was this work started by a run"*, which
+is a question about the caller. A task spawned inside a run and executed after
+it finished saw a clear flag and went ahead. On Linux the scheduler happened to
+interleave that task inside the run, so it was refused, and the suite reported
+a guard that held.
+
+**A safety bound that holds on one platform and not another was never enforced.
+It was observed.** It belongs beside the other two of these:
+
+- `read_text()` turning CRLF into a doubled newline, invisible on Linux.
+- The totals-row exclusion written as `if group_at >= 0`, which never ran for
+  the question that was actually asked, and reported a figure that was exactly
+  double.
+
+The shape is always the same: something that looks like a rule is really a
+coincidence of the environment, and the environment that hides it is the one
+the tests run on. The fix is never a better test alone -- it is making the rule
+structural, and *then* writing the test that fails without it.
+
+For the nested guard that means a `ContextVar`: asyncio copies the current
+context into a task when the task is **created**, so work spawned inside a run
+carries the guard with it whenever it eventually runs, and the outer run's
+reset cannot reach into the copy. The test that proves it holds the spawned
+task on a gate until the outer run has finished, so the ordering that failed on
+Windows is the ordering the test runs every time.
+
 ## Item M: the headless caller
 
 The fifth caller. Speech, a typed turn, the heartbeat and the browser all enter
@@ -1441,8 +1475,10 @@ happen between events, so what was gathered comes back with it. "I read four
 accounts and here is what I found" is worth something; a bare timeout is worth
 nothing and sends the operator back to do it by hand.
 
-**It cannot start another one.** One level, guarded in code, until the bounds
-are proven on real work.
+**It cannot start another one.** One level, held by a `ContextVar` for the
+run's whole lifetime -- setup and teardown included, because entering the guard
+is what makes the run a run, so there is no instant when a run exists and the
+guard is not set.
 
 What comes back is a `Run`: prompt, outcome, text, every tool call, why it
 stopped, and `as_dict()` for persistence. That shape is chosen for what comes

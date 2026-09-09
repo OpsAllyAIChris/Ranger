@@ -316,11 +316,15 @@ class HeadlessConfig:
     #: and write something; short enough that a loop is over before it is
     #: noticed.
     max_seconds: float = 120.0
-    #: How many model turns. The core already caps tool rounds inside a turn;
-    #: this caps the turns themselves.
+    #: How many rounds of model-and-tools one run may take. Applied to the
+    #: agent the run builds, so the core enforces it and reports on it. It was
+    #: a check on completed turns, which a turn emits exactly one of, so it
+    #: could not fire at any setting -- an inert bound in config is worse than
+    #: no bound, because it reads as a limit that holds.
     max_turns: int = 6
     #: How many tool calls in total. The one that actually catches a loop: a
     #: confused model reaching for the same tool repeatedly hits this first.
+    #: It allows exactly this many; it used to allow one more.
     max_tool_calls: int = 20
     #: Trim the standing context for headless work. 0 means the same context an
     #: interactive turn gets, which is the default and is deliberate: prompt
