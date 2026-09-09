@@ -111,7 +111,10 @@ def test_a_document_opens_the_sheet_and_the_orb_steps_aside(rendered):
     opened = state(rendered, "document")
 
     assert opened["preview"]["hidden"] is False
-    assert opened["preview"]["children"] == 3, "chrome, caveat, body"
+    assert opened["preview"]["children"] == 4, (
+        "chrome, caveat, provenance, body -- the provenance line is new and "
+        "applies to every format: which file, when written, what it says"
+    )
     assert "previewing" in opened["bodyClass"]
     assert opened["offsets"] and opened["offsets"][-1] > 0
 
@@ -377,3 +380,111 @@ def test_the_analysis_sheet_has_the_same_close_control(rendered):
     labels = [node["text"] for node in walk(rendered["analysis"]) if node["clickable"]]
     assert "close" in labels
     assert "copy" in labels
+
+
+def _rule(css: str, selector: str) -> str:
+    """The declarations of one rule, by exact selector."""
+    import re as _re
+
+    match = _re.search(_re.escape(selector) + r"\s*\{([^}]*)\}", css)
+    assert match, f"no rule for {selector}"
+    return match.group(1)
+
+
+def _find(node, cls):
+    """The first node in a rendered tree carrying this class."""
+    if isinstance(node, dict):
+        if cls in str(node.get("class", "")):
+            return node
+        for child in node.get("children", []) or []:
+            found = _find(child, cls)
+            if found is not None:
+                return found
+    elif isinstance(node, list):
+        for child in node:
+            found = _find(child, cls)
+            if found is not None:
+                return found
+    return None
+
+
+# -- markdown drafts, previewed and copied ---------------------------------
+
+
+@needs_node
+def test_a_markdown_draft_has_a_preview_button(rendered):
+    """The panel offered one for a .pdf draft and not for a .md one, in the
+    same list, for the same need: reading the draft without opening Obsidian."""
+    assert rendered["markdownDraftHasPreview"] is True
+    assert rendered["sentByMarkdownPreview"] == [
+        {"type": "preview", "name": "Ranger/drafts/2026-09-08-telly.md"}
+    ], "and it asks the server, which is the one place that reads a file"
+
+
+@needs_node
+def test_the_markdown_preview_renders_in_the_same_sheet(rendered):
+    """Same sheet, same open and close, same orb offset. Not a second surface
+    that has to learn all of that again."""
+    states = {state["label"]: state for state in rendered["states"]}
+
+    assert states["markdown"]["preview"]["hidden"] is False
+    assert "previewing" in states["markdown"]["bodyClass"]
+    tree = json.dumps(rendered["markdown"])
+    assert "preview-rule" in tree, "a horizontal rule is drawn, not dropped"
+    assert "preview-provenance" in tree
+
+
+@needs_node
+def test_the_provenance_line_is_outside_the_draft(rendered):
+    """**Front matter above the draft, never inside it.**
+
+    "status: draft, not sent" copied into an email would be a bad day, and the
+    copy button takes what is in the body.
+    """
+    tree = rendered["markdown"]
+    body = json.dumps(_find(tree, "preview-body"))
+
+    assert "draft, not sent" in json.dumps(_find(tree, "preview-provenance"))
+    assert "draft, not sent" not in body
+    assert "2026-09-08" not in body
+
+
+@needs_node
+def test_copy_puts_plain_text_first_and_markdown_second(rendered):
+    """Plain text is the default because a draft full of ** and # landing in an
+    Outlook email is worse than having no button at all."""
+    plain, source = rendered["copied"]
+
+    assert "**" not in plain and "---" not in plain
+    assert "**RFQ**" in source, "the second button copies the file as written"
+
+
+@needs_node
+def test_a_refused_clipboard_says_so_rather_than_doing_nothing(rendered):
+    """**The failure that matters.** `navigator.clipboard` needs a secure
+    context and can still be refused, and a copy button that silently does
+    nothing is one the operator pastes stale content from without noticing.
+
+    Run here with no clipboard and a fallback that also fails, which is the
+    worst case. An earlier version threw out of the handler in exactly this
+    case and left the button reading "copy text", having done nothing.
+    """
+    assert rendered["afterRefusal"] == "press ctrl+C"
+
+
+def test_the_copy_state_is_visible_in_the_stylesheet():
+    """A DOM cannot say whether the operator can see the difference, and the
+    invisible clear button was exactly this bug once already."""
+    copied = _rule(CSS, ".preview-actions .copied")
+
+    assert "var(--accent)" in copied
+    assert "opacity: 0" not in copied
+    assert "--warn" not in CSS and "--good" not in CSS, (
+        "the file keeps two hues on purpose; a failed copy changes its words"
+    )
+
+
+def test_a_paragraph_keeps_the_line_breaks_it_was_written_with():
+    """A sign-off is two lines. Without pre-wrap the preview joins them, and
+    then what is on screen disagrees with what the copy button produces."""
+    assert "white-space: pre-wrap" in _rule(CSS, ".preview-p")

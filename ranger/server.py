@@ -59,6 +59,12 @@ LOCK_FILE = "server.json"
 #: still has one and nothing has to guess at the repository root.
 WEB_ROOT = Path(__file__).resolve().parent / "web"
 
+#: The suffixes the document route will hand back, inside the drafts folder and
+#: nowhere else. An explicit list, deliberately not `preview.KINDS`: teaching
+#: the preview a new format should not put that format on the network as a
+#: side effect.
+SERVED = (".docx", ".xlsx", ".pdf", ".md")
+
 
 def _force_types() -> None:
     """Windows reads MIME types out of the registry, and gets .js wrong.
@@ -320,9 +326,21 @@ class FrontEndHandler(SimpleHTTPRequestHandler):
 
         Three checks, in this order, and a 404 for every failure so that a
         probe learns nothing about what exists: the path resolves inside the
-        vault, it sits inside the drafts folder, and it is one of the kinds
-        Jarvis generates. The drafts folder also holds markdown that quotes
-        customer email, and none of that is served here.
+        vault, it sits inside the drafts folder, and its suffix is on the list
+        below.
+
+        **That list is written out here rather than taken from
+        `preview.KINDS`.** It used to be the same tuple, which meant teaching
+        the preview a new format would have put that format on the network
+        without anyone deciding to. What can be rendered and what can be
+        fetched over http are two questions.
+
+        Markdown is on the list now, and it was deliberately off it before:
+        drafts quote customer email. What changed is that the panel offers a
+        download for markdown drafts, and the .docx already served here is
+        assembled from the same account notes and the same pasted email. The
+        server binds to 127.0.0.1 and the folder check is unchanged, so the
+        reach of this is one more suffix inside one folder on one machine.
         """
         from urllib.parse import unquote
 
@@ -334,7 +352,6 @@ class FrontEndHandler(SimpleHTTPRequestHandler):
         wanted = unquote(encoded)
 
         try:
-            from .preview import KINDS
             from .vault import Vault, VaultError
 
             vault = Vault(config.vault)
@@ -342,8 +359,8 @@ class FrontEndHandler(SimpleHTTPRequestHandler):
             drafts = config.vault.drafts.resolve()
             if drafts not in target.resolve().parents:
                 raise VaultError("outside the drafts folder")
-            if target.suffix.lower().lstrip(".") not in KINDS or not target.is_file():
-                raise VaultError("not a generated document")
+            if target.suffix.lower() not in SERVED or not target.is_file():
+                raise VaultError("not a file this route serves")
         except Exception:
             self.log_error("refused a document request for %r", wanted)
             self.send_error(404, "not found")
@@ -351,6 +368,7 @@ class FrontEndHandler(SimpleHTTPRequestHandler):
 
         payload = target.read_bytes()
         kinds = {
+            ".md": "text/markdown; charset=utf-8",
             ".pdf": "application/pdf",
             ".docx": ("application/vnd.openxmlformats-officedocument"
                       ".wordprocessingml.document"),
@@ -359,7 +377,9 @@ class FrontEndHandler(SimpleHTTPRequestHandler):
         }
         # Word and Excel files are never displayed inline by a browser, so they
         # are always a download. A PDF is displayed unless the operator asked
-        # for the file itself.
+        # for the file itself. Markdown is always an attachment: a browser
+        # showing it inline would be a second, worse preview of a file that
+        # already has one.
         download = "download" in query or target.suffix.lower() != ".pdf"
         self.send_response(200)
         self.send_header("Content-Type", kinds.get(target.suffix.lower(), "application/octet-stream"))

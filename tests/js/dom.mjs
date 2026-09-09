@@ -27,6 +27,9 @@ class ClassList {
 }
 
 export class Element {
+  /** Enough of a textarea for the clipboard fallback to run its real path. */
+  select() { this.selected = true; }
+
   constructor(tag) {
     this.tagName = String(tag || 'div').toUpperCase();
     this.children = [];

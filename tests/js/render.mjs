@@ -94,7 +94,7 @@ const clear = rows
   .flatMap((row) => row.walk())
   .find((node) => node.classList.contains('dismiss') && typeof node.onclick === 'function');
 if (clear) clear.onclick();
-out.sent = socket.sent;
+out.sent = [...socket.sent];
 
 // A click on the import button of the dropped spreadsheet.
 const importButton = panel
@@ -166,7 +166,70 @@ const confirm = preview
   .walk()
   .find((node) => node.classList.contains('import-confirm'));
 if (confirm) confirm.onclick();
-out.sentAfterConfirm = socket.sent;
+out.sentAfterConfirm = [...socket.sent];
 out.states.push(state('after confirm'));
+
+// 8. A markdown draft, previewed in the same sheet. This is the case the
+// panel had no button for at all: a draft is an email about to be sent and
+// reading one meant opening Obsidian.
+socket.deliver({
+  kind: 'document',
+  format: 'md',
+  name: '2026-09-08-petmate-rfq.md',
+  relative: 'Ranger/drafts/2026-09-08-petmate-rfq.md',
+  caveat: "The draft itself, read off disk. The words are exact; the styling is this window's.",
+  front: { created: '2026-09-08', title: 'Petmate RFQ follow up',
+           account: 'Petmate', status: 'draft, not sent' },
+  source: '---\ntitle: Petmate RFQ follow up\n---\n\nHi Dave,\n\nThe **RFQ** is in.\n',
+  plain: 'Hi Dave,\n\nThe RFQ is in.\n',
+  blocks: [
+    { kind: 'text', text: 'Hi Dave,' },
+    { kind: 'text', text: 'The RFQ is in.' },
+    { kind: 'bullet', text: '6 week lead' },
+    { kind: 'rule', text: '' },
+    { kind: 'text', text: 'Best,\nChris' },
+  ],
+  sheets: [],
+  pages: null,
+  total_blocks: 5,
+  truncated: false,
+  error: '',
+  assembly: false,
+  url: '/document/Ranger/drafts/2026-09-08-petmate-rfq.md',
+  download: '/document/Ranger/drafts/2026-09-08-petmate-rfq.md?download=1',
+});
+out.states.push(state('markdown'));
+out.markdown = preview.describe();
+
+// The copy buttons, clicked. The clipboard is refused here on purpose: what
+// matters is that a refusal is visible rather than silent.
+const copied = [];
+window.navigator.clipboard = {
+  writeText(text) { copied.push(text); return Promise.resolve(); },
+};
+const copyText = preview.walk().find((node) => node.textContent === 'copy text');
+const copyMd = preview.walk().find((node) => node.textContent === 'copy markdown');
+if (copyText) await copyText.onclick();
+if (copyMd) await copyMd.onclick();
+out.copied = copied;
+out.copyLabels = [copyText && copyText.textContent, copyMd && copyMd.textContent];
+
+// And with no clipboard at all, which is what a refused permission looks like.
+window.navigator.clipboard = null;
+document.execCommand = () => false;
+if (copyText) await copyText.onclick();
+out.afterRefusal = copyText && copyText.textContent;
+
+// The panel's own preview button for a markdown draft.
+const mdRow = panel.walk().find((node) => node.classList.contains('entry')
+  && node.walk().some((n) => n.textContent === 'Telly follow up'));
+const mdPreview = mdRow && mdRow.walk()
+  .find((node) => node.classList.contains('preview-open') && node.textContent === 'preview');
+out.markdownDraftHasPreview = !!mdPreview;
+// A snapshot, never a clear: earlier steps hold `socket.sent` by reference and
+// emptying it here rewrote what they recorded.
+const before = socket.sent.length;
+if (mdPreview) mdPreview.onclick();
+out.sentByMarkdownPreview = socket.sent.slice(before);
 
 console.log(JSON.stringify(out, null, 1));

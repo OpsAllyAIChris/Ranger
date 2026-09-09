@@ -752,7 +752,6 @@ def test_the_pdf_can_be_asked_for_as_a_file(served):
 @pytest.mark.parametrize(
     "path",
     [
-        "/document/Ranger/drafts/2026-09-08-private.md",
         "/document/Ranger/memory/facts.md",
         "/document/../../../etc/passwd",
         "/document/Ranger/drafts/../../../etc/passwd",
@@ -761,12 +760,74 @@ def test_the_pdf_can_be_asked_for_as_a_file(served):
         "/document/",
     ],
 )
-def test_nothing_but_a_generated_document_is_reachable(served, path):
-    """The drafts folder also holds markdown that quotes customer email, and
-    the vault holds the accounts. One route, one folder, three kinds of file,
-    and a 404 for everything else so a probe learns nothing."""
+def test_nothing_outside_the_drafts_folder_is_reachable(served, path):
+    """The vault holds the accounts, and memory holds markdown of its own. One
+    route, one folder, and a 404 for everything else so a probe learns nothing.
+
+    Markdown *inside* drafts is reachable now and used to not be -- see the
+    next test. Note what did not change: `Ranger/memory/facts.md` is markdown
+    too and is still refused, because the folder check is what does the work
+    here, not the suffix.
+    """
     status, _, _ = fetch(served, path)
     assert status == 404
+
+
+def test_a_markdown_draft_is_served_as_an_attachment(served):
+    """**A deliberate widening, so it is written down.**
+
+    This route refused markdown on the grounds that drafts quote customer
+    email. It serves it now, because the panel offers a download for markdown
+    drafts and because the .docx already served here is assembled from the same
+    account notes and the same pasted email -- the distinction was between
+    "generated" and "written", not between sensitive and not.
+
+    What holds it in: 127.0.0.1, the drafts folder, and a suffix list of four.
+    """
+    status, headers, body = fetch(
+        served, "/document/Ranger/drafts/2026-09-08-private.md"
+    )
+
+    assert status == 200
+    assert headers["Content-Disposition"].startswith("attachment"), (
+        "never inline: a browser rendering it would be a second, worse preview"
+    )
+    assert headers["Content-Type"].startswith("text/markdown")
+    assert body == b"customer email, pasted\n", "the file, byte for byte"
+
+
+@pytest.mark.parametrize("name", ["notes.txt", "book.json", "sheet.csv", "run.py"])
+def test_other_text_in_the_drafts_folder_is_still_refused(served, name):
+    """The suffix list is a list, not "anything that is text now that markdown
+    is allowed". A .csv in drafts is a dropped export and has no business on
+    this route."""
+    status, _, _ = fetch(served, f"/document/Ranger/drafts/{name}")
+
+    assert status == 404
+
+
+def test_what_is_served_is_decided_separately_from_what_is_previewable():
+    """They were the same tuple, so teaching the preview a new format would
+    have put that format on the network with nobody deciding to.
+
+    Asked of the code rather than the file, because the file explains at
+    length that it is *not* using `preview.KINDS` and a plain text search
+    reads that explanation as the thing it warns about.
+    """
+    import ast
+    import inspect
+
+    from ranger import preview, server
+
+    assert server.SERVED, "an explicit list of its own"
+    names = {
+        node.id if isinstance(node, ast.Name) else node.attr
+        for node in ast.walk(ast.parse(inspect.getsource(server)))
+        if isinstance(node, (ast.Name, ast.Attribute))
+    }
+    assert "KINDS" not in names, "the route must not read preview.KINDS"
+
+    assert ".md" in server.SERVED and "md" in preview.KINDS
 
 
 # -- the front end, as far as it can be checked from here ------------------

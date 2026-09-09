@@ -1,0 +1,406 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Does Chrome's echo canceller see Web Audio output?</title>
+<!--
+  A diagnostic, not part of the interface. Nothing here talks to Ranger and
+  nothing is written anywhere.
+
+  ONE QUESTION. Barge-in currently separates the operator from Jarvis's echo by
+  level, and on measured hardware the echo reaches the microphone as loudly as
+  the operator does, so no ratio works. The proposed fix is to capture through
+  getUserMedia({echoCancellation: true}), where the browser has both the played
+  and the captured signal and can subtract rather than outrank.
+
+  That rests on an assumption nobody has checked: that Chrome's AEC3 includes
+  **Web Audio output** in its render reference. Jarvis plays TTS through an
+  AudioBufferSourceNode, not an <audio> element, and if AEC does not see that
+  path then the whole approach is worthless.
+
+  So the playback below is not "a tone". It is the exact path voice.js uses:
+  int16 little endian samples, createBuffer at 24000, a BufferSourceNode
+  through an AnalyserNode to context.destination. If that path is cancelled,
+  the real one is.
+-->
+<style>
+  :root { color-scheme: dark; }
+  body {
+    margin: 0; padding: 2.5rem 2rem; background: #0b0d12; color: #d7dae2;
+    font: 15px/1.6 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    max-width: 46rem;
+  }
+  h1 { font-size: 1.35rem; margin: 0 0 .3rem; color: #f2f4f8; }
+  .sub { color: #8b93a4; margin: 0 0 2rem; }
+  h2 { font-size: 1rem; margin: 2rem 0 .5rem; color: #f2f4f8; }
+  p { margin: .5rem 0; }
+  button {
+    font: inherit; padding: .6rem 1.1rem; border-radius: .5rem; cursor: pointer;
+    background: #2c6e5d; color: #eafff8; border: 1px solid #3a8b76;
+  }
+  button:disabled { opacity: .45; cursor: default; }
+  button.secondary { background: #1a1e28; color: #b6bdcb; border-color: #2c3342; }
+  .row { display: flex; gap: .6rem; align-items: center; flex-wrap: wrap; }
+  .meter { height: 10px; background: #171b24; border-radius: 5px; overflow: hidden; margin: .8rem 0; }
+  .meter > i { display: block; height: 100%; width: 0; background: #4fd1b0; transition: width .05s linear; }
+  table { border-collapse: collapse; width: 100%; margin: 1rem 0; }
+  th, td { text-align: left; padding: .45rem .6rem; border-bottom: 1px solid #212632; }
+  th { color: #8b93a4; font-weight: 500; }
+  td.n { font-variant-numeric: tabular-nums; text-align: right; }
+  code, .mono { font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; font-size: .9em; }
+  .verdict { padding: 1rem 1.2rem; border-radius: .6rem; margin: 1.2rem 0; border: 1px solid; }
+  .good { background: #10241e; border-color: #2f7a63; color: #b8f0de; }
+  .bad  { background: #2a1417; border-color: #8b3a44; color: #f7c5cc; }
+  .warn { background: #2a2312; border-color: #8b7434; color: #f2dfae; }
+  .dim { color: #8b93a4; }
+  ol { padding-left: 1.2rem; } li { margin: .35rem 0; }
+  pre { background: #111520; padding: .8rem 1rem; border-radius: .5rem; overflow-x: auto; }
+</style>
+
+<h1>Does Chrome's echo canceller see Web Audio output?</h1>
+<p class="sub">
+  A ten minute answer to the one assumption the browser-microphone plan rests
+  on. Nothing here touches Ranger, the vault, or any file.
+</p>
+
+<h2>Before you press anything</h2>
+<ol>
+  <li><strong>Speakers, not a headset.</strong> The whole point is the echo
+      path. On a headset there is nothing to cancel and every number comes out
+      near silence, which looks like success and proves nothing.</li>
+  <li><strong>Normal speaker volume</strong> — the one you use for Jarvis.</li>
+  <li><strong>Say nothing while it runs.</strong> Each pass is four seconds and
+      it announces which one it is about to do.</li>
+  <li>To answer the second question at the same time, start
+      <code>ranger mic</code> in a terminal first and leave it running. If the
+      capture below works while that is showing levels, PortAudio and Chrome
+      can hold the microphone at once.</li>
+</ol>
+
+<div class="row">
+  <button id="run">Run all four passes</button>
+  <button id="stop" class="secondary" disabled>Stop</button>
+</div>
+<div class="meter"><i id="bar"></i></div>
+<p id="status" class="dim">Not started.</p>
+
+<table>
+  <thead>
+    <tr><th>Pass</th><th class="n">held</th><th class="n">mean</th><th class="n">peak</th><th>what it is</th></tr>
+  </thead>
+  <tbody id="results"></tbody>
+</table>
+
+<div id="verdict"></div>
+
+<h2 id="detail-head" hidden>What Chrome actually applied</h2>
+<pre id="detail" hidden></pre>
+
+<script type="module">
+// Levels are reported in the same units as `ranger mic-bargein` -- int16 RMS,
+// 0 to 32768 -- so the numbers here sit beside the ones already measured
+// rather than needing to be converted in somebody's head.
+const SCALE = 32768;
+//: 80ms at 16kHz is the frame everything else in Ranger is measured over, and
+//: `held` means the same here as it does there: the level a pass stayed above
+//: for three consecutive frames. A peak is one frame and is not what a
+//: detector can act on.
+const FRAME_MS = 80;
+const HELD_FRAMES = 3;
+const PASS_SECONDS = 4;
+
+const el = (id) => document.getElementById(id);
+const results = el('results');
+let cancelled = false;
+
+function held(levels, frames = HELD_FRAMES) {
+  if (levels.length < frames) return 0;
+  let best = 0;
+  for (let i = 0; i + frames <= levels.length; i++) {
+    let low = Infinity;
+    for (let j = 0; j < frames; j++) low = Math.min(low, levels[i + j]);
+    best = Math.max(best, low);
+  }
+  return best;
+}
+
+function row(name, levels, note) {
+  const mean = levels.length ? levels.reduce((a, b) => a + b, 0) / levels.length : 0;
+  const peak = levels.length ? Math.max(...levels) : 0;
+  const tr = document.createElement('tr');
+  for (const [text, cls] of [[name, ''], [held(levels).toFixed(0), 'n'],
+                             [mean.toFixed(0), 'n'], [peak.toFixed(0), 'n'],
+                             [note, 'dim']]) {
+    const td = document.createElement('td');
+    td.className = cls;
+    td.textContent = text;
+    tr.appendChild(td);
+  }
+  results.appendChild(tr);
+  return { held: held(levels), mean, peak };
+}
+
+/**
+ * The sentence Jarvis would say, as int16 at 24000.
+ *
+ * Speech-shaped rather than a tone: band limited noise with a syllabic
+ * envelope around 4Hz and a pitch-like buzz under it. An echo canceller is
+ * built for speech and a pure tone is the one signal it is worst at, so a tone
+ * would understate cancellation and could fail this test on a system that
+ * works perfectly for the real thing.
+ */
+function sentence(seconds = PASS_SECONDS) {
+  const rate = 24000;
+  const n = Math.floor(rate * seconds);
+  const out = new Int16Array(n);
+  let low = 0, band = 0;
+  for (let i = 0; i < n; i++) {
+    const t = i / rate;
+    // Syllables: roughly four a second, never quite reaching zero between.
+    const syllable = 0.55 + 0.45 * Math.abs(Math.sin(2 * Math.PI * 4.1 * t));
+    // Phrases: a breath every couple of seconds, like a real sentence.
+    const phrase = t % 2.3 > 2.0 ? 0.15 : 1;
+    const buzz = Math.sin(2 * Math.PI * 118 * t) * 0.35;
+    const noise = Math.random() * 2 - 1;
+    low = low * 0.72 + noise * 0.28;            // a formant-ish low band
+    band = band * 0.55 + (noise - low) * 0.45;  // and something above it
+    const value = (low * 1.5 + band * 0.6 + buzz) * syllable * phrase * 0.42;
+    out[i] = Math.max(-32768, Math.min(32767, Math.round(value * 32768)));
+  }
+  return out;
+}
+
+/**
+ * Play it the way voice.js plays it, and no other way.
+ *
+ * createBuffer at 24000 from int16, a BufferSourceNode through an
+ * AnalyserNode to context.destination. If this page played through an <audio>
+ * element it would answer a different question and the answer would be yes.
+ */
+function play(context, pcm) {
+  const buffer = context.createBuffer(1, pcm.length, 24000);
+  const target = buffer.getChannelData(0);
+  for (let i = 0; i < pcm.length; i++) target[i] = pcm[i] / 32768;
+
+  const analyser = context.createAnalyser();
+  analyser.fftSize = 1024;
+  analyser.connect(context.destination);
+  const source = context.createBufferSource();
+  source.buffer = buffer;
+  source.connect(analyser);
+  source.start();
+  return source;
+}
+
+/** Open the microphone, and say precisely why if it will not open. */
+async function microphone(echoCancellation) {
+  try {
+    return await navigator.mediaDevices.getUserMedia({
+      audio: {
+        echoCancellation,
+        // Held with echoCancellation deliberately. Noise suppression removing
+        // the echo would answer the question with the wrong mechanism, and the
+        // real path would then behave differently the moment it was turned off.
+        noiseSuppression: false,
+        autoGainControl: false,
+      },
+    });
+  } catch (err) {
+    if (err && err.name === 'NotReadableError') {
+      throw new Error(
+        'the microphone opened but could not be read (NotReadableError). ' +
+        'That is what an exclusive hold looks like: something else owns the ' +
+        'device. If `ranger mic` is running, this is the answer to the ' +
+        'second question, and it is no.'
+      );
+    }
+    if (err && err.name === 'NotAllowedError') {
+      throw new Error('permission was refused. Chrome needs it once per origin.');
+    }
+    throw new Error(`${err && err.name}: ${err && err.message}`);
+  }
+}
+
+/** Four seconds of levels from a stream, in int16 RMS, one per 80ms frame. */
+async function listen(context, stream, seconds, onLevel) {
+  const source = context.createMediaStreamSource(stream);
+  const analyser = context.createAnalyser();
+  analyser.fftSize = 2048;
+  // Through a silent gain to destination: an analyser that is not part of a
+  // graph being pulled is not guaranteed to be fed, and the gain is zero so
+  // nothing of the microphone is rendered back into the room.
+  const silent = context.createGain();
+  silent.gain.value = 0;
+  source.connect(analyser);
+  analyser.connect(silent);
+  silent.connect(context.destination);
+
+  const buffer = new Float32Array(analyser.fftSize);
+  const levels = [];
+  const until = performance.now() + seconds * 1000;
+  while (performance.now() < until && !cancelled) {
+    await new Promise((r) => setTimeout(r, FRAME_MS));
+    analyser.getFloatTimeDomainData(buffer);
+    let sum = 0;
+    for (let i = 0; i < buffer.length; i++) sum += buffer[i] * buffer[i];
+    const level = Math.sqrt(sum / buffer.length) * SCALE;
+    levels.push(level);
+    if (onLevel) onLevel(level);
+  }
+  source.disconnect(); analyser.disconnect(); silent.disconnect();
+  return levels;
+}
+
+function close(stream) {
+  for (const track of stream.getTracks()) track.stop();
+}
+
+async function pass(context, { echoCancellation, playing, label, note }) {
+  el('status').textContent = `${label} -- stay quiet...`;
+  const stream = await microphone(echoCancellation);
+  const settings = stream.getAudioTracks()[0].getSettings();
+  // A fresh device session per pass. Reusing one stream and hoping the
+  // constraint re-applies is how a comparison ends up comparing one thing
+  // with itself.
+  let source = null;
+  if (playing) source = play(context, sentence(PASS_SECONDS + 1));
+  const levels = await listen(context, stream, PASS_SECONDS,
+    (level) => { el('bar').style.width = Math.min(100, level / 80) + '%'; });
+  if (source) { try { source.stop(); } catch (e) {} }
+  close(stream);
+  el('bar').style.width = '0%';
+  await new Promise((r) => setTimeout(r, 400));
+  return { levels, settings, stats: row(label, levels, note) };
+}
+
+function verdict(html, kind) {
+  const box = el('verdict');
+  box.className = 'verdict ' + kind;
+  box.innerHTML = html;
+}
+
+async function run() {
+  cancelled = false;
+  results.replaceChildren();
+  el('verdict').className = '';
+  el('verdict').innerHTML = '';
+  el('run').disabled = true;
+  el('stop').disabled = false;
+
+  const context = new (window.AudioContext || window.webkitAudioContext)();
+  if (context.state === 'suspended') await context.resume();
+
+  try {
+    const room = await pass(context, {
+      echoCancellation: true, playing: false,
+      label: 'room', note: 'nothing playing. The control.',
+    });
+    const off = await pass(context, {
+      echoCancellation: false, playing: true,
+      label: 'playing, AEC off', note: 'what the microphone hears with no help.',
+    });
+    const on = await pass(context, {
+      echoCancellation: true, playing: true,
+      label: 'playing, AEC on', note: 'the question.',
+    });
+    const after = await pass(context, {
+      echoCancellation: true, playing: false,
+      label: 'room again', note: 'the room did not change under us.',
+    });
+
+    el('detail-head').hidden = false;
+    el('detail').hidden = false;
+    el('detail').textContent = [
+      'requested echoCancellation: true  -> applied: ' +
+        JSON.stringify(on.settings.echoCancellation),
+      'requested echoCancellation: false -> applied: ' +
+        JSON.stringify(off.settings.echoCancellation),
+      '',
+      'full settings, AEC on:',
+      JSON.stringify(on.settings, null, 2),
+    ].join('\n');
+
+    el('status').textContent = 'Done.';
+    judge(room.stats, off.stats, on.stats, after.stats, on.settings, off.settings);
+  } catch (err) {
+    el('status').textContent = '';
+    verdict(`<strong>Could not finish.</strong><br>${err.message}`, 'bad');
+  } finally {
+    el('run').disabled = false;
+    el('stop').disabled = true;
+    el('bar').style.width = '0%';
+    try { await context.close(); } catch (e) {}
+  }
+}
+
+/**
+ * The reading, including the ways this test can lie.
+ *
+ * The dangerous failure is a silent speaker: it makes every pass equal to the
+ * room, which looks exactly like perfect cancellation. So the echo has to be
+ * shown to exist before its absence means anything.
+ */
+function judge(room, off, on, after, onSettings, offSettings) {
+  const floor = Math.max(room.held, after.held, 1);
+
+  if (Math.abs(room.held - after.held) > Math.max(300, floor * 1.5)) {
+    verdict(
+      `<strong>The room changed while this ran.</strong> It held ` +
+      `${room.held.toFixed(0)} before and ${after.held.toFixed(0)} after, so ` +
+      `the two playing passes were not measured against the same room. ` +
+      `Run it again when it is quieter.`, 'warn');
+    return;
+  }
+  if (off.held < floor * 2.5) {
+    verdict(
+      `<strong>No echo to cancel, so this proves nothing.</strong> With the ` +
+      `canceller off the microphone heard ${off.held.toFixed(0)}, against a ` +
+      `room of ${floor.toFixed(0)}. Either the speakers are muted or off, the ` +
+      `volume is very low, or you are on a headset. All three make ` +
+      `cancellation look perfect. Turn the speakers up and run it again.`,
+      'warn');
+    return;
+  }
+  if (onSettings.echoCancellation === false) {
+    verdict(
+      `<strong>Chrome refused the constraint.</strong> It was asked for ` +
+      `echoCancellation and reported <code>false</code>, so the "AEC on" pass ` +
+      `never had it on. That is a device or driver refusal rather than an ` +
+      `answer about Web Audio -- try the other microphone, or a different ` +
+      `input device in Windows sound settings.`, 'bad');
+    return;
+  }
+
+  const reduction = off.held / Math.max(on.held, 1);
+  const aboveRoom = on.held / floor;
+  if (reduction >= 3 && aboveRoom < 2.5) {
+    verdict(
+      `<strong>Yes. Chrome's echo canceller sees Web Audio output.</strong><br>` +
+      `The echo held ${off.held.toFixed(0)} uncancelled and ` +
+      `${on.held.toFixed(0)} cancelled, a reduction of ` +
+      `${reduction.toFixed(1)}x, against a room holding ${floor.toFixed(0)}. ` +
+      `Cancelled, Jarvis is within ${aboveRoom.toFixed(1)}x of silence.<br><br>` +
+      `The browser microphone plan is sound: the echo would be subtracted ` +
+      `rather than outranked, and the levels that currently overlap would not.`,
+      'good');
+  } else if (reduction >= 1.6) {
+    verdict(
+      `<strong>Partly, and partly is not enough to build on.</strong><br>` +
+      `The echo held ${off.held.toFixed(0)} uncancelled and ` +
+      `${on.held.toFixed(0)} cancelled -- ${reduction.toFixed(1)}x, against a ` +
+      `room of ${floor.toFixed(0)}. Something is being cancelled, but Jarvis ` +
+      `is still ${aboveRoom.toFixed(1)}x above the room, so the separation is ` +
+      `still a level comparison and it can still be lost.<br><br>` +
+      `Worth reporting before anything is built on it.`, 'warn');
+  } else {
+    verdict(
+      `<strong>No. The echo canceller does not see Web Audio output.</strong><br>` +
+      `The echo held ${off.held.toFixed(0)} uncancelled and ` +
+      `${on.held.toFixed(0)} cancelled, which is ${reduction.toFixed(1)}x -- ` +
+      `no meaningful change, against a room of ${floor.toFixed(0)}.<br><br>` +
+      `Moving capture into the browser would not fix barge-in on this machine. ` +
+      `Do not build it. Report this number.`, 'bad');
+  }
+}
+
+el('run').onclick = run;
+el('stop').onclick = () => { cancelled = true; el('status').textContent = 'Stopped.'; };
+</script>

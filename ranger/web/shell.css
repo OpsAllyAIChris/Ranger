@@ -398,7 +398,43 @@ body.previewing #cards { transform: translateX(calc(min(46vw, 720px) - 26px + 18
 .preview-h1 { font-size: 17px; }
 .preview-h2 { font-size: 15px; }
 .preview-h3, .preview-h4 { font-size: 13px; color: var(--ink-dim); }
-.preview-p { margin: 0 0 8px; }
+/* pre-wrap, because a paragraph carries the line breaks the writer chose. A
+   sign-off is two lines; the preview reads wrong if they are joined, and the
+   copied text would then disagree with what is on the screen. */
+.preview-p { margin: 0 0 8px; white-space: pre-wrap; }
+.preview-p.code {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  margin: 0;
+  color: var(--ink-dim);
+}
+.preview-p.quote {
+  border-left: 2px solid var(--hairline);
+  padding-left: 10px;
+  color: var(--ink-dim);
+}
+.preview-rule {
+  height: 1px;
+  background: var(--hairline);
+  border: 0;
+  margin: 14px 0;
+}
+/* Which file, when it was written, what it says about itself. Below the
+   caveat and above the draft, never inside it: "status: draft, not sent"
+   copied into an email is the reason it is not part of the body. */
+.preview-provenance {
+  padding: 6px 14px;
+  font-size: 10.5px;
+  color: var(--ink-faint);
+  border-bottom: 1px solid var(--hairline);
+  word-break: break-word;
+}
+/* The copy buttons say what happened. A copy control that looks identical
+   before and after the click is one the operator pastes stale text from.
+   Success takes the accent; failure changes its words rather than bringing in
+   a third hue, which this file has spent two comments refusing to do. */
+.preview-actions .copied { color: var(--accent); border-color: currentColor; }
+.preview-actions .failed { color: var(--ink); border-color: currentColor; }
 .preview-bullet { margin: 0 0 5px 14px; position: relative; }
 .preview-bullet::before {
   content: '';

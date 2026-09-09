@@ -44,7 +44,7 @@ from typing import Any
 from xml.etree import ElementTree
 
 #: What can be previewed, and how honest each one is.
-KINDS = ("docx", "xlsx", "pdf")
+KINDS = ("docx", "xlsx", "pdf", "md")
 
 W = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
 S = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
@@ -54,6 +54,10 @@ R = "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}"
 #: this file: it is the difference between a preview and a claim about Word.
 CAVEATS = {
     "pdf": "The real PDF, rendered by the browser. Exact.",
+    "md": (
+        "The draft itself, read off disk. The words are exact; the styling is "
+        "this window's."
+    ),
     "docx": (
         "Approximate. This is the text and tables read out of the file, not "
         "Word's rendering: fonts, spacing, page breaks and layout will differ."
@@ -121,6 +125,12 @@ class Preview:
     sheets: list[Sheet] = field(default_factory=list)
     #: PDF only. The browser fetches the file itself.
     pages: int | None = None
+    #: Markdown only: the front matter, as written. Provenance, not content --
+    #: it is drawn as a line above the draft rather than as part of it, because
+    #: "status: draft, not sent" pasted into an email would be a bad day.
+    front: dict[str, str] = field(default_factory=dict)
+    #: Markdown only: the file's own text, for copying the source out.
+    source: str = ""
     total_blocks: int = 0
     truncated: bool = False
     error: str = ""
@@ -134,6 +144,9 @@ class Preview:
             "blocks": self.blocks,
             "sheets": [sheet.as_dict() for sheet in self.sheets],
             "pages": self.pages,
+            "front": self.front,
+            "source": self.source,
+            "plain": self.as_plain(),
             "total_blocks": self.total_blocks,
             "truncated": self.truncated,
             "error": self.error,
@@ -163,6 +176,85 @@ class Preview:
             if sheet.formulas:
                 lines.append(f"({sheet.formulas} formula cells, not shown)")
         return "\n".join(lines)
+
+
+    def as_plain(self) -> str:
+        """The same content with the markup taken off, for pasting elsewhere.
+
+        **Not `as_text()`.** That one puts markdown back on -- `#` for
+        headings, `-` for bullets -- because its reader is a model that
+        benefits from the structure. This one is for an Outlook window, where a
+        heading is a line and `**bold**` is two asterisks somebody has to
+        delete by hand.
+
+        Built from the same blocks the preview draws, so what is copied is what
+        was on the screen, and a table keeps its tabs so that pasting into Word
+        or Excel lands in cells.
+        """
+        lines: list[str] = []
+        previous = ""
+        for block in self.blocks:
+            kind = block["kind"]
+            # A blank line between paragraphs, and between a run of bullets and
+            # whatever follows it -- but not between two bullets, which are a
+            # list and read as one.
+            if lines and not (kind == "bullet" and previous == "bullet"):
+                lines.append("")
+            previous = kind
+            if kind == "table":
+                for row in block.get("rows", []):
+                    lines.append("\t".join(row))
+                continue
+            if kind == "rule":
+                lines.append("---")
+                continue
+            text = strip_markup(block.get("text", ""))
+            lines.append("\u2022 " + text if kind == "bullet" else text)
+        for sheet in self.sheets:
+            if lines:
+                lines.append("")
+            lines.append(sheet.name)
+            for row in sheet.rows:
+                lines.append("\t".join(row.cells))
+        # Collapse the runs of blank lines that headings and tables leave
+        # behind, but keep single ones: paragraph breaks are the shape of an
+        # email.
+        out: list[str] = []
+        for line in lines:
+            if not line.strip() and out and not out[-1].strip():
+                continue
+            out.append(line.rstrip())
+        return "\n".join(out).strip() + "\n"
+
+
+#: Inline markdown, in the order it has to come off. Emphasis before bold would
+#: leave a stray asterisk on every bold word.
+_INLINE = (
+    (re.compile(r"!\[([^\]]*)\]\([^)]*\)"), r"\1"),      # image, keep the alt
+    (re.compile(r"\[([^\]]+)\]\(([^)]*)\)"), r"\1 (\2)"),  # link, keep the target
+    (re.compile(r"\*\*\*(.+?)\*\*\*"), r"\1"),
+    (re.compile(r"\*\*(.+?)\*\*"), r"\1"),
+    (re.compile(r"(?<!\w)_{2}(.+?)_{2}(?!\w)"), r"\1"),
+    (re.compile(r"(?<!\*)\*(?!\s)(.+?)(?<!\s)\*(?!\*)"), r"\1"),
+    (re.compile(r"(?<!\w)_(?!\s)(.+?)(?<!\s)_(?!\w)"), r"\1"),
+    (re.compile(r"`([^`]+)`"), r"\1"),
+    (re.compile(r"~~(.+?)~~"), r"\1"),
+)
+
+
+def strip_markup(text: str) -> str:
+    """Markdown syntax off, the words left alone.
+
+    Deliberately conservative. An underscore inside a word is a filename or a
+    column header far more often than it is emphasis, and a lone asterisk in a
+    sentence is usually a footnote mark. Taking off less than a full markdown
+    parser would is the right error to make: a stray character in an email is
+    a typo, and a mangled account name is a mistake in front of a customer.
+    """
+    out = text
+    for pattern, replacement in _INLINE:
+        out = pattern.sub(replacement, out)
+    return out
 
 
 def kind_of(path: Path) -> str:
@@ -195,6 +287,8 @@ def preview(path: Path, *, root: Path | None = None, max_blocks: int = MAX_BLOCK
             return _docx(path, base, max_blocks)
         if kind == "xlsx":
             return _xlsx(path, base, max_rows)
+        if kind == "md":
+            return _markdown(path, base, max_blocks)
         return _pdf(path, base)
     except PreviewError:
         raise
@@ -405,4 +499,157 @@ def _pdf(path: Path, base: Preview) -> Preview:
         raise PreviewError(f"{path.name} does not start with a PDF header")
     found = len(_PAGE_COUNT.findall(payload))
     base.pages = found or None
+    return base
+
+
+# -- markdown ---------------------------------------------------------------
+#
+# The easy case, and the one that is read most: drafts are emails and notes and
+# the operator wants to read one without opening Obsidian.
+#
+# Blocks come out in the same shape the .docx reader produces -- heading, text,
+# bullet, table -- so the browser draws them with the same code and there is
+# one renderer rather than two that drift.
+
+#: A line at least this long is taken to have been wrapped rather than ended.
+#: Below the narrowest wrap width anyone uses, above a sign-off or an address
+#: line.
+WRAPPED = 60
+
+_MD_HEADING = re.compile(r"^(?P<hashes>#{1,6})\s+(?P<text>.+?)\s*#*$")
+_MD_BULLET = re.compile(r"^\s*(?:[-*+]|\d{1,3}[.)])\s+(?P<text>.+)$")
+_MD_RULE = re.compile(r"^\s*(?:[-*_]\s*){3,}$")
+_MD_QUOTE = re.compile(r"^\s*>\s?(?P<text>.*)$")
+_MD_ROW = re.compile(r"^\s*\|(?P<cells>.+)\|\s*$")
+_MD_DIVIDER = re.compile(r"^\s*\|?[\s:|-]+\|[\s:|-]*$")
+
+
+def front_matter(text: str) -> tuple[dict[str, str], str]:
+    """The `---` block at the top, and the rest.
+
+    Split off rather than rendered. It is provenance -- created, title,
+    account, status -- and it belongs above the draft as a line about the file,
+    not inside it where "status: draft, not sent" could be copied into an email.
+    """
+    match = _FRONT.match(text)
+    if not match:
+        return {}, text
+    fields: dict[str, str] = {}
+    for line in match.group("body").splitlines():
+        key, sep, value = line.partition(":")
+        if sep and key.strip():
+            fields[key.strip()] = value.strip()
+    return fields, text[match.end():]
+
+
+_FRONT = re.compile(r"\A---\n(?P<body>.*?)\n---\n?", re.DOTALL)
+
+
+def _markdown(path: Path, base: Preview, max_blocks: int) -> Preview:
+    try:
+        text = path.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        # Written on Windows by something other than Jarvis. Read it rather
+        # than refusing it: a draft that cannot be read is worse than one shown
+        # with a wrong dash.
+        text = path.read_text(encoding="cp1252", errors="replace")
+
+    base.front, body = front_matter(text)
+    base.source = text
+    blocks: list[dict[str, Any]] = []
+    rows: list[list[str]] = []
+    para: list[str] = []
+    fenced = False
+
+    def close_table() -> None:
+        nonlocal rows
+        if rows:
+            blocks.append({"kind": "table", "rows": rows})
+            rows = []
+
+    def close_para() -> None:
+        """Consecutive lines into one paragraph, except where the break meant
+        something.
+
+        Markdown says consecutive lines are one paragraph, and a draft
+        hard-wrapped at eighty characters must not paste into Outlook with a
+        break every eighty characters. But::
+
+            Best,
+            Chris
+
+        is two lines on purpose, and joining them is just as wrong the other
+        way. Markdown's own answer -- two trailing spaces -- is not something
+        anybody types, and these drafts are written to be read as email.
+
+        **So the previous line's length decides.** A line that ran to near the
+        wrap width was wrapped; a short one ended because somebody ended it.
+        A heuristic, and wrong sometimes: a short line in the middle of a
+        wrapped paragraph keeps a break it did not ask for. That is the
+        harmless direction -- a stray break in an email is a typo, a sign-off
+        run onto one line is a draft that looks careless.
+        """
+        nonlocal para
+        if not para:
+            return
+        text = para[0]
+        for line in para[1:]:
+            text += (" " if len(text.rsplit("\n", 1)[-1]) >= WRAPPED else "\n") + line
+        blocks.append({"kind": "text", "text": text})
+        para = []
+
+    for line in body.splitlines():
+        if line.strip().startswith("```"):
+            close_para()
+            close_table()
+            fenced = not fenced
+            continue
+        if fenced:
+            # Inside a fence the text is literal: kept verbatim, never joined
+            # into a paragraph, and never has markup stripped off it.
+            blocks.append({"kind": "text", "text": line, "code": True})
+            continue
+
+        row = _MD_ROW.match(line)
+        if row and not _MD_DIVIDER.match(line):
+            close_para()
+            rows.append([cell.strip() for cell in row.group("cells").split("|")])
+            continue
+        if _MD_DIVIDER.match(line) and rows:
+            continue
+        close_table()
+
+        if not line.strip():
+            close_para()
+            continue
+        if _MD_RULE.match(line):
+            close_para()
+            blocks.append({"kind": "rule", "text": ""})
+            continue
+        heading = _MD_HEADING.match(line)
+        if heading:
+            close_para()
+            blocks.append({
+                "kind": "heading",
+                "level": len(heading.group("hashes")),
+                "text": heading.group("text"),
+            })
+            continue
+        bullet = _MD_BULLET.match(line)
+        if bullet:
+            close_para()
+            blocks.append({"kind": "bullet", "text": bullet.group("text")})
+            continue
+        quote = _MD_QUOTE.match(line)
+        if quote:
+            close_para()
+            blocks.append({"kind": "text", "text": quote.group("text"), "quote": True})
+            continue
+        para.append(line.strip())
+    close_para()
+    close_table()
+
+    base.total_blocks = len(blocks)
+    base.truncated = len(blocks) > max_blocks
+    base.blocks = blocks[:max_blocks]
     return base

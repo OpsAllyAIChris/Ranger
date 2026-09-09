@@ -834,20 +834,28 @@ class Session:
     # -- documents -----------------------------------------------------
 
     def _find_document(self, name: str):
-        """One generated document in the drafts folder, by name or by path."""
+        """One previewable file in the drafts folder, by name or by path.
+
+        Markdown counts. A draft is the thing most often read back -- it is an
+        email somebody is about to send -- and "open Obsidian, find the file"
+        was the path to reading one. The filter is what `preview` can render
+        rather than "is not markdown", so the two cannot disagree about what
+        the panel offers.
+        """
         from .ownfiles import find, listing
+        from .preview import previewable
 
         wanted = str(name or "").strip()
         if not wanted:
             return None
-        files = [f for f in listing(self.agent.vault, self.agent.config, "drafts")
-                 if f.is_document]
-        found, _ = find(files, wanted)
-        if found is None:
-            cleared = [f for f in listing(self.agent.vault, self.agent.config, "drafts",
-                                          cleared=True) if f.is_document]
-            found, _ = find(cleared, wanted)
-        return found
+        for cleared in (False, True):
+            files = [f for f in listing(self.agent.vault, self.agent.config,
+                                        "drafts", cleared=cleared)
+                     if previewable(f.path)]
+            found, _ = find(files, wanted)
+            if found is not None:
+                return found
+        return None
 
     def _send_document(self, path, *, assembly: bool) -> bool:
         """The preview, built from the file on disk. Nothing else is previewed.
@@ -990,7 +998,7 @@ class Session:
         """Reopen a preview from the panel. Never replays the animation."""
         found = self._find_document(str(message.get("name", "")))
         if found is None:
-            self.emit("error", message="no generated document by that name")
+            self.emit("error", message="nothing in drafts by that name")
             return
         self._send_document(found.path, assembly=False)
 
@@ -1000,7 +1008,7 @@ class Session:
 
         found = self._find_document(str(message.get("name", "")))
         if found is None:
-            self.emit("error", message="no generated document by that name")
+            self.emit("error", message="nothing in drafts by that name")
             return
         outcome = reveal_file(found.path)
         if outcome == REVEAL_UNSUPPORTED:

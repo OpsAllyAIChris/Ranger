@@ -1720,3 +1720,19 @@ not asking the question that made it pessimistic.
 
 **When a change makes an answer more comfortable, that is the moment to ask
 what it stopped measuring.**
+
+### One list serving two questions
+
+The document route checked a file's suffix against `preview.KINDS`, so "what
+can be rendered in the sheet" and "what can be fetched over http" were one
+tuple. Adding markdown to the preview would have put markdown on the network as
+a side effect, with nobody deciding to.
+
+**A list used by two callers is a decision made once for two questions.** The
+route has its own now, and a test asserts it does not read the other.
+
+### A shared array captured by reference
+
+The render harness recorded `socket.sent` by reference at three points, so a
+step added at the end of the file rewrote what the earlier steps had recorded
+and broke three unrelated tests. Snapshots everywhere now.

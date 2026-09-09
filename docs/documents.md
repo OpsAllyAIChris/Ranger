@@ -204,3 +204,69 @@ omitted it would be the one place in this repository where something got thrown
 away.
 
 `--format docx` and `--format pdf` work too, through the same spec.
+
+## Markdown drafts, and getting one into Outlook
+
+Every file in `Ranger/drafts/` has a preview button, markdown included. A draft
+is an email on its way somewhere, and the way to read one used to be: open
+Obsidian, find the file. Same sheet as a .docx, same open and close, same orb
+offset — one surface, not a second one that has to learn all of that again.
+
+Clicking preview on a draft that is already open closes it. A preview that gets
+opened often gets dismissed often, and reaching for the close button every time
+is the friction that stops it being used. Escape closes it too, as before.
+
+### The provenance line
+
+Above the draft, never inside it: which file, when it was written, the account,
+and what the draft says about itself. That is the front matter, split off
+rather than rendered as content — **`status: draft, not sent` copied into an
+email would be a bad day**, and the copy button takes what is in the body.
+
+### Copy: plain text is the default
+
+Two buttons on a markdown draft, and the order is the decision:
+
+- **copy text** — the words, with markdown taken off. Bold, italic, code
+  fences, headings and table pipes all go; a link keeps its target in
+  parentheses; a table keeps tabs so it pastes into Word or Excel as cells.
+- **copy markdown** — the file's own text, asterisks and all. Only offered
+  where there is a source to copy; a .docx has no markdown and offering it
+  would be inventing a format the file never had.
+
+Plain text is first because a draft full of `**` and `#` landing in an Outlook
+email is worse than having no button at all. Nobody notices their own asterisks
+until the customer has them.
+
+Two things the plain text does that a naive strip would not:
+
+- **A wrapped paragraph comes back together.** A draft hard-wrapped at eighty
+  characters must not paste into an email with a break every eighty characters.
+- **A sign-off does not.** `Best,` / `Chris` is two lines on purpose. The
+  length of the line before the break decides which it was — under 60
+  characters is somebody ending a line, over it is wrapping. A heuristic, and
+  wrong sometimes: a short line inside a wrapped paragraph keeps a break it did
+  not ask for. That is the harmless direction. A stray break is a typo; a
+  sign-off run onto one line is a draft that looks careless.
+
+Markup is taken off conservatively. `GP_TOTAL_2026` keeps its underscores and
+`2 * 3 * 4` keeps its asterisks, because an underscore inside a word is a
+column header far more often than it is emphasis, and a mangled account name in
+front of a customer is worse than a stray character.
+
+If the clipboard is refused — it needs a secure context and can still be denied
+— the button falls back to the older selection-based copy, and if that fails
+too it says **press ctrl+C** rather than sitting there looking like it worked.
+
+### Download
+
+Markdown drafts download like documents do. That widened the `/document` route,
+which had refused markdown on the grounds that drafts quote customer email. The
+reasoning for the change: the .docx already served there is assembled from the
+same account notes and the same pasted email, so the line was between
+"generated" and "written", not between sensitive and not. What holds it in is
+unchanged — 127.0.0.1, inside the drafts folder, and now a suffix list of four.
+
+That list is written out in `server.py` rather than taken from `preview.KINDS`.
+They used to be the same tuple, which meant teaching the preview a new format
+would have put that format on the network with nobody deciding to.

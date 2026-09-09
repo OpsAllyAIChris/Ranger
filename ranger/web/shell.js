@@ -133,16 +133,25 @@ export function createShell(orb) {
       }
       return node;
     }
-    // A generated document opens its preview. Reopening never replays the
-    // assembly animation: it is played once per document, by the server not
-    // marking a reopen for it and by seenDocuments here.
-    if (item.kind && item.kind !== 'md') {
-      node.classList.add('document');
+    // Anything in drafts opens its preview, markdown included. A draft is the
+    // thing most often read back -- it is an email about to be sent -- and the
+    // path to reading one was "open Obsidian, find the file". A generated
+    // document is the same button; it also gets the `document` class, because
+    // reopening one must never replay the assembly animation (played once per
+    // document, by the server not marking a reopen and by seenDocuments here).
+    if (item.id && (clearable || (item.kind && item.kind !== 'md'))) {
+      if (item.kind && item.kind !== 'md') node.classList.add('document');
       const open = document.createElement('button');
       open.className = 'preview-open clickable';
       open.textContent = 'preview';
-      open.title = 'render this file. The preview is built from the file itself';
-      open.onclick = () => send({ type: 'preview', name: item.id });
+      open.title = 'read this file here. The preview is built from the file itself';
+      // A second click closes it, because a preview that is opened often is
+      // also dismissed often and reaching for the close button every time is
+      // the friction that stops it being used.
+      open.onclick = () => {
+        if (previewOpen && previewOpen.endsWith('/' + item.id)) closePreview();
+        else send({ type: 'preview', name: item.id });
+      };
       node.append(open);
     }
     if (clearable && item.id) {
@@ -501,7 +510,26 @@ export function createShell(orb) {
     close.textContent = 'close';
     close.onclick = closePreview;
 
-    actions.append(reveal, download, close);
+    actions.append(reveal, download);
+
+    // Copy out. These drafts are emails and notes on their way into Outlook,
+    // and the path to getting one there was Obsidian, select, copy.
+    //
+    // **Plain text is the default and it is the first button.** A draft with
+    // ** and # in it, pasted into an email, is worse than not having the
+    // button: nobody notices their own asterisks until the customer has them.
+    if (event.plain) {
+      actions.append(copyButton('copy text', event.plain,
+        'the words, with markdown taken off. For pasting into an email'));
+    }
+    // The source, only where there is a source to copy. A .docx has no
+    // markdown and offering "copy markdown" for one would be inventing a
+    // format the file never had.
+    if (event.source) {
+      actions.append(copyButton('copy markdown', event.source,
+        "the file's own text, asterisks and all"));
+    }
+    actions.append(close);
     head.append(name, actions);
 
     // The caveat is chrome, not a footnote. A .docx preview that did not say
@@ -511,7 +539,87 @@ export function createShell(orb) {
     caveat.className = 'preview-caveat';
     caveat.textContent = event.caveat;
 
-    return [head, caveat];
+    // Which file, when written, what it says about itself. The front matter is
+    // shown here rather than in the body on purpose: "status: draft, not sent"
+    // belongs above a draft, not inside one where it could be copied into an
+    // email along with the rest.
+    const front = event.front || {};
+    const parts = [event.relative];
+    if (front.created) parts.push('written ' + front.created);
+    if (front.account) parts.push(front.account);
+    if (front.to) parts.push('to ' + front.to);
+    if (front.status) parts.push(front.status);
+    const where = document.createElement('div');
+    where.className = 'preview-provenance';
+    where.textContent = parts.join('  \u00b7  ');
+
+    return [head, caveat, where];
+  }
+
+  /**
+   * A button that puts text on the clipboard, and says so.
+   *
+   * Never silent either way. `navigator.clipboard` needs a secure context and
+   * can still be refused by permission, and a copy button that does nothing
+   * visible is one the operator pastes stale content from without noticing.
+   * So: success says copied, failure falls back to the old selection-based
+   * copy, and a failure of that says to press ctrl+C rather than pretending.
+   */
+  function copyButton(label, text, title) {
+    const button = document.createElement('button');
+    button.className = 'ghost clickable';
+    button.textContent = label;
+    button.title = title;
+    button.onclick = async () => {
+      let ok = false;
+      try {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          await navigator.clipboard.writeText(text);
+          ok = true;
+        }
+      } catch (err) { ok = false; }
+      if (!ok) ok = legacyCopy(text);
+      flash(button, label, ok ? 'copied' : 'press ctrl+C', ok);
+    };
+    return button;
+  }
+
+  /**
+   * The pre-clipboard-API way. Still the fallback when permission is refused.
+   *
+   * The whole of it is guarded, not just the copy. `select` threw where it did
+   * not exist and the exception left the handler before it could report
+   * anything, so the button sat there saying "copy text" having done nothing
+   * -- which is the one outcome this fallback exists to prevent.
+   */
+  function legacyCopy(text) {
+    let box = null;
+    try {
+      box = document.createElement('textarea');
+      box.value = text;
+      // Off screen rather than hidden: a display:none textarea cannot be
+      // selected, so the copy silently does nothing.
+      box.style.position = 'fixed';
+      box.style.left = '-2000px';
+      box.setAttribute('readonly', '');
+      document.body.append(box);
+      if (box.select) box.select();
+      return !!(document.execCommand && document.execCommand('copy'));
+    } catch (err) {
+      return false;
+    } finally {
+      if (box && box.remove) box.remove();
+    }
+  }
+
+  function flash(button, label, message, ok) {
+    button.textContent = message;
+    button.classList.toggle('copied', !!ok);
+    button.classList.toggle('failed', !ok);
+    setTimeout(() => {
+      button.textContent = label;
+      button.classList.remove('copied', 'failed');
+    }, ok ? 1400 : 3000);
   }
 
   function previewBody(event) {
@@ -572,9 +680,17 @@ export function createShell(orb) {
         node.className = 'preview-bullet';
         node.textContent = item.text;
         body.append(node);
+      } else if (item.kind === 'rule') {
+        const node = document.createElement('div');
+        node.className = 'preview-rule';
+        body.append(node);
       } else {
         const node = document.createElement('div');
-        node.className = 'preview-p';
+        // Paragraphs keep the line breaks the reader decided on -- a sign-off
+        // is two lines and joining them is as wrong as breaking a wrapped
+        // sentence. The CSS holds them with pre-wrap.
+        node.className = 'preview-p'
+          + (item.code ? ' code' : '') + (item.quote ? ' quote' : '');
         node.textContent = item.text;
         body.append(node);
       }
