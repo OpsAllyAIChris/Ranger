@@ -244,31 +244,29 @@ def build_agent(
     config: Config,
     *,
     provider: Any = None,
-    vault: Any = None,
-    audit: Any = None,
+    api_key: str | None = None,
     origin: str = ORIGIN,
 ):
     """A core with no way to say yes to itself.
 
-    Everything here is the ordinary construction every other caller does. The
-    one decision is the gate: `HoldingGate` writes the request into the inbox
-    and returns *held*, which is not approval. There is deliberately no
-    parameter to pass a gate that could approve -- a caller that wants one has
-    a keyboard, and a keyboard is not what this is for.
-    """
-    from .audit import AuditLog
-    from .core import Ranger
-    from .gate import HoldingGate
-    from .heartbeat import Inbox
-    from .knowledge import KnowledgeLoader
-    from .provider import build_provider
-    from .toolset import build_registry
-    from .vault import Vault
+    **Assembled by `assembly.build_agent`, which is the one way a core is put
+    together.** This function had its own copy of that assembly and called
+    `build_provider(config)` when the signature is `(model, api_key)`, so every
+    `ranger run` died on construction while the suite stayed green -- every
+    test injected a provider, so the real path had never been walked.
 
+    What is left here is the only thing that is actually different: the gate.
+    `HoldingGate` writes the request into the inbox and returns *held*, which
+    is not approval. There is deliberately no parameter to pass a gate that
+    could approve -- a caller that wants one has a keyboard, and a keyboard is
+    not what this is for.
+    """
     from dataclasses import replace
 
-    vault = vault or Vault(config.vault)
-    audit = audit if audit is not None else AuditLog(vault, config.vault.log)
+    from .assembly import build_agent as assemble
+    from .gate import HoldingGate
+    from .heartbeat import Inbox
+    from .vault import Vault
 
     # The standing context, on whatever budget the operator set for work nobody
     # is watching. Zero means the same as an interactive turn, which is the
@@ -282,25 +280,17 @@ def build_agent(
     # of those -- at the end -- so the count never reached two and the bound
     # could not fire at any setting. It exists in config and is documented, so
     # an inert check is worse than no check: it reads as a limit that holds.
-    #
-    # What it can bound is the model-and-tool loop inside the turn, which the
-    # core enforces itself and reports on. Lowering that number here means the
-    # bound is applied by tested code on every path, including the ones that
-    # never emit an event.
     rounds = min(config.model.max_tool_rounds, config.headless.max_turns)
     if rounds != config.model.max_tool_rounds:
         config = replace(config, model=replace(config.model, max_tool_rounds=rounds))
 
-    return Ranger(
-        config=config,
-        provider=provider or build_provider(config),
-        registry=build_registry(config, vault, audit=audit),
-        vault=vault,
-        knowledge_loader=KnowledgeLoader(vault, config.vault, config.knowledge),
+    return assemble(
+        config,
         # **The one thing that is different, and the reason this file exists.**
-        gate=HoldingGate(Inbox(vault, config.vault.inbox)),
-        audit=audit,
+        gate=HoldingGate(Inbox(Vault(config.vault), config.vault.inbox)),
         origin=origin,
+        api_key=api_key,
+        provider=provider,
     )
 
 
@@ -384,7 +374,7 @@ async def _guarded(
     turns_allowed = max_turns if max_turns is not None else limits.max_turns
     tools_allowed = max_tools if max_tools is not None else limits.max_tool_calls
 
-    agent = agent or build_agent(config, provider=provider, vault=vault, audit=audit)
+    agent = agent or build_agent(config, provider=provider)
     log = getattr(agent, "audit", None)
 
     def note(kind: str, detail: str) -> None:

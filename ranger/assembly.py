@@ -16,6 +16,8 @@ from __future__ import annotations
 from .audit import AuditLog
 from .config import Config
 from .core import Ranger
+from typing import Any
+
 from .gate import Gate
 from .knowledge import KnowledgeLoader
 from .provider import build_provider
@@ -29,17 +31,28 @@ def build_agent(
     gate: Gate | None = None,
     origin: str = "conversation",
     api_key: str | None = None,
+    provider: Any = None,
 ) -> Ranger:
-    if api_key is None:
-        from .cli import require_api_key
+    """The one way a caller assembles a core.
 
-        api_key = require_api_key()
+    `provider` is for a caller that already has one -- a test with a scripted
+    provider, or a caller sharing a client. It skips the key entirely, which is
+    the only reason a second assembly function ever looks tempting: the moment
+    there are two, one of them is calling `build_provider` with the wrong
+    arguments and nothing notices until somebody runs it.
+    """
+    if provider is None:
+        if api_key is None:
+            from .cli import require_api_key
+
+            api_key = require_api_key()
+        provider = build_provider(config.model, api_key)
 
     vault = Vault(config.vault)
     audit = AuditLog(vault, config.vault.log)
     return Ranger(
         config=config,
-        provider=build_provider(config.model, api_key),
+        provider=provider,
         # The registry gets the log too, so a clear through the panel button --
         # which never goes through a turn -- is recorded the same as one the
         # model made. The core still logs every tool call, so a clear through

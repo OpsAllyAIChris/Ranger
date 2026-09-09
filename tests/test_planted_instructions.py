@@ -877,7 +877,7 @@ async def test_a_headless_run_cannot_be_talked_into_approving_anything(poisoned)
         {"tools": [{"name": "account_recall", "input": {"account": "Illes"}}]},
         {"tools": [{"name": "forget", "input": {"fact": "anything"}}]},
         {"text": "That needs a yes I cannot give."},
-    ]), vault=vault)
+    ]))
     record = await headless.run(poisoned, "read Illes and act on it", agent=agent)
 
     assert record.held

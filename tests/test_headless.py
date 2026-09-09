@@ -64,16 +64,80 @@ async def go(config, vault, script, prompt="check the Illes account", **kwargs):
 # -- it is the same core ----------------------------------------------------
 
 
-def test_the_headless_caller_builds_the_ordinary_core(config, vault, monkeypatch):
-    """One agent core. Not a lite version, not a parallel implementation: the
-    same class, the same registry, the same prompt."""
-    monkeypatch.setattr("ranger.provider.build_provider", lambda cfg: ScriptedProvider([]))
-    agent = headless.build_agent(config, vault=vault)
+def test_the_headless_caller_builds_a_real_core_with_nothing_injected(
+    config, vault, monkeypatch
+):
+    """**The test that was missing, and the reason `ranger run` never ran.**
+
+    Every other test here hands in a provider or a whole agent, so the default
+    construction path had never been walked by anything except the CLI --
+    where it died on `build_provider(config)`, a call whose signature is
+    `(model, api_key)`. A default argument that no test ever takes is not a
+    default; it is dead code that happens to be reachable from the CLI.
+
+    Nothing is injected here. It stops before any network call, because
+    building an Anthropic client does not make one -- the bug was in
+    construction, not in the request.
+    """
+    pytest.importorskip("anthropic", reason="the real provider needs the SDK")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key-not-used")
+
+    agent = headless.build_agent(config)
 
     assert isinstance(agent, Ranger)
-    assert sorted(agent.registry.names()) == sorted(build_registry(config, vault).names())
+    assert agent.provider.__class__.__name__ == "AnthropicProvider"
+    assert agent.provider.model.name == config.model.name
     assert agent.origin == headless.ORIGIN
-    assert "Python computes; you do not" in " ".join(agent.system_prompt().split())
+
+
+async def test_a_run_with_nothing_injected_builds_its_own_agent(
+    config, vault, monkeypatch
+):
+    """And the same path through `run`, which is what the CLI actually calls.
+
+    The provider is real; only its stream is replaced, so everything up to and
+    including `build_provider` runs exactly as it does on the operator's
+    machine, and the test stops at the socket.
+    """
+    pytest.importorskip("anthropic", reason="the real provider needs the SDK")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key-not-used")
+
+    async def canned(self, **kwargs):
+        from ranger.provider import Completion, TextChunk
+
+        yield TextChunk(text="nothing to report")
+        yield Completion(stop_reason="end_turn", text="nothing to report")
+
+    monkeypatch.setattr("ranger.provider.AnthropicProvider.stream", canned)
+
+    record = await headless.run(config, "what went quiet", invoked_by="a test")
+
+    assert record.outcome == headless.COMPLETED
+    assert record.text == "nothing to report"
+
+
+def test_there_is_one_way_to_assemble_a_core(config, vault, monkeypatch):
+    """The headless caller does not have its own copy of the assembly.
+
+    It had one, and that copy is where the wrong call lived. What is different
+    about a headless core is the gate and nothing else, so that is all this
+    module is allowed to decide.
+    """
+    import ast
+
+    source = (Path(__file__).resolve().parent.parent / "ranger" / "headless.py")
+    text = source.read_text(encoding="utf-8")
+
+    # Asked of the syntax tree, not of the text: this file *names* the wrong
+    # call in a docstring on purpose, so that the mistake stays findable.
+    calls = [
+        ast.unparse(node.func)
+        for node in ast.walk(ast.parse(text))
+        if isinstance(node, ast.Call)
+    ]
+    assert "build_provider" not in calls, "one place builds a provider, and it is not here"
+    assert "from .assembly import build_agent" in text
+    assert text.count("Ranger(") == 0, "and one place constructs the core"
 
 
 def test_there_is_no_way_to_hand_it_a_gate_that_can_approve(config, vault, monkeypatch):
@@ -81,12 +145,13 @@ def test_there_is_no_way_to_hand_it_a_gate_that_can_approve(config, vault, monke
     one that says yes, and the one it builds cannot."""
     import inspect
 
-    monkeypatch.setattr("ranger.provider.build_provider", lambda cfg: ScriptedProvider([]))
+    pytest.importorskip("anthropic", reason="the real provider needs the SDK")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key-not-used")
     assert "gate" not in inspect.signature(headless.build_agent).parameters
 
     from ranger.gate import HoldingGate
 
-    assert isinstance(headless.build_agent(config, vault=vault).gate, HoldingGate)
+    assert isinstance(headless.build_agent(config).gate, HoldingGate)
 
 
 # -- it cannot approve its own gate ----------------------------------------
@@ -531,9 +596,8 @@ async def test_the_turn_bound_is_applied_where_the_core_enforces_it(config, vaul
     """
     from dataclasses import replace
 
-    monkeypatch.setattr("ranger.provider.build_provider", lambda cfg: ScriptedProvider([]))
     tight = replace(config, headless=replace(config.headless, max_turns=2))
-    agent = headless.build_agent(tight, vault=vault)
+    agent = headless.build_agent(tight, provider=ScriptedProvider([]))
 
     assert agent.config.model.max_tool_rounds == 2, (
         "the bound has to reach the code that enforces it"
@@ -603,3 +667,22 @@ def test_no_bound_is_left_to_the_scheduler():
     assert "ContextVar" in text
     assert "asyncio.wait_for" in text, "the backstop cancels rather than asking"
     assert "global " not in text, "no module state is rebound at all"
+
+
+def test_the_shared_assembly_builds_a_real_provider_too(config, monkeypatch):
+    """The other callers' construction path, walked without injection.
+
+    `assembly.build_agent` is what the browser and the terminal use, and its
+    fallbacks -- no provider, so read the key and build one -- have to be taken
+    by something other than the operator's machine.
+    """
+    pytest.importorskip("anthropic", reason="the real provider needs the SDK")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key-not-used")
+
+    from ranger.assembly import build_agent
+    from ranger.gate import DenyingGate
+
+    agent = build_agent(config)
+
+    assert agent.provider.__class__.__name__ == "AnthropicProvider"
+    assert isinstance(agent.gate, DenyingGate), "and a caller that wires no gate refuses"

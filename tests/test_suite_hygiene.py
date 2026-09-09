@@ -349,3 +349,40 @@ def test_no_test_asserts_on_a_single_socket_read(module: Path):
         f"a single recv() at {', '.join(problems)}. Read until Content-Length "
         "bytes are in hand: one segment is not one message."
     )
+
+
+# --- one place assembles a core -------------------------------------------
+#
+# `ranger run` died on every invocation with a TypeError, while the suite was
+# green: headless.py had its own copy of the assembly and called
+# `build_provider(config)` when the signature is `(model, api_key)`. Every
+# headless test injected a provider, so the real construction path had never
+# been walked by anything except the CLI.
+#
+# The duplication is what created the untested path. `assembly.build_agent`'s
+# own fallbacks are exercised by the transport tests; the copy's were not,
+# because it was a copy. So the guard is against the second assembly existing.
+
+ASSEMBLY_ONLY = {"assembly.py", "provider.py"}
+
+
+@pytest.mark.parametrize(
+    "module",
+    sorted(p for p in REPO.glob("ranger/*.py") if p.name not in ASSEMBLY_ONLY),
+    ids=lambda p: p.name,
+)
+def test_only_the_assembly_module_builds_a_provider(module: Path):
+    """Asked of the syntax tree, so a docstring may still name the mistake."""
+    import ast
+
+    calls = [
+        ast.unparse(node.func)
+        for node in ast.walk(ast.parse(module.read_text(encoding="utf-8")))
+        if isinstance(node, ast.Call)
+    ]
+
+    assert "build_provider" not in calls, (
+        f"{module.name} builds its own provider. There is one assembly, in "
+        "assembly.py: a second one is a construction path no test walks, which "
+        "is how `ranger run` shipped broken with the suite green."
+    )

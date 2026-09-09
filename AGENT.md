@@ -1455,6 +1455,43 @@ reset cannot reach into the copy. The test that proves it holds the spawned
 task on a gate until the outer run has finished, so the ordering that failed on
 Windows is the ordering the test runs every time.
 
+## A path only the CLI takes is a path the suite does not cover
+
+`ranger run` died on every invocation with a `TypeError`, while the suite was
+green and had just proved the nested-run guard holds. `headless.py` had its own
+copy of the core assembly and called `build_provider(config)` when the
+signature is `(model, api_key)`. Every headless test injected a provider or a
+whole agent, so the default construction path had never been walked by anything
+except the CLI.
+
+**An injectable dependency with a real-construction fallback hides exactly this:
+a default argument that no test ever takes is not a default, it is dead code
+that happens to be reachable from the CLI.** The fallback needs its own test --
+one that walks the real construction and stops short of the network, because
+the bug is in construction and not in the request.
+
+The sweep afterwards is worth recording, because the answer was not "several
+fallbacks are untested". Every `x or Build()` fallback in the package is taken
+by the suite, and so is `assembly.build_agent`'s own read-the-key-and-build-one
+path, which the transport tests walk. The one uncovered path was the
+**duplicate**: a second assembly, written because the headless caller wanted a
+different gate, which is a difference of one argument. Duplication is what
+created the untested path.
+
+So the guard is against the second assembly rather than against the missing
+test: nothing outside `assembly.py` may call `build_provider`, asked of the
+syntax tree so a docstring can still name the mistake.
+
+It is the same family as the others. A rule that is really a coincidence of the
+environment:
+
+- `read_text()` turning CRLF into a doubled newline, invisible on Linux.
+- The totals-row exclusion written as `if group_at >= 0`, which never ran for
+  the question that was actually asked.
+- A safety bound held in a module flag, which held only when the scheduler
+  cooperated.
+- A construction path only the operator's machine ever ran.
+
 ## Item M: the headless caller
 
 The fifth caller. Speech, a typed turn, the heartbeat and the browser all enter
