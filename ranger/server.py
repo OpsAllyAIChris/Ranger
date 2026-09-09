@@ -155,12 +155,49 @@ class FrontEndHandler(SimpleHTTPRequestHandler):
             return self._document(path[len(FILE_PATH):])
         return super().do_GET()
 
+    #: How much of a refused body to read before answering it. Enough that an
+    #: ordinary request completes cleanly; not so much that a refusal has to
+    #: swallow a 400MB upload to be polite about it.
+    DRAIN_LIMIT = 4 * 1_048_576
+
+    def _drain_body(self, limit: int | None = None) -> None:
+        """Read and discard the request body before refusing it.
+
+        **A refusal has to be readable, and on Windows an unread body makes it
+        unreadable.** Closing a connection with bytes still sitting in the
+        receive buffer makes the Windows TCP stack send RST rather than FIN, so
+        the client's next read fails with `WinError 10053` and it never sees
+        the status line that was already written. Linux sends a clean close and
+        the same code looks fine, which is why the POST route was refused
+        correctly here and looked like a crash there.
+
+        Bounded. Past `DRAIN_LIMIT` the connection is dropped mid-upload, which
+        is the right trade for a body that was refused for being enormous: the
+        window checks the size before it uploads, so the operator gets the
+        sentence either way.
+        """
+        try:
+            length = int(self.headers.get("Content-Length", "0") or 0)
+        except ValueError:
+            return
+        remaining = min(max(0, length), self.DRAIN_LIMIT if limit is None else limit)
+        while remaining > 0:
+            chunk = self.rfile.read(min(65536, remaining))
+            if not chunk:
+                break
+            remaining -= len(chunk)
+
     def do_POST(self) -> None:  # noqa: N802 - the base class spells it this way
         """One route, and it takes a file. Nothing else is posted here."""
         path = self.path.split("?")[0].rstrip("/")
         if path == DROP_PATH.rstrip("/"):
             return self._drop()
-        self.send_error(404, "not found")
+        # Drained first, then answered: a refusal the client cannot read is not
+        # a refusal it can act on. `_json` rather than `send_error` for the
+        # same reason -- it sends a Content-Length and leaves the connection
+        # alive, so nothing is racing a close.
+        self._drain_body()
+        self._json(404, {"ok": False, "message": "nothing is posted there"})
 
     def _drop(self) -> None:
         """A file dropped on the window. **Land it. Do not read it.**
@@ -179,7 +216,8 @@ class FrontEndHandler(SimpleHTTPRequestHandler):
             return
         if not self._allowed_origin():
             self.log_error("refused a drop from origin %r", self.headers.get("Origin"))
-            self.send_error(403, "not allowed")
+            self._drain_body()
+            self._json(403, {"ok": False, "message": "not allowed from there"})
             return
 
         from .imports import Refused, land
@@ -194,6 +232,11 @@ class FrontEndHandler(SimpleHTTPRequestHandler):
             self._json(400, {"ok": False, "message": "that drop had no file in it"})
             return
         if length > ceiling:
+            # Answered without reading it. A 400MB body is exactly what must
+            # not be pulled into memory to be told no, so this is the one
+            # rejection that may reach the client as a dropped connection
+            # instead of a status: the window checks the size before it
+            # uploads, which is where that message actually comes from.
             self._json(413, {
                 "ok": False,
                 "message": (
@@ -213,6 +256,9 @@ class FrontEndHandler(SimpleHTTPRequestHandler):
 
         payload = self.rfile.read(length)
         if len(payload) != length:
+            # The whole body or nothing: a truncated upload never becomes a
+            # file. Nothing to drain here, because the read above already
+            # consumed whatever arrived.
             # A truncated upload never becomes a file. The landing writes from
             # a complete payload, so a half-arrived drop stops here.
             self._json(400, {"ok": False, "message": "that upload did not finish"})

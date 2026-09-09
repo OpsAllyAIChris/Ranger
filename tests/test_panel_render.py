@@ -45,7 +45,16 @@ needs_node = pytest.mark.skipif(
 @pytest.fixture(scope="module")
 def rendered():
     result = subprocess.run(
-        [node, str(RENDER)], capture_output=True, text=True, timeout=60,
+        [node, str(RENDER)],
+        capture_output=True,
+        text=True,
+        # Stated, because node writes UTF-8 and Python on Windows decodes with
+        # cp1252 unless told otherwise. The panel's clear control is a "\u00d7",
+        # so the first thing this harness ever reported on Windows was
+        # `assert 'Ã—' == '\u00d7'`: the button was fine and the test could not
+        # read it.
+        encoding="utf-8",
+        timeout=60,
         cwd=str(RENDER.parent),
     )
     assert result.returncode == 0, f"the shell did not render:\n{result.stderr}"

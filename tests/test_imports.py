@@ -691,9 +691,10 @@ def test_a_dropped_file_arrives_over_the_post_route(served, config, vault):
 def test_a_drop_from_another_page_is_refused(served):
     """A cross-origin POST needs no preflight, so any site the operator has
     open could push a file into their vault if this were not checked here."""
-    status, _ = post(served, workbook(), origin="https://not-jarvis.example")
+    status, result = post(served, workbook(), origin="https://not-jarvis.example")
 
     assert status == 403
+    assert result["ok"] is False
 
 
 def test_a_drop_of_something_it_does_not_take_is_refused_with_a_sentence(served):
@@ -729,6 +730,90 @@ def test_a_drop_over_the_ceiling_is_refused_before_it_is_read(served, config):
     assert "MB" in reply
 
 
-def test_nothing_else_can_be_posted(served):
-    status, _ = post(served, b"{}", path="/status")
+def test_a_refusal_reads_the_body_before_it_answers():
+    """The mechanism itself, without needing a Windows machine to fail on.
+
+    Windows turns a close-with-unread-bytes into an RST, so the client loses a
+    response that was already written. Linux does not, which is why the
+    integration tests above passed here and the same code reported
+    `WinError 10053` there. This asserts the thing that differs: the body is
+    consumed before the answer goes out.
+    """
+    import io
+
+    from ranger.server import FrontEndHandler
+
+    handler = FrontEndHandler.__new__(FrontEndHandler)
+    handler.headers = {"Content-Length": "1000"}
+    handler.rfile = io.BytesIO(b"x" * 1000)
+
+    handler._drain_body()
+
+    assert handler.rfile.read() == b"", "the socket must not be left holding the body"
+
+
+def test_draining_a_refused_body_is_bounded():
+    """A refusal must not have to swallow a 400MB upload to be polite about it.
+    That body is refused for its size, and the window checks the size before it
+    uploads, which is where that message actually comes from."""
+    import io
+
+    from ranger.server import FrontEndHandler
+
+    handler = FrontEndHandler.__new__(FrontEndHandler)
+    handler.headers = {"Content-Length": str(400 * 1_048_576)}
+    handler.rfile = io.BytesIO(b"x" * (FrontEndHandler.DRAIN_LIMIT + 4096))
+
+    handler._drain_body()
+
+    assert len(handler.rfile.read()) == 4096, "it stops at the limit"
+
+
+def test_a_body_length_that_is_nonsense_does_not_hang_the_refusal():
+    import io
+
+    from ranger.server import FrontEndHandler
+
+    handler = FrontEndHandler.__new__(FrontEndHandler)
+    handler.headers = {"Content-Length": "not a number"}
+    handler.rfile = io.BytesIO(b"x" * 10)
+
+    handler._drain_body()  # returns rather than raising
+
+
+def test_nothing_else_can_be_posted(served, config):
+    """The route refuses a POST it does not own, **and says so readably**.
+
+    The first Windows run of this got `WinError 10053` instead of a status:
+    the server answered and closed with the request body still unread, and
+    Windows turns that into an RST, so the client never saw the refusal it had
+    already been sent. Linux sends a clean close and the same code looked fine.
+    The body is drained before the answer now, so the refusal is legible on
+    both.
+    """
+    status, result = post(served, b'{"drop": "this"}', path="/status")
+
     assert status == 404
+    assert result["ok"] is False
+    # And the refusal is a refusal, not just a status code.
+    root = config.vault.ranger / "imports"
+    assert not root.exists() or not any(root.rglob("*")), "nothing was written"
+
+
+def test_a_refused_post_is_still_readable_when_it_carries_a_body(served):
+    """The mechanism, isolated: a rejected POST with a body long enough to sit
+    in the socket must still answer, and the answer must be readable after the
+    whole body has been written."""
+    status, result = post(served, b"x" * 200_000, path="/status")
+
+    assert status == 404
+    assert "nothing is posted there" in result["message"]
+
+
+def test_a_drop_from_another_page_is_refused_readably_with_a_body(served, config):
+    status, result = post(served, workbook(), origin="https://not-jarvis.example")
+
+    assert status == 403
+    assert result["ok"] is False
+    root = config.vault.ranger / "imports"
+    assert not root.exists() or not any(root.rglob("*"))

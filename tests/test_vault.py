@@ -92,6 +92,10 @@ def _link_to(source, target) -> str:
     result = subprocess.run(
         ["cmd", "/c", "mklink", "/J", str(source), str(target)],
         capture_output=True, text=True,
+        # cmd writes in the console codepage, which is neither UTF-8 nor the
+        # ANSI default Python would otherwise pick. Only the exit code is read;
+        # stating this keeps a stray byte in the message from raising instead.
+        encoding="utf-8", errors="replace",
     )
     if result.returncode != 0:
         raise OSError(f"neither a symlink nor a junction could be made: {result.stderr}")

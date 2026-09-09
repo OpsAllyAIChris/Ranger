@@ -159,12 +159,27 @@ class Snapshot:
 
 def _git(root: Path, *args: str, check: bool = True,
          stdin: str | None = None) -> subprocess.CompletedProcess:
-    """Run git inside the vault. The cwd is always the vault, never this repo."""
+    """Run git inside the vault. The cwd is always the vault, never this repo.
+
+    **The encoding is stated, and it is not cosmetic here.** Text mode without
+    one uses the platform default, which is cp1252 on the operator's Windows
+    machine and UTF-8 on the machine these tests usually run on. git speaks
+    UTF-8 in both directions.
+
+    Both directions matter. Reading, a vault file called `Café.md` would come
+    back through `git status --porcelain` mangled. Writing, the staging list is
+    piped in on stdin as a pathspec file, so that same name would be *sent* to
+    git as cp1252 bytes, git would not match any file, and the note would be
+    quietly missing from the day's snapshot -- a backup with a hole in it and
+    nothing on screen to say so.
+    """
     result = subprocess.run(
         ["git", *args],
         cwd=str(root),
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         timeout=120,
         input=stdin,
     )
@@ -179,7 +194,8 @@ def _git(root: Path, *args: str, check: bool = True,
 def available() -> tuple[bool, str]:
     try:
         result = subprocess.run(
-            ["git", "--version"], capture_output=True, text=True, timeout=30
+            ["git", "--version"], capture_output=True, text=True,
+            encoding="utf-8", errors="replace", timeout=30,
         )
     except Exception as exc:
         return False, f"git is not runnable ({type(exc).__name__}: {exc})"

@@ -66,7 +66,8 @@ def _tracked_paths() -> list[str]:
     import subprocess
 
     out = subprocess.run(
-        ["git", "ls-files", "-z"], cwd=REPO, capture_output=True, text=True, check=True
+        ["git", "ls-files", "-z"], cwd=REPO, capture_output=True, text=True, check=True,
+        encoding="utf-8", errors="replace",
     ).stdout
     return [p for p in out.split("\0") if p]
 
@@ -210,3 +211,106 @@ def test_the_digest_cannot_be_handed_a_string():
     with _pytest.raises(TypeError):
         digest("text that has already been through a reader")
 
+
+
+# --- nothing may rely on the platform's default encoding -------------------
+#
+# A Windows default the Linux side never sees, which is the shape of every real
+# bug in this build. Twice now:
+#
+#   `read_text()` on an account note turned CRLF into a doubled newline, and
+#   the suite could not see it because Linux has no CRLF.
+#
+#   `subprocess.run(..., text=True)` decoded the node harness's UTF-8 with
+#   cp1252, and the first thing the rendered-panel check ever said on Windows
+#   was `assert 'Ã—' == '×'`. The button was fine; the test could not read it.
+#
+# The one that had not surfaced yet was worse: `git` in the snapshot took the
+# staging list on stdin in text mode, so a vault note called `Café.md` would
+# have been *sent* to git as cp1252 bytes, matched nothing, and been quietly
+# missing from the day's backup.
+#
+# So the encoding is stated everywhere, and this is what keeps it stated.
+
+SOURCE = sorted(REPO.glob("ranger/**/*.py")) + sorted(TESTS.glob("*.py"))
+
+#: Reading bytes needs no encoding, and neither does a codec-owning library.
+_BINARY_MODE = re.compile(r"['\"][rwax]*b[rwax+]*['\"]")
+
+
+def _has(call, name: str) -> bool:
+    return any(word.arg == name for word in call.keywords)
+
+
+def encoding_offenders(tree, module: str) -> list[str]:
+    import ast
+
+    problems: list[str] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        line = getattr(node, "lineno", 0)
+        function = node.func
+        name = getattr(function, "attr", None) or getattr(function, "id", None)
+
+        # `Path.read_text()` takes no positional argument and `Vault.read_text`
+        # takes the path, which is how one is told from the other. The vault's
+        # own method states the encoding in one place, for everything.
+        if name == "read_text" and not node.args and not _has(node, "encoding"):
+            problems.append(f"{module}:{line} read_text() with no encoding")
+        if name == "write_text" and not _has(node, "encoding"):
+            problems.append(f"{module}:{line} write_text() with no encoding")
+
+        if name == "open" and isinstance(function, ast.Name):
+            mode = node.args[1] if len(node.args) > 1 else None
+            literal = ast.unparse(mode) if mode is not None else "'r'"
+            if not _BINARY_MODE.search(literal) and not _has(node, "encoding"):
+                problems.append(f"{module}:{line} open() in text mode with no encoding")
+
+        if name in ("run", "Popen", "check_output") and isinstance(function, ast.Attribute):
+            if getattr(function.value, "id", "") != "subprocess":
+                continue
+            texty = _has(node, "text") or _has(node, "universal_newlines") or (
+                _has(node, "encoding")
+            )
+            if texty and not _has(node, "encoding"):
+                problems.append(f"{module}:{line} subprocess in text mode with no encoding")
+    return problems
+
+
+@pytest.mark.parametrize("source", SOURCE, ids=lambda p: p.name)
+def test_nothing_reads_or_writes_with_the_platform_default_encoding(source: Path):
+    """Every read, write and subprocess says what encoding it means.
+
+    Not style. `text=True` means cp1252 on the operator's machine and UTF-8 on
+    the machine that runs the suite, so anything relying on the default is a
+    test that passes here and a behaviour that differs there -- which is where
+    every real defect in this build has come from.
+    """
+    import ast
+
+    tree = ast.parse(source.read_text(encoding="utf-8"))
+    problems = encoding_offenders(tree, source.name)
+
+    assert not problems, "\n".join(problems) + (
+        "\n\nAdd encoding='utf-8' (and errors='replace' for a program's output). "
+        "The platform default is not the same on Windows."
+    )
+
+
+def test_the_encoding_check_can_actually_fail():
+    """A guard that cannot fail is decoration. This is what it catches."""
+    import ast
+
+    bad = ast.parse(
+        "import subprocess\n"
+        "p.read_text()\n"
+        "open('x.txt')\n"
+        "subprocess.run(['git'], text=True)\n"
+    )
+    problems = encoding_offenders(bad, "example.py")
+
+    assert len(problems) == 3
+    assert any("read_text" in item for item in problems)
+    assert any("open()" in item for item in problems)
+    assert any("subprocess" in item for item in problems)

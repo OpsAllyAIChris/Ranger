@@ -88,7 +88,8 @@ def vault(tmp_path):
 
 def git(root, *args):
     return subprocess.run(
-        ["git", *args], cwd=str(root), capture_output=True, text=True, check=True
+        ["git", *args], cwd=str(root), capture_output=True, text=True, check=True,
+        encoding="utf-8", errors="replace",
     ).stdout
 
 

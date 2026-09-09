@@ -141,7 +141,9 @@ def test_topmost_is_off_by_default_in_the_shipped_config():
     """It works, and it puts Ranger over a screen share."""
     from pathlib import Path
 
-    text = Path(__file__).resolve().parent.parent.joinpath("ranger.toml").read_text()
+    text = Path(__file__).resolve().parent.parent.joinpath("ranger.toml").read_text(
+        encoding="utf-8"
+    )
 
     assert "surface_topmost = false" in text
     assert "surface_on_wake = true" in text

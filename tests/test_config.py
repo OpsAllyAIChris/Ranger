@@ -40,7 +40,9 @@ def test_quiet_window_wraps_midnight(config):
 def test_vault_subpath_escaping_root_is_rejected(config_file):
     path = config_file()
     path.write_text(
-        path.read_text().replace('accounts = "Accounts"', 'accounts = "../Escaped"'),
+        path.read_text(encoding="utf-8").replace(
+            'accounts = "Accounts"', 'accounts = "../Escaped"'
+        ),
         encoding="utf-8",
     )
     with pytest.raises(ConfigError, match="outside the vault root"):
@@ -50,7 +52,9 @@ def test_vault_subpath_escaping_root_is_rejected(config_file):
 def test_readonly_folder_under_ranger_is_rejected(config_file):
     path = config_file()
     path.write_text(
-        path.read_text().replace('knowledge = "Knowledge"', 'knowledge = "Ranger/Knowledge"'),
+        path.read_text(encoding="utf-8").replace(
+            'knowledge = "Knowledge"', 'knowledge = "Ranger/Knowledge"'
+        ),
         encoding="utf-8",
     )
     with pytest.raises(ConfigError, match="read only"):

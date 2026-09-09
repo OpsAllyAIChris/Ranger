@@ -378,7 +378,9 @@ def test_conversation_settings_are_in_the_shipped_config():
     the reason for each, and ranger.local.toml overrides them."""
     from pathlib import Path
 
-    text = Path(__file__).resolve().parent.parent.joinpath("ranger.toml").read_text()
+    text = Path(__file__).resolve().parent.parent.joinpath("ranger.toml").read_text(
+        encoding="utf-8"
+    )
 
     assert "conversation_seconds = 8.0" in text
     assert "conversation_reopens = 3" in text
