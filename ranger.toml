@@ -488,8 +488,18 @@ model_id = "eleven_flash_v2_5"
 output_format = "pcm_24000"
 # Leave these alone until a voice has been chosen unmodified. Tuning a bad
 # match wastes more time than picking a better voice.
+#
+# stability: 0 is the most expressive and the most variable, 1 the most
+# consistent and the flattest. LOW STABILITY IS A KNOWN CAUSE OF SLURRING, and
+# 0.5 with a latency-optimised model is the middle of that range. Try 0.6-0.75
+# with 'ranger say --stability' before changing it here.
 stability = 0.5
 similarity_boost = 0.75
+# Sent only when they are non-default, so an untouched config produces exactly
+# the request it always produced. style above 0 exaggerates the voice's own
+# delivery and costs latency; speaker_boost is ElevenLabs' clarity boost.
+style = 0.0
+speaker_boost = false
 speed = 1.0
 timeout_seconds = 30.0
 

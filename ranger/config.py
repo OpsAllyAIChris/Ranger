@@ -472,8 +472,18 @@ class TtsConfig:
     #: pcm_24000 plays with no decoder. mp3_44100_128 works on every plan but
     #: needs soundfile.
     output_format: str = "pcm_24000"
+    #: 0 is the most expressive and the most variable; 1 is the most consistent
+    #: and the flattest. **Low stability is a known cause of slurring**, and
+    #: 0.5 with a latency-optimised model is the middle of that. It is a knob
+    #: to hear rather than to reason about.
     stability: float = 0.5
     similarity_boost: float = 0.75
+    #: Exaggeration of the voice's own delivery. Above 0 it costs latency and,
+    #: on a clone that is not perfect, articulation. Sent only when set, so the
+    #: request is what it was before unless this is changed.
+    style: float = 0.0
+    #: ElevenLabs' own clarity boost. Sent only when true.
+    speaker_boost: bool = False
     speed: float = 1.0
     timeout_seconds: float = 30.0
 
@@ -684,7 +694,7 @@ KNOWN_KEYS: dict[str, frozenset[str]] = {
     }),
     "tts": frozenset({
         "provider", "voice_id", "model_id", "output_format", "stability",
-        "similarity_boost", "speed", "timeout_seconds",
+        "similarity_boost", "style", "speaker_boost", "speed", "timeout_seconds",
     }),
     "gate": frozenset({"timeout_seconds", "voice_holds"}),
     "heartbeat": frozenset({"enabled", "interval_seconds", "check_timeout_seconds"}),
@@ -1170,6 +1180,8 @@ def load_config(path: str | Path | None = None, *, load_env: bool = True) -> Con
         model_id=str(tts_section.get("model_id", "eleven_flash_v2_5")),
         output_format=str(tts_section.get("output_format", "pcm_24000")),
         stability=float(tts_section.get("stability", 0.5)),
+        style=float(tts_section.get("style", 0.0)),
+        speaker_boost=bool(tts_section.get("speaker_boost", False)),
         similarity_boost=float(tts_section.get("similarity_boost", 0.75)),
         speed=float(tts_section.get("speed", 1.0)),
         timeout_seconds=float(tts_section.get("timeout_seconds", 30.0)),

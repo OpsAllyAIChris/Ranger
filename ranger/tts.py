@@ -105,14 +105,25 @@ class ElevenLabsSpeaker:
 
         import httpx2 as httpx
 
+        # **Exactly what is sent, and nothing implied.** `style` and
+        # `speaker_boost` are included only when they are set, so a config that
+        # has not been touched produces the request it always produced -- the
+        # point of adding them is to be able to hear the difference, not to
+        # change what happens by default.
+        settings: dict[str, Any] = {
+            "stability": self.config.stability,
+            "similarity_boost": self.config.similarity_boost,
+            "speed": self.config.speed,
+        }
+        if self.config.style:
+            settings["style"] = self.config.style
+        if self.config.speaker_boost:
+            settings["use_speaker_boost"] = True
+
         body = {
             "text": text,
             "model_id": self.config.model_id,
-            "voice_settings": {
-                "stability": self.config.stability,
-                "similarity_boost": self.config.similarity_boost,
-                "speed": self.config.speed,
-            },
+            "voice_settings": settings,
         }
         url = f"{API_ROOT}/text-to-speech/{self.config.voice_id}/stream"
 

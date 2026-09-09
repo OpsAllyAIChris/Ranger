@@ -193,3 +193,78 @@ async def test_a_voice_with_no_labels_still_parses(config):
 def test_an_unknown_provider_is_rejected(config):
     with pytest.raises(ValueError, match="unknown tts.provider"):
         build_speaker(replace(config.tts, provider="azure"), "k")
+
+
+# -- what is actually sent, and what is not --------------------------------
+#
+# Jarvis mumbles and slurs. Before changing a default, this is the record of
+# what the request contains, so the answer to "what are we sending" is a test
+# rather than a memory.
+
+
+def sent_body(config_tts, text="Illes pricing lands Thursday."):
+    """The JSON body and query one stream() call puts on the wire."""
+    import asyncio
+
+    mock, seen = transport()
+    speaker = ElevenLabsSpeaker(config_tts, "el-key", transport=mock)
+
+    async def drain():
+        async for _ in speaker.stream(text):
+            pass
+
+    asyncio.run(drain())
+    return seen
+
+
+def test_the_voice_settings_that_are_sent(config):
+    """**Three, and only three, unless they are changed.** Nothing sends
+    `style` or `use_speaker_boost` by default, and that is deliberate rather
+    than forgotten: an untouched config makes the request it always made."""
+    from dataclasses import replace
+
+    body = sent_body(replace(config.tts, voice_id="a-voice"))["json"]
+
+    assert body["model_id"] == "eleven_flash_v2_5"
+    assert body["voice_settings"] == {
+        "stability": 0.5, "similarity_boost": 0.75, "speed": 1.0
+    }
+    assert "style" not in body["voice_settings"]
+    assert "use_speaker_boost" not in body["voice_settings"]
+
+
+def test_style_and_speaker_boost_are_sent_when_they_are_set(config):
+    from dataclasses import replace
+
+    tuned = replace(config.tts, voice_id="a-voice", style=0.35, speaker_boost=True,
+                    stability=0.7)
+    settings = sent_body(tuned)["json"]["voice_settings"]
+
+    assert settings["style"] == 0.35
+    assert settings["use_speaker_boost"] is True
+    assert settings["stability"] == 0.7
+
+
+def test_the_output_format_is_a_query_parameter_not_a_setting(config):
+    from dataclasses import replace
+
+    seen = sent_body(replace(config.tts, voice_id="a-voice"))
+    assert "output_format=pcm_24000" in seen["url"]
+
+
+def test_the_orb_smoothing_preset_never_touches_the_audio():
+    """`natural` is a pair of time constants on a number between 0 and 1 that
+    controls how bright a shader draws. It cannot affect articulation, and the
+    question is worth a test because it is a reasonable thing to suspect."""
+    from pathlib import Path
+
+    orb = (Path(__file__).resolve().parent.parent / "ranger" / "web" / "orb.js")
+    text = orb.read_text(encoding="utf-8")
+
+    preset = text.split("export const PRESETS")[1].split("};")[0]
+    assert "attack" in preset and "release" in preset
+    # The presets are consumed by exactly one thing: the uniform the shaders
+    # read. Nothing in the scene touches an AudioBuffer or a sample.
+    assert "uVoiceBright" in text
+    for audio_word in ("AudioBuffer", "createBufferSource", "sampleRate", "decodeAudioData"):
+        assert audio_word not in text, f"the scene touches {audio_word}"

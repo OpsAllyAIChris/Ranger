@@ -1002,14 +1002,64 @@ def cmd_say(config: Config, args) -> int:
         print(f"  {exc}", file=sys.stderr)
         return 1
 
-    tts = config.tts
-    if args.voice:
-        from dataclasses import replace
+    from dataclasses import replace
 
-        tts = replace(tts, voice_id=args.voice)
+    def tuned(base):
+        """Whatever was asked for on the command line, over the config.
+
+        Every one of these is a setting that changes how the words come out.
+        They are here so the same sentence can be heard through several of them
+        without editing a file and restarting anything -- comparing the same
+        words is the whole point, because comparing whatever Jarvis happened to
+        say next compares two sentences as well as two settings.
+        """
+        changes: dict[str, Any] = {}
+        if args.voice:
+            changes["voice_id"] = args.voice
+        if getattr(args, "model", ""):
+            changes["model_id"] = args.model
+        for flag, field in (
+            ("stability", "stability"), ("similarity", "similarity_boost"),
+            ("style", "style"), ("speed", "speed"),
+        ):
+            value = getattr(args, flag, None)
+            if value is not None:
+                changes[field] = value
+        if getattr(args, "speaker_boost", False):
+            changes["speaker_boost"] = True
+        return replace(base, **changes) if changes else base
+
+    tts = tuned(config.tts)
+
+    # A/B: the same sentence, through each model in turn, announced so there is
+    # no doubt which one is being heard.
+    models = [m.strip() for m in (getattr(args, "compare", "") or "").split(",") if m.strip()]
+    if models:
+        for name in models:
+            print()
+            print(f"  --- {name} ---")
+            outcome = _speak_once(replace(tts, model_id=name), text, api_key, args)
+            if outcome != 0:
+                return outcome
+        return 0
+    return _speak_once(tts, text, api_key, args)
+
+
+def _speak_once(tts, text: str, api_key: str, args) -> int:
+    """One sentence, one set of settings, and what it cost."""
+    import asyncio
+    import time
+
+    from .audio import AudioError, SoundDeviceBackend, resolve_device, write_wav
+    from .tts import SpeechError, build_speaker, decode
 
     print(f'  saying: "{text}"')
     print(f"  voice {tts.voice_id or '(unset)'}, model {tts.model_id}, {tts.output_format}")
+    print(
+        f"  stability {tts.stability}, similarity {tts.similarity_boost}, "
+        f"style {tts.style}, speaker_boost {str(tts.speaker_boost).lower()}, "
+        f"speed {tts.speed}"
+    )
 
     speaker = build_speaker(tts, api_key)
 
@@ -2644,9 +2694,25 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     sub.add_parser("voices", help="Tier 3c: list the ElevenLabs voices on the account")
-    say = sub.add_parser("say", help="Tier 3c: speak a line aloud")
+    say = sub.add_parser(
+        "say", help="Tier 3c: speak a line aloud, through any voice settings you name"
+    )
     say.add_argument("text", nargs="+", help="what to say")
     say.add_argument("--voice", help="override tts.voice_id for this run")
+    say.add_argument("--model", default="", help="override tts.model_id for this run")
+    say.add_argument("--stability", type=float, help="0 expressive and variable, 1 flat "
+                                                     "and consistent. Low slurs")
+    say.add_argument("--similarity", type=float, help="override similarity_boost")
+    say.add_argument("--style", type=float, help="exaggerate the voice's delivery. Costs "
+                                                 "latency")
+    say.add_argument("--speaker-boost", action="store_true", dest="speaker_boost",
+                     help="ElevenLabs' clarity boost")
+    say.add_argument("--speed", type=float, help="override tts.speed")
+    say.add_argument(
+        "--compare", default="",
+        help="speak the same sentence through each of these models in turn, e.g. "
+             "eleven_flash_v2_5,eleven_turbo_v2_5,eleven_multilingual_v2",
+    )
     say.add_argument("--keep", help="save the spoken audio to this WAV path")
     say.add_argument("--no-play", action="store_true", help="fetch but do not play")
 

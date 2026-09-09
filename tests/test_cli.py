@@ -249,3 +249,88 @@ def test_doctor_separates_a_missing_extra_from_a_missing_model(config, monkeypat
 
     assert "todo     wake.enabled is true but openwakeword is not installed" in out
     assert "problem  hands free" not in out
+
+
+# -- hearing the same sentence through different settings ------------------
+
+
+def say_args(**overrides):
+    class Args:
+        text = ["Rod", "asked", "for", "the", "numbers", "by", "Thursday."]
+        voice = ""
+        model = ""
+        stability = None
+        similarity = None
+        style = None
+        speaker_boost = False
+        speed = None
+        compare = ""
+        keep = None
+        no_play = True
+
+    for name, value in overrides.items():
+        setattr(Args, name, value)
+    return Args()
+
+
+def spoken(config, monkeypatch, capsys, **overrides):
+    """Run `ranger say` with a fake ElevenLabs and report what it asked for."""
+    from dataclasses import replace
+
+    import ranger.cli as cli
+
+    monkeypatch.setenv("ELEVENLABS_API_KEY", "el-key")
+    asked: list = []
+
+    class Speaker:
+        def __init__(self, tts, key):
+            asked.append(tts)
+
+        async def stream(self, text):
+            yield b"\x00\x00" * 2400
+
+    monkeypatch.setattr("ranger.tts.build_speaker", lambda tts, key: Speaker(tts, key))
+    tuned = replace(config, tts=replace(config.tts, voice_id="a-voice"))
+    assert cli.cmd_say(tuned, say_args(**overrides)) == 0
+    return asked, capsys.readouterr().out
+
+
+def test_say_can_be_tuned_without_editing_anything(config, monkeypatch, capsys):
+    """Every setting that changes how the words come out, on the command line,
+    so the same sentence can be heard through several of them."""
+    asked, out = spoken(
+        config, monkeypatch, capsys,
+        model="eleven_turbo_v2_5", stability=0.75, similarity=0.6, style=0.2,
+        speaker_boost=True, speed=0.95,
+    )
+
+    assert len(asked) == 1
+    tts = asked[0]
+    assert tts.model_id == "eleven_turbo_v2_5"
+    assert (tts.stability, tts.similarity_boost, tts.style) == (0.75, 0.6, 0.2)
+    assert tts.speaker_boost is True and tts.speed == 0.95
+    # And it says what it used, so a recording can be matched to its settings.
+    assert "stability 0.75" in out and "style 0.2" in out
+
+
+def test_say_compares_models_on_the_same_words(config, monkeypatch, capsys):
+    """Comparing whatever Jarvis happened to say next compares two sentences as
+    well as two settings."""
+    asked, out = spoken(
+        config, monkeypatch, capsys,
+        compare="eleven_flash_v2_5,eleven_turbo_v2_5,eleven_multilingual_v2",
+    )
+
+    assert [tts.model_id for tts in asked] == [
+        "eleven_flash_v2_5", "eleven_turbo_v2_5", "eleven_multilingual_v2",
+    ]
+    for name in ("eleven_flash_v2_5", "eleven_turbo_v2_5", "eleven_multilingual_v2"):
+        assert f"--- {name} ---" in out, "each one is announced before it speaks"
+    assert out.count('saying: "Rod asked for the numbers by Thursday."') == 3
+
+
+def test_say_with_nothing_named_uses_the_config(config, monkeypatch, capsys):
+    asked, _ = spoken(config, monkeypatch, capsys)
+
+    assert asked[0].model_id == config.tts.model_id
+    assert asked[0].stability == config.tts.stability
