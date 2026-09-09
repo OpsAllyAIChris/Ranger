@@ -24,48 +24,89 @@ interrupting feel like it did not work.
 Conversation mode's own rule holds: **barge-in does not close the window.** You
 interrupting is the most engaged you get.
 
-## Telling you from Jarvis
+## Telling you from Jarvis, and from the room
 
 The hard part is not detecting speech. It is telling your voice from Jarvis's
-own, coming back through the microphone.
+own coming back through the microphone, and from whatever else the room is
+doing.
 
 The microphone is PortAudio's, in this process. The speaker is the browser's.
 There is no echo canceller anywhere in that path, and on a laptop speaker the
-microphone hears the reply at a level comparable to a person talking. A
-detector that ignores that stops Jarvis on his own second syllable, every
-reply, forever.
+microphone hears the reply at a level comparable to a person talking.
 
-So the separation is three cheap things stacked, each honest about what it is:
+Three signals, so the bar has three terms and takes the highest:
 
-1. **Playback.** Barge-in is only ever looked for while a reply is actually
-   playing, and playback state is what the browser reports, not something
-   guessed from the microphone. Before and after, the wake phrase and the
-   conversation window own the microphone, as they always did.
-2. **A tail** (`wake.bargein_tail_seconds`, 350ms). The browser reports its
-   queue drained *between sentences*, not only at the end of a reply, because
-   the model is often slower than the voice. A drain inside the tail is the
-   same reply carrying on; one older than the tail is the end of it. Without
-   this, every sentence would re-learn the echo and the first 0.6s of each
-   would be un-interruptible — in a slow reply, nearly all of it.
-3. **A measured level, not a guessed one** (`wake.bargein_margin`, 2.2). While
-   Jarvis is speaking and nobody has interrupted, whatever the microphone hears
-   *is* the echo. The loudest frame of the reply's first 0.6s sets the bar, and
-   you have to beat it by the margin for `wake.bargein_sustain_seconds` (220ms,
-   about three frames) — long enough that a consonant burst in Jarvis's own
-   speech cannot do it.
+    bar = max( floor, room x room_margin, echo x margin )
 
-**With a headset none of this is needed and all of it is harmless.** The echo
-floor measures near silence, so the margin is met by any speech at all. Tuning
-the margin is the second-best fix; a headset removes the problem rather than
-tuning it.
+1. **The floor** (`SILENCE_RMS`). Below it nothing is speech, whatever the
+   arithmetic says. The same floor the wake phrase uses, so "quiet" means one
+   thing.
+2. **The room** (`wake.bargein_room_margin`, 1.4), measured **continuously**.
+   The microphone loop runs the whole time hands free is on, so the frames
+   between replies are free and they are the room: the median of the last
+   `wake.bargein_room_seconds` (10s) of them. A median, so a sentence or a door
+   moves it barely at all while a fan being switched on moves it fully. Frames
+   inside the tail are excluded, because they still contain Jarvis.
+3. **The echo** (`wake.bargein_margin`, 1.4), measured per reply. The loudest
+   0.6s of the reply's start is not what is taken — what is taken is the level
+   the echo **holds** for the sustain window, so that it is the same kind of
+   measurement as the one you have to beat.
+
+Then you have to beat that bar for `wake.bargein_sustain_seconds` (220ms, about
+three frames) — long enough that a consonant burst in Jarvis's own speech
+cannot do it.
+
+### Held, not peak
+
+**A peak is one frame and the detector ignores it.** The sustain means only a
+level *held* for three frames counts, so a peak overstates what the detector
+will honour, and a mean is dragged down by the gaps between words.
+
+This was a real defect, not a tuning preference. The first version took the
+echo's loudest single frame as the reference. Measured on hardware that frame
+came out four to five times the echo's own average, so a margin of 2.2 was
+asking the operator to hold roughly nine times Jarvis's average level. Across
+three calibration runs, **no margin at or above 1.0 could work at all** — the
+detector had no valid setting, and the symptom was "sometimes it stops and
+sometimes it doesn't", because only a chance alignment of voice peaks ever
+cleared the bar.
+
+If you are carrying a `bargein_margin` over from before that fix, discard it.
+The number means something different now.
+
+### Why the room gets its own term
+
+Three calibration runs, minutes apart, in one seat, at one speaker volume, put
+the room's held level at 1264, 85 and 423 while the operator's barely moved.
+The room is the term that swings, and it was the one term measured once and
+then never used. A bar set only from the echo sits underneath a room like that,
+and **the room then interrupts with nobody in the chair** — a worse failure than
+not stopping at all.
 
 ## Measuring it on this machine
 
     ranger mic-bargein
 
-Three passes — the room, Jarvis speaking, you talking over him — printing the
-mean and peak of each, the threshold your configured margin puts on them, and
-either how far your voice clears it or a margin that would work.
+Three passes — the room, Jarvis speaking, you talking over him — repeated
+`--rounds` times (3 by default), because one four-second sample of a voice is
+not a voice and one of a room is certainly not a room. It prints the held,
+mean and peak of every pass and the **spread across passes**, which is the
+finding: a level that swings fifteen times over between rounds is a level no
+single reading describes.
+
+Jarvis speaks for himself here rather than needing a second terminal, and the
+same synthesised sentence is reused for every pass so the passes are
+comparable. Without an `ELEVENLABS_API_KEY` it falls back to asking you to
+start the speech.
+
+**The recommendation is not arithmetic on those numbers.** The recordings are
+replayed through a real `Detector` at each candidate margin, and what is
+reported is the range that never fires on the echo, never fires on the room
+laid over a reply, and always fires on every one of your voice passes. A
+recommendation that the code would not have honoured is worse than none.
+
+If no margin does all three, it says so and offers no number. That is a real
+state of the world and naming it is the useful answer.
 
 ## What the log says
 
@@ -91,3 +132,24 @@ This is an energy detector, not a speech classifier.
   learning window, so your voice is measured into the echo floor and that reply
   ends up harder to interrupt. That is the safe direction to be wrong in, but
   it is the case to report if it feels wrong.
+
+## The ceiling
+
+Level is all this has. Nothing in the path knows what Jarvis is playing, so his
+voice can only ever be **outranked**, never removed — and his voice is speech,
+so no amount of speech detection separates it from yours either.
+
+That leaves two real fixes, and neither is a number in this file:
+
+- **A headset.** It moves all three levels at once: your voice goes up because
+  the microphone is at your mouth, and both the echo and the room go down
+  because the microphone is no longer in the room with them. Everything above
+  becomes slack rather than marginal.
+- **Capturing the microphone in the browser**, where `getUserMedia` with
+  `echoCancellation` has both the captured audio and the audio being played,
+  because the browser is also the speaker. The echo would be cancelled rather
+  than outranked. That is the structurally correct answer and it is a change to
+  where the microphone lives, not to how it is judged.
+
+If calibration reports a room that holds a level close to your own voice, no
+margin can help: two signals the same size cannot be separated by size.

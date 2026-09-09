@@ -1670,3 +1670,31 @@ What actually helps, in order:
 - `ranger doctor` checks config, vault and environment.
 - `ranger init` creates Ranger's own folders and nothing else, after asking.
 - `ranger` starts the terminal REPL.
+
+### A setting the code never reads
+
+`bargein_tail_seconds` was configured, validated, documented and consumed by
+nothing: the playback gate already refused every frame the tail was supposed to
+refuse. It was found by asking "what breaks if I delete this?" and getting the
+answer "nothing" -- and chasing it found the real bug it should have been
+preventing.
+
+The same shape then appeared twice more in one sitting: `room_seconds` sized a
+deque that had its length hardcoded, and a test that fed three loud frames into
+a median and asserted it had not moved, which it had not either way.
+
+**A knob whose removal breaks no test is not configured, it is decorative.**
+After adding one, delete it and watch something fail.
+
+### Comparing a held level against a peak
+
+Barge-in required the operator to beat a margin over the echo -- where the echo
+was the loudest single frame of the reply's first half second, and the operator
+was measured by a level held for three frames. On hardware the echo's peak came
+out four to five times its own average, so a margin of 2.2 asked for nine times
+Jarvis's average level, and no value at or above 1.0 could work at all.
+
+Both sides of a ratio have to be the same kind of measurement. The symptom was
+"sometimes it works", which is what a threshold nobody can reach looks like
+when peaks occasionally align.
+

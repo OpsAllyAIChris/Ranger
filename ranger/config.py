@@ -226,10 +226,16 @@ class WakeConfig:
     #: during the first moments of each reply, the operator has to be. On a
     #: laptop speaker this is the whole separation, so it is not subtle.
     #: `ranger mic bargein` measures both levels rather than guessing.
-    bargein_margin: float = 2.2
+    bargein_margin: float = 1.4
     #: How long that has to hold, so a consonant burst in Jarvis's own speech
     #: cannot do it. About three frames.
     bargein_sustain_seconds: float = 0.22
+    #: How much louder than the room the operator has to be. Separate from the
+    #: margin because the room and the echo move independently, and measurement
+    #: says the room moves most.
+    bargein_room_margin: float = 1.4
+    #: How much recent room to keep, in seconds. The median of it is the floor.
+    bargein_room_seconds: float = 10.0
     #: How long a drained speaker queue can stay drained and still be the same
     #: reply carrying on. Too short and every sentence re-learns the echo, so
     #: the first 0.6s of each is un-interruptible; too long and a loud reply is
@@ -681,6 +687,8 @@ KNOWN_KEYS: dict[str, frozenset[str]] = {
         "surface_on_wake", "surface_topmost", "surface_topmost_never_in_call",
         "bargein", "bargein_margin", "bargein_sustain_seconds",
         "bargein_tail_seconds",
+        "bargein_room_margin",
+        "bargein_room_seconds",
     }),
     "brief": frozenset({
         "lines", "slipping_max", "deals_max", "cold_after_days", "decision_prompt",
@@ -1014,9 +1022,11 @@ def load_config(path: str | Path | None = None, *, load_env: bool = True) -> Con
             wake_section.get("surface_topmost_never_in_call", True)
         ),
         bargein=bool(wake_section.get("bargein", True)),
-        bargein_margin=float(wake_section.get("bargein_margin", 2.2)),
+        bargein_margin=float(wake_section.get("bargein_margin", 1.4)),
         bargein_sustain_seconds=float(wake_section.get("bargein_sustain_seconds", 0.22)),
         bargein_tail_seconds=float(wake_section.get("bargein_tail_seconds", 0.35)),
+        bargein_room_margin=float(wake_section.get("bargein_room_margin", 1.4)),
+        bargein_room_seconds=float(wake_section.get("bargein_room_seconds", 10.0)),
     )
     if len(wake.phrase.split()) < 2:
         raise ConfigError(
@@ -1039,6 +1049,13 @@ def load_config(path: str | Path | None = None, *, load_env: bool = True) -> Con
         )
     if wake.bargein_tail_seconds < 0:
         raise ConfigError("wake.bargein_tail_seconds cannot be negative")
+    if wake.bargein_room_margin < 1.0:
+        raise ConfigError(
+            "wake.bargein_room_margin below 1.0 puts the bar under the room, "
+            "so the room would interrupt with nobody in the chair"
+        )
+    if wake.bargein_room_seconds <= 0:
+        raise ConfigError("wake.bargein_room_seconds must be above zero")
     if wake.idle_disarm_minutes <= 0:
         raise ConfigError(
             "wake.idle_disarm_minutes must be positive. Hands free that never disarms "

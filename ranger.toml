@@ -253,13 +253,22 @@ surface_topmost_never_in_call = true
 # tools have already run, and a half-spoken answer that still changed something
 # is harder to recover from than one that finishes into an empty room.
 bargein = true
-# The whole separation between the operator and Jarvis's own voice coming back
-# through the microphone. There is no echo canceller in this path, so: while a
-# reply is playing and nobody has interrupted, whatever the microphone hears IS
-# the echo, and it is measured per reply. The operator has to beat it by this
-# much. Run 'ranger mic bargein' to see both levels on this machine rather than
-# guessing at the number.
-bargein_margin = 2.2
+# How much louder than Jarvis you have to be, comparing the level HE holds
+# against the level YOU hold. There is no echo canceller in this path, so while
+# a reply is playing and nobody has interrupted, whatever the microphone hears
+# is the echo, and it is measured afresh at the start of every reply.
+#
+# Both sides of this ratio are now "held" levels -- the level a sound stayed
+# above for the sustain window. The first version compared your held level
+# against the echo's loudest single FRAME, which measured four to five times
+# the echo's own average, so 2.2 was really asking for nine times Jarvis's
+# average level. On measured hardware no value at or above 1.0 could work at
+# all. That is why this number changed meaning, and why an old setting should
+# be re-measured rather than carried over.
+#
+# Run 'ranger mic-bargein' -- it replays real recordings through the real
+# detector and prints the range of margins that actually work here.
+bargein_margin = 1.4
 # How long the operator has to stay above it, so a consonant burst in Jarvis's
 # own speech cannot do it. About three frames.
 bargein_sustain_seconds = 0.22
@@ -273,6 +282,20 @@ bargein_sustain_seconds = 0.22
 # interruption is logged with how much was left unspoken, and one with nothing
 # left unspoken is Jarvis interrupting himself: lower nothing, raise the margin.
 bargein_tail_seconds = 0.35
+# How much louder than the ROOM you have to be. Separate from the margin above
+# because the room and the echo move independently, and measurement says the
+# room moves most: three calibration runs minutes apart in one seat put the
+# room's held level at 1264, 85 and 423 while the voice barely moved. A bar set
+# only from the echo is sometimes underneath the room, and the room then
+# interrupts with nobody in the chair -- which is worse than not stopping.
+# Lower than the echo margin on purpose: this multiplies a level measured
+# continuously rather than one sampled once.
+bargein_room_margin = 1.4
+# How much recent room to keep, in seconds; the median of it is the floor. A
+# median so that somebody talking, or a door, moves it barely at all while a
+# fan being switched on moves it fully. Only frames from between replies count,
+# and not the ones inside the tail, which still contain Jarvis.
+bargein_room_seconds = 10.0
 
 [brief]
 # Tier 5. A morning brief has a size, not a threshold.

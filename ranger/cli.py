@@ -1498,89 +1498,179 @@ def cmd_mic(config: Config, args: Any) -> int:
 
 
 def cmd_mic_bargein(config: Config, args: Any) -> int:
-    """Measure the two levels barge-in depends on, on this machine.
+    """Measure what this microphone hears, several times, and say what fits.
 
-    There is no echo canceller in this path, so the separation between the
-    operator and Jarvis's own voice is a margin over a measured level. A margin
-    over a *guessed* level is how a laptop ends up either stopping on its own
-    second syllable or ignoring the operator entirely, so this measures both
-    and prints them.
+    There is no echo canceller in this path, so barge-in separates the operator
+    from Jarvis's own voice by level. Three levels matter and all three move:
+    the room, the echo, and the operator. **One reading of any of them is not a
+    measurement**, so each is taken several times over and the spread is
+    printed, because the spread is the finding -- three runs minutes apart in
+    one seat put the room at fifteen times its own quietest reading.
 
-    Two passes. The first records the room with nothing playing: that is the
-    floor. Then Jarvis speaks and it records again, with the operator asked to
-    stay quiet: that is the echo. Then it speaks once more and the operator is
-    asked to talk over it: that is what has to beat the margin.
+    The recommendation is not arithmetic on these numbers. The recordings are
+    replayed through a real Detector at each candidate margin, and what is
+    reported is the range of margins that never fires on the room or the echo
+    and always fires on the operator. If no margin does both, that is said
+    plainly rather than dressed up as a number.
     """
-    import asyncio
     import time
 
     from .audio import AudioError
-    from .bargein import Detector
-    from .wake import FRAME_SAMPLES, SAMPLE_RATE, rms
+    from .bargein import Pass, Spread, advise
+    from .wake import rms
 
     paint = _colour(sys.stdout.isatty())
     seconds = float(getattr(args, "seconds", 0) or 4.0)
+    rounds = max(1, int(getattr(args, "rounds", 0) or 3))
     line = getattr(args, "text", "") or (
         "This is the sentence Jarvis will say while you decide whether to talk "
         "over it. Keep going until it stops."
     )
 
-    def measure(label: str) -> tuple[float, float]:
+    def record(label: str) -> Pass:
         from .handsfree import microphone_frames
 
-        print(paint(f"  {label} ({seconds:.0f}s)...", DIM), flush=True)
-        levels: list[float] = []
+        print(paint(f"     {label} ({seconds:.0f}s)...", DIM), flush=True)
+        frames: list[bytes] = []
         until = time.monotonic() + seconds
         try:
             for frame in microphone_frames():
-                levels.append(rms(frame))
+                frames.append(frame)
                 if time.monotonic() >= until:
                     break
         except AudioError as exc:
             print(paint(f"  {exc}", RED), file=sys.stderr)
             raise SystemExit(1)
-        heard = levels or [0.0]
-        return sum(heard) / len(heard), max(heard)
+        return Pass(kind=label, levels=[rms(item) for item in frames], frames=frames)
+
+    speech = _bargein_speech(config, line, paint)
+
+    def play_and_record(label: str) -> Pass:
+        """Record while Jarvis talks. Speaking is driven from here rather than
+        from another terminal, because a calibration nobody can face running
+        three times is a calibration that gets run once."""
+        if speech is None:
+            input("     press enter when it starts speaking... ")
+            return record(label)
+        import threading
+
+        from .audio import AudioError, SoundDeviceBackend, resolve_device
+
+        pcm, rate = speech
+        failed: list[str] = []
+
+        def play() -> None:
+            try:
+                backend = SoundDeviceBackend()
+                device = resolve_device(
+                    config.voice.output_device, backend.devices(), kind="output"
+                )
+                backend.play(pcm, samplerate=rate, channels=1, device=device)
+            except AudioError as exc:  # a dead speaker is not a dead command
+                failed.append(str(exc))
+
+        speaker = threading.Thread(target=play, daemon=True)
+        speaker.start()
+        heard = record(label)
+        speaker.join(timeout=1.0)
+        if failed:
+            print(paint(f"     the speaker failed: {failed[0]}", RED))
+        return heard
 
     print(paint("  Measuring what this microphone hears. Nothing is written.", BOLD))
-    print()
-    print(paint("  1. The room, with nothing playing. Stay quiet.", BOLD))
-    quiet_mean, quiet_peak = measure("listening")
-    print(f"     room: mean {quiet_mean:.0f}, peak {quiet_peak:.0f}")
+    print(paint(f"  {rounds} rounds of three passes. One reading is not a "
+                "measurement.", DIM))
+
+    rooms: list[Pass] = []
+    echoes: list[Pass] = []
+    voices: list[Pass] = []
+    for number in range(1, rounds + 1):
+        print()
+        print(paint(f"  round {number} of {rounds}", BOLD))
+        print(paint("   1. the room, with nothing playing. Stay quiet.", BOLD))
+        rooms.append(record("room"))
+        print(paint("   2. Jarvis speaking, you quiet. This is the echo.", BOLD))
+        echoes.append(play_and_record("echo"))
+        print(paint("   3. Jarvis speaking, and you talking over it.", BOLD))
+        if speech is not None:
+            input("     press enter, then talk over it... ")
+        voices.append(play_and_record("you over it"))
 
     print()
-    print(paint("  2. Jarvis speaking, with you quiet. This is the echo.", BOLD))
-    print(paint("     Start the speech in another terminal:", DIM))
-    print(paint(f'       ranger say "{line[:60]}..."', DIM))
-    input("     press enter when it starts speaking... ")
-    echo_mean, echo_peak = measure("listening")
-    print(f"     echo: mean {echo_mean:.0f}, peak {echo_peak:.0f}")
+    print(paint("  what this machine sounds like", BOLD))
+    print(paint("  'held' is the level a pass stayed above for long enough to "
+                "count.", DIM))
+    print(paint("  It is the only one the detector uses; a peak is one frame "
+                "and is ignored.", DIM))
+    for spread in (Spread("room", rooms), Spread("echo", echoes),
+                   Spread("you over it", voices)):
+        print(f"     {spread.describe()}")
+        if spread.swing() > 3:
+            print(paint(f"       that swings {spread.swing():.0f}x between "
+                        "passes, which is what makes one reading useless", DIM))
 
+    answer = advise(
+        echoes, voices, rooms,
+        sustain_seconds=config.wake.bargein_sustain_seconds,
+        room_margin=config.wake.bargein_room_margin,
+    )
     print()
-    print(paint("  3. Jarvis speaking, and you talking over it.", BOLD))
-    input("     press enter when it starts speaking, then talk... ")
-    both_mean, both_peak = measure("listening")
-    print(f"     you over it: mean {both_mean:.0f}, peak {both_peak:.0f}")
-
-    margin = config.wake.bargein_margin
-    threshold = max(echo_peak * margin, 380.0)
-    print()
-    print(paint("  what that means", BOLD))
-    print(f"     the threshold at margin {margin} would be {threshold:.0f}")
-    if both_peak > threshold:
-        headroom = both_peak / threshold if threshold else 0
-        print(paint(f"     your voice reached {both_peak:.0f}, which clears it "
-                    f"{headroom:.1f}x over", TEAL))
-        print(paint("     barge-in should work at this volume and this seating", DIM))
+    print(paint("  what fits", BOLD))
+    if answer.workable:
+        print(paint(f"     margins from {answer.low:.2f} to {answer.high:.2f} "
+                    "never fire on the room or the echo", TEAL))
+        print(paint(f"     and always fire on you. Set wake.bargein_margin = "
+                    f"{answer.suggested}", TEAL))
+        current = config.wake.bargein_margin
+        if not (answer.low <= current <= answer.high):
+            print(paint(f"     yours is {current}, which is outside that range",
+                        YELLOW))
     else:
-        suggested = max(1.1, (both_peak * 0.6) / max(echo_peak, 1.0))
-        print(paint(f"     your voice reached {both_peak:.0f}, which does NOT clear it",
-                    YELLOW))
-        print(paint(f"     try wake.bargein_margin = {suggested:.1f}, or turn the "
-                    "speaker down,", YELLOW))
-        print(paint("     or use a headset, which removes the problem rather than "
-                    "tuning it", YELLOW))
+        print(paint(f"     {answer.binding}", YELLOW))
+        print(paint("     no margin is offered because none of them work. "
+                    "A headset", YELLOW))
+        print(paint("     removes the problem rather than tuning it: it raises "
+                    "your level", YELLOW))
+        print(paint("     and lowers both the others at the same time.", YELLOW))
+    for warning in answer.lines:
+        print()
+        print(paint(f"     {warning}", YELLOW))
     return 0
+
+
+def _bargein_speech(config: Config, line: str, paint) -> "tuple[bytes, int] | None":
+    """The sentence to play, synthesised once and reused for every pass.
+
+    Once, so that every pass hears identical audio and the passes are
+    comparable; and here rather than in another terminal so that running this
+    three times is bearable. Without a key it falls back to asking, because a
+    calibration that needs the network to run at all is one that cannot be run
+    when the network is the problem.
+    """
+    import asyncio
+
+    from .tts import SpeechError, build_speaker, decode
+
+    try:
+        api_key = require_api_key("ELEVENLABS_API_KEY")
+    except ConfigError:
+        print(paint("  no ELEVENLABS_API_KEY, so start the speech yourself:", DIM))
+        print(paint(f'    ranger say "{line[:60]}..."', DIM))
+        return None
+
+    async def collect() -> bytes:
+        chunks: list[bytes] = []
+        async for chunk in build_speaker(config.tts, api_key).stream(line):
+            chunks.append(chunk)
+        return b"".join(chunks)
+
+    try:
+        audio = asyncio.run(collect())
+        return decode(audio, config.tts.output_format) if audio else None
+    except SpeechError as exc:
+        print(paint(f"  could not synthesise the sentence ({exc}).", DIM))
+        print(paint(f'  start it yourself: ranger say "{line[:60]}..."', DIM))
+        return None
 
 
 def cmd_dormant(config: Config, args: Any) -> int:
@@ -2740,6 +2830,11 @@ def main(argv: list[str] | None = None) -> int:
              "barge-in margin comes from data rather than a guess",
     )
     mic_bargein.add_argument("--seconds", type=float, default=4.0)
+    mic_bargein.add_argument(
+        "--rounds", type=int, default=3,
+        help="how many times to measure each level. One reading of a room is "
+             "not a room, and one of a voice is not a voice",
+    )
     mic_bargein.add_argument("--text", default="", help="the sentence to compare against")
 
     sub.add_parser(

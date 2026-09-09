@@ -498,6 +498,8 @@ class Session:
             margin=wake.bargein_margin,
             sustain_seconds=wake.bargein_sustain_seconds,
             tail_seconds=wake.bargein_tail_seconds,
+            room_margin=wake.bargein_room_margin,
+            room_seconds=wake.bargein_room_seconds,
         ) if wake.bargein else None
 
         def interrupted() -> None:
