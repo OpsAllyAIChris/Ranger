@@ -244,7 +244,11 @@ html, body {
   background: transparent;
   color: var(--ink-faint);
   cursor: pointer;
-  opacity: 0;
+  /* Visible without hovering. A control that only exists on hover is a control
+     the operator does not know they have: four drafts on screen and no way to
+     see there was a way to clear them. Dimmed until the row is under the
+     pointer, which is a different thing from absent. */
+  opacity: 0.5;
   font-size: 14px; line-height: 1;
   transition: opacity 200ms var(--ease), background 200ms var(--ease), color 200ms var(--ease);
 }
@@ -307,6 +311,15 @@ html, body {
  * cover the activity panel. A document does not fit in a 260px column and the
  * orb is the only thing on screen that says what state Jarvis is in.
  */
+/* Explicit, and load bearing, for exactly the reason the confirmation card
+   below says: `display: flex` beats the browser's own [hidden] rule, so
+   without this the sheet is `hidden` and on screen anyway -- a black panel
+   over the left half of the window on a fresh session, with the orb pushed
+   out of the middle of the frame to make room for nothing. The comment on
+   #confirm was written after this trap caught the card; it caught the sheet
+   too, one commit later. */
+#preview[hidden] { display: none; }
+
 #preview {
   position: absolute;
   left: 0;

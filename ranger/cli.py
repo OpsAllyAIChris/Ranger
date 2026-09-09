@@ -338,18 +338,37 @@ def cmd_doctor(config: Config) -> int:
     from .desktop import find_report, on_windows
 
     if on_windows():
-        window = find_report()
-        if window["found"]:
-            print(f"  ok       the interface window is findable: {window['title']!r}")
+        from .desktop import CONFIRMED
+        from .server import describe as _url
+
+        window = find_report(url=_url(config))
+        if window["found"] and window["confidence"] == CONFIRMED:
+            print(f"  ok       the interface window: {window['title']!r}")
+            print(f"           {window['why']}")
+        elif window["found"]:
+            # Found, and not confidently the interface. Deliberately not ok:
+            # the Obsidian window matched the old rule and was reported as ok,
+            # and the only reason that was caught is that the title was printed.
+            problems += 1
+            print("  check    a window matched, but it is not confidently the interface")
+            print(f"           {window['title']!r} -- {window['why']}")
+            print("           Surfacing will use it. If that is the wrong window, close")
+            print("           it and reopen Jarvis with 'ranger open'.")
         else:
             problems += 1
             print("  problem  the interface window cannot be found, so the wake word")
             print("           cannot bring it forward and cannot put it away")
-            print(f"           looking for: {', '.join(window['looking_for'])}")
+            print(f"           looking for: a window titled exactly "
+                  f"{window['looking_for'][0]!r}, belonging to a browser")
             for title in window["titles"][:12]:
                 print(f"             open: {title!r}")
             if len(window["titles"]) > 12:
                 print(f"             ... and {len(window['titles']) - 12} more")
+        # Anything carrying the name that was refused, always, found or not.
+        # This is where the Obsidian window belongs: visible, named, with the
+        # reason it is not going to be surfaced.
+        for refused in window["rejected"][:6]:
+            print(f"           not it:  {refused['title']!r} -- {refused['why']}")
     else:
         print("  ok       window surfacing is a Windows feature and this is not Windows")
 

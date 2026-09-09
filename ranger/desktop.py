@@ -14,6 +14,7 @@ parts that cannot.
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -293,22 +294,30 @@ def minimise_window(title_starts_with: str | None = None) -> FocusResult:
         return FocusResult(FAILED, f"{type(exc).__name__}: {exc}")
 
 
-def find_report(title_starts_with: str | None = None) -> dict[str, Any]:
-    """Can the window be found, and **what title does Windows actually report**?
+def find_report(title_starts_with: str | None = None, url: str = "") -> dict[str, Any]:
+    """What window would be surfaced, **and how sure that is**.
 
-    The diagnostic that was missing. Surfacing broke on a rename and the only
-    symptom was a `not_found` in the audit log after a wake firing, which is
-    both too late and does not say what it was looking at. `ranger doctor` calls
-    this, so the answer is available before the microphone is ever armed.
+    `ranger doctor` prints this. It used to print `ok` and the title, and the
+    title was the only reason the operator noticed it had matched Obsidian. So
+    the report now carries the evidence, and a match that is not confident is
+    not reported as ok. A green check on the wrong window is worse than no
+    check.
 
-    When nothing matches it returns every visible window title on the machine,
-    because the useful question then is "what is it called now", and guessing
-    at that from a repository with no Windows in it is how a day gets lost.
+    Three things come back:
+
+    - `found` and `confidence`: what would be acted on, and whether the process
+      behind it was identified as this interface.
+    - `rejected`: windows that carry the name and were refused, with the reason.
+      **The Obsidian window appears here**, which is where it should have been
+      all along rather than in the ok line.
+    - `titles`: every visible window, when nothing matched at all, because the
+      useful question then is "what is it called now".
     """
     names = (title_starts_with,) if title_starts_with else window_names()
     report: dict[str, Any] = {
         "windows": False, "found": False, "title": "", "looking_for": list(names),
-        "titles": [], "detail": "",
+        "titles": [], "detail": "", "confidence": "", "why": "", "image": "",
+        "rejected": [],
     }
     if not on_windows():
         report["detail"] = "not Windows, so there is no window to find"
@@ -320,15 +329,27 @@ def find_report(title_starts_with: str | None = None) -> dict[str, Any]:
         from ctypes import wintypes
 
         user32 = ctypes.WinDLL("user32", use_last_error=True)
-        titles = [title for _, title in visible_windows(user32, ctypes, wintypes)]
-        for title in titles:
-            if matches(title, names):
-                report.update(found=True, title=title, detail=f"found: {title!r}")
-                return report
-        report["titles"] = titles
+        accepted, rejected = survey_windows(user32, ctypes, wintypes, names, url)
+        report["rejected"] = [
+            {"title": m.title, "image": image_name(m.image), "why": m.why} for m in rejected
+        ]
+        if accepted:
+            best = accepted[0]
+            report.update(
+                found=True,
+                title=best.title,
+                confidence=best.confidence,
+                why=best.why,
+                image=image_name(best.image),
+                detail=f"{best.title!r}: {best.why}",
+            )
+            return report
+
+        report["titles"] = [title for _, title, _ in visible_windows(user32, ctypes, wintypes)]
         report["detail"] = (
-            f"no visible window carries any of {', '.join(names)}; "
-            f"{len(titles)} windows are open"
+            f"no window is the interface. Looking for one titled exactly "
+            f"{names[0]!r} belonging to a browser; "
+            f"{len(report['titles'])} windows are open"
         )
     except Exception as exc:
         report["detail"] = f"{type(exc).__name__}: {exc}"
@@ -408,35 +429,315 @@ def window_state(title_starts_with: str | None = None) -> dict[str, Any]:
         return unknown
 
 
-#: Every name the window may be carrying. **Not one string, and not
-#: `startswith`.**
-#:
-#: Matching `startswith(ASSISTANT)` made a rename silently disable surfacing.
-#: The window title comes from the page's `<title>`, which only changes when
-#: the page is reloaded -- so a Chrome window that was already open when the
-#: rename shipped still says the old name, and will until it is reopened.
-#: Chrome may also append to the title, and a tab that has not finished loading
-#: shows the URL instead.
-#:
-#: So: substring, several candidates, and the old name kept deliberately rather
-#: than as a leftover. A window called Ranger is Jarvis's window; there is no
-#: other program on that machine called either.
+# -- which window is actually ours -----------------------------------------
+#
+# **A window title is cosmetic and cannot be the whole answer.** The first
+# version matched `startswith(ASSISTANT)`, and a rename silently disabled
+# surfacing. The fix was a substring match over two candidate names, and that
+# opened a wider hole: the operator's vault is called `Ranger-Vault`, so
+# Obsidian's window is titled
+#
+#     Graph view - Ranger-Vault - Obsidian 1.13.7
+#
+# which contains "Ranger". Surfacing would have restored and flashed Obsidian
+# on every wake firing, and `ranger doctor` reported it as ok. **A green check
+# on the wrong window is worse than no check.**
+#
+# So identity is now evidence about the process, and the title is one signal
+# rather than the signal:
+#
+#   1. **The command line.** The interface is a browser started with
+#      `--app=http://localhost:<port>/`. Nothing else on the machine has that.
+#      Read best-effort; when it can be read it settles the question.
+#   2. **The executable.** The window's process, through the documented
+#      `QueryFullProcessImageNameW`. Obsidian.exe is not a browser, and that
+#      one check is what rejects the window above however it is titled.
+#   3. **The title**, tightened to what the page actually serves: exactly
+#      "Jarvis", or "Jarvis" followed by a browser's own suffix. Not a
+#      substring anywhere, and "Ranger" is gone from the candidates -- the
+#      vault directory keeps that name, deliberately, so it can never be a
+#      thing to match on again.
+#
+# Everything below the Win32 calls is pure and takes strings, so the decision
+# can be tested on a machine with no windows at all.
+
+CONFIRMED = "confirmed"
+PROBABLE = "probable"
+REJECTED = ""
+
+#: The image name of a browser that can host the interface. The window's
+#: process must be one of these: it is the check that rejects another
+#: application whose title happens to carry the name.
+BROWSER_IMAGES = frozenset({
+    "chrome.exe", "msedge.exe", "chromium.exe", "brave.exe", "firefox.exe",
+    "chrome", "msedge", "chromium", "chromium-browser", "google-chrome", "firefox",
+})
+
+#: What a browser appends to a page title in its ordinary windows. App mode
+#: appends nothing, which is why an exact title is the strong case.
+BROWSER_SUFFIXES = (
+    "google chrome", "chromium", "microsoft edge", "mozilla firefox", "brave",
+)
+
+#: The separators browsers use between a page title and their own name.
+SEPARATORS = (" - ", " \u2013 ", " \u2014 ", " | ")
+
+#: How the interface is launched, and the only string on the machine that
+#: belongs to it alone.
+APP_MARKER = "--app="
+
+
 def window_names() -> tuple[str, ...]:
-    from .naming import ASSISTANT, PROJECT
+    """The names a window may carry. **One name, and it is not "Ranger".**
 
-    return (ASSISTANT, PROJECT)
+    The old name was kept as a candidate on the reasoning that a Chrome window
+    open across the rename would still say it. That was true and it was not
+    worth what it cost: the vault directory is `Ranger-Vault` and is staying
+    that way, so every Obsidian window on the machine carries the word. A
+    window that still says the old name is fixed by reloading the page, which
+    is a smaller problem than surfacing the wrong application.
+    """
+    from .naming import ASSISTANT
+
+    return (ASSISTANT,)
 
 
-def visible_windows(user32, ctypes, wintypes) -> list[tuple[int, str]]:
-    """Every visible top level window with a title. For matching and for
-    `ranger doctor`, which needs to show what is actually there.
+def image_name(path: str) -> str:
+    """The executable's own name, from a path in **either** convention.
+
+    `Path(...).name` is not this: on Linux a backslash is an ordinary
+    character, so `Path("C:\\chrome.exe").name` is the whole string. These are
+    always Windows paths and the tests run on both platforms, so a helper that
+    splits on both separators is the only version that means the same thing
+    everywhere. Found by a test failing on Linux for the right reason.
+    """
+    return re.split(r"[\\/]", str(path or "").strip())[-1].casefold()
+
+
+def title_shape(title: str, names: tuple[str, ...] = ()) -> str:
+    """How the title matches, if it does at all: "exact", "suffix", or "".
+
+    Exact is what Chrome's app mode produces: the window title is the page's
+    `<title>` and nothing else. Suffix is an ordinary browser window, where the
+    browser appends its own name -- a weaker signal, because it is also what a
+    tab showing any page called "Jarvis" would look like.
+    """
+    flat = " ".join(str(title or "").split())
+    lowered = flat.casefold()
+    for name in (names or window_names()):
+        wanted = name.casefold()
+        if not wanted:
+            continue
+        if lowered == wanted:
+            return "exact"
+        for separator in SEPARATORS:
+            head, found, tail = lowered.partition(separator.casefold())
+            if found and head == wanted and any(
+                tail.startswith(suffix) for suffix in BROWSER_SUFFIXES
+            ):
+                return "suffix"
+    return ""
+
+
+def identify(
+    title: str,
+    *,
+    image: str = "",
+    command_line: str = "",
+    names: tuple[str, ...] = (),
+    url: str = "",
+) -> tuple[str, str]:
+    """(confidence, why) for one window. Pure, and the whole decision.
+
+    Ordered by how much each signal is worth. The command line settles it. The
+    executable can only reject. The title alone is never enough to confirm and
+    never enough, on its own, to act on the wrong application.
+    """
+    shape = title_shape(title, names)
+    exe = image_name(image)
+    line = str(command_line or "")
+
+    if not shape:
+        return REJECTED, "the title is not the one the interface serves"
+    if exe and exe not in BROWSER_IMAGES:
+        # The Obsidian case. It does not matter what the title says.
+        return REJECTED, f"it belongs to {exe}, which is not a browser"
+
+    if line:
+        if APP_MARKER in line and (not url or url.casefold() in line.casefold()):
+            return CONFIRMED, f"started with {APP_MARKER}, and the title is {title!r}"
+        if APP_MARKER in line:
+            return PROBABLE, (
+                f"started with {APP_MARKER} but not at {url}; it may be a second window"
+            )
+        return PROBABLE, (
+            f"its command line does not name this interface; matched on the title "
+            f"{title!r}" + (f" and on {exe}" if exe else "")
+        )
+
+    if shape == "exact" and exe:
+        return CONFIRMED, f"the title is exactly {title!r} and it belongs to {exe}"
+    if shape == "exact":
+        return PROBABLE, (
+            f"the title is exactly {title!r}; the process could not be identified"
+        )
+    return PROBABLE, (
+        f"the title is {title!r}, which is a browser window rather than the app window"
+    )
+
+
+def matches(title: str, names: tuple[str, ...] = ()) -> bool:
+    """Could this title be the interface? **Title evidence only.**
+
+    Kept because the served `<title>` and the matcher must not drift apart, and
+    that test asks this question. It is deliberately not enough on its own:
+    everything that acts on a window goes through `identify`.
+    """
+    return bool(title_shape(title, names))
+
+
+def process_image(pid: int) -> str:
+    """The executable behind a window, or "" when it cannot be read.
+
+    `QueryFullProcessImageNameW` with `PROCESS_QUERY_LIMITED_INFORMATION`,
+    which is documented, cheap, and granted for a process the operator owns.
+    """
+    if not on_windows() or not pid:
+        return ""
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.OpenProcess.restype = wintypes.HANDLE
+        kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+        handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, int(pid))
+        if not handle:
+            return ""
+        try:
+            size = wintypes.DWORD(32768)
+            buffer = ctypes.create_unicode_buffer(size.value)
+            if not kernel32.QueryFullProcessImageNameW(
+                handle, 0, buffer, ctypes.byref(size)
+            ):
+                return ""
+            return buffer.value
+        finally:
+            kernel32.CloseHandle(handle)
+    except Exception:
+        return ""
+
+
+def process_command_line(pid: int) -> str:
+    """The command line of a process, or "" when it cannot be read.
+
+    **Best effort, and the failure is a shrug rather than an exception.** There
+    is no documented Win32 call for another process's command line, so this
+    reads it out of the process environment block, which means fixed structure
+    offsets: `PEB.ProcessParameters` at 0x20 and
+    `RTL_USER_PROCESS_PARAMETERS.CommandLine` at 0x70, both stable for 64-bit
+    Windows 10 and 11. A 32-bit Python cannot read a 64-bit process this way
+    and does not try.
+
+    The result is checked for being a command line rather than trusted, so a
+    wrong offset degrades to "could not read" instead of to a confident answer
+    about noise. Everything above treats "" as "no evidence" and falls back to
+    the executable and the title, which is why this being unavailable weakens
+    the answer without breaking it.
+
+    None of this can be exercised from a sandbox. `identify` is where the
+    decision lives and it takes the string.
+    """
+    if not on_windows() or not pid or sys.maxsize <= 2 ** 32:
+        return ""
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+        PROCESS_VM_READ = 0x0010
+
+        class PROCESS_BASIC_INFORMATION(ctypes.Structure):
+            _fields_ = [
+                ("Reserved1", ctypes.c_void_p),
+                ("PebBaseAddress", ctypes.c_void_p),
+                ("Reserved2", ctypes.c_void_p * 2),
+                ("UniqueProcessId", ctypes.c_void_p),
+                ("Reserved3", ctypes.c_void_p),
+            ]
+
+        class UNICODE_STRING(ctypes.Structure):
+            _fields_ = [
+                ("Length", ctypes.c_ushort),
+                ("MaximumLength", ctypes.c_ushort),
+                ("Buffer", ctypes.c_void_p),
+            ]
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        ntdll = ctypes.WinDLL("ntdll", use_last_error=True)
+        kernel32.OpenProcess.restype = wintypes.HANDLE
+        kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+
+        handle = kernel32.OpenProcess(
+            PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_VM_READ, False, int(pid)
+        )
+        if not handle:
+            return ""
+        try:
+            info = PROCESS_BASIC_INFORMATION()
+            written = ctypes.c_ulong(0)
+            if ntdll.NtQueryInformationProcess(
+                handle, 0, ctypes.byref(info), ctypes.sizeof(info), ctypes.byref(written)
+            ) != 0 or not info.PebBaseAddress:
+                return ""
+
+            def read(address, size):
+                buffer = ctypes.create_string_buffer(size)
+                read_bytes = ctypes.c_size_t(0)
+                if not kernel32.ReadProcessMemory(
+                    handle, ctypes.c_void_p(address), buffer,
+                    ctypes.c_size_t(size), ctypes.byref(read_bytes),
+                ):
+                    return None
+                return buffer.raw[: read_bytes.value]
+
+            pointer = read(info.PebBaseAddress + 0x20, 8)
+            if not pointer or len(pointer) < 8:
+                return ""
+            parameters = int.from_bytes(pointer, "little")
+            raw = read(parameters + 0x70, ctypes.sizeof(UNICODE_STRING))
+            if not raw or len(raw) < ctypes.sizeof(UNICODE_STRING):
+                return ""
+            unicode_string = UNICODE_STRING.from_buffer_copy(raw)
+            if not unicode_string.Buffer or not 0 < unicode_string.Length <= 32768:
+                return ""
+            text = read(unicode_string.Buffer, unicode_string.Length)
+            if not text:
+                return ""
+            line = text.decode("utf-16-le", errors="replace").strip("\x00")
+            # Checked, not trusted. A command line has a program in it.
+            if len(line) < 3 or "\x00" in line or line.count("\ufffd") > 4:
+                return ""
+            return line
+        finally:
+            kernel32.CloseHandle(handle)
+    except Exception:
+        return ""
+
+
+def visible_windows(user32, ctypes, wintypes) -> list[tuple[int, str, int]]:
+    """Every visible top level window with a title, and the process behind it.
+
+    `(handle, title, pid)`. The pid is what turned identity from a string
+    comparison into a question about a process.
 
     A minimised window is still `IsWindowVisible`: that flag is about WS_VISIBLE
     rather than about being on screen, which is the same distinction that makes
     the occlusion question hard.
     """
     enum_proc = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
-    found: list[tuple[int, str]] = []
+    found: list[tuple[int, str, int]] = []
 
     def visit(handle, _param):
         if not user32.IsWindowVisible(handle):
@@ -446,31 +747,83 @@ def visible_windows(user32, ctypes, wintypes) -> list[tuple[int, str]]:
             return True
         buffer = ctypes.create_unicode_buffer(length + 1)
         user32.GetWindowTextW(handle, buffer, length + 1)
-        found.append((handle, buffer.value))
+        pid = wintypes.DWORD(0)
+        try:
+            user32.GetWindowThreadProcessId(handle, ctypes.byref(pid))
+        except Exception:
+            pid = wintypes.DWORD(0)
+        found.append((handle, buffer.value, int(pid.value)))
         return True
 
     user32.EnumWindows(enum_proc(visit), 0)
     return found
 
 
-def matches(title: str, names: tuple[str, ...] = ()) -> bool:
-    """Is this title one of Jarvis's windows? Case-insensitively, anywhere in it."""
-    lowered = title.casefold()
-    return any(name.casefold() in lowered for name in (names or window_names()))
+@dataclass(frozen=True)
+class WindowMatch:
+    """One candidate, with the evidence that made it one."""
+
+    handle: int
+    title: str
+    pid: int
+    image: str
+    confidence: str
+    why: str
+
+    @property
+    def confirmed(self) -> bool:
+        return self.confidence == CONFIRMED
+
+    def describe(self) -> str:
+        return f"{self.title!r} ({image_name(self.image) or 'unknown process'}): {self.why}"
+
+
+def survey_windows(
+    user32, ctypes, wintypes, names: tuple[str, ...] = (), url: str = ""
+) -> tuple[list[WindowMatch], list[WindowMatch]]:
+    """(what could be the interface, what nearly was).
+
+    The second list is the point of this function. The Obsidian window was a
+    near miss under the old rule and a silent one; anything carrying the name
+    and rejected is worth showing the operator, because that is where the next
+    wrong match will come from.
+    """
+    names = names or window_names()
+    accepted: list[WindowMatch] = []
+    rejected: list[WindowMatch] = []
+    for handle, title, pid in visible_windows(user32, ctypes, wintypes):
+        shape = title_shape(title, names)
+        carries = any(name.casefold() in title.casefold() for name in names)
+        if not shape and not carries:
+            continue
+        image = process_image(pid)
+        confidence, why = identify(
+            title,
+            image=image,
+            command_line=process_command_line(pid) if shape else "",
+            names=names,
+            url=url,
+        )
+        match = WindowMatch(handle, title, pid, image, confidence, why)
+        (accepted if confidence else rejected).append(match)
+    accepted.sort(key=lambda m: 0 if m.confirmed else 1)
+    return accepted, rejected
 
 
 def _find_window(user32, ctypes, wintypes, title_starts_with: str | None = None):
-    """The first visible window whose title carries one of Jarvis's names.
+    """The interface's window, or None. **Evidence, not a title comparison.**
 
-    `title_starts_with` is kept as an override for the tests that deliberately
-    ask for a title nothing can have. When it is None the candidate list is
-    used, which is the path everything real takes.
+    A confirmed match wins; a probable one is used when there is no confirmed
+    one, because a browser window that is genuinely the interface is still the
+    interface. A rejected window is never touched, whatever it is called --
+    which is the whole of the Obsidian fix.
+
+    `title_starts_with` is an override for the tests that ask for a title
+    nothing can have. When it is None the real candidate list is used.
     """
     names = (title_starts_with,) if title_starts_with else window_names()
-    for handle, title in visible_windows(user32, ctypes, wintypes):
-        if matches(title, names):
-            return handle
-    return None
+    accepted, _ = survey_windows(user32, ctypes, wintypes, names)
+    return accepted[0].handle if accepted else None
 
 
 def _surface(user32, ctypes, wintypes, handle, *, topmost: bool = False) -> FocusResult:

@@ -459,47 +459,103 @@ def test_the_title_comes_from_the_naming_constant():
     assert served_title() == ASSISTANT
 
 
-def test_the_previous_name_still_matches():
-    """Deliberate, not a leftover.
+#: The window that broke it, verbatim from the operator's machine. Their vault
+#: directory is `Ranger-Vault` and is staying that way, so Obsidian's window
+#: will carry the word "Ranger" for as long as this project exists.
+OBSIDIAN = "Graph view - Ranger-Vault - Obsidian 1.13.7"
 
-    The window title comes from the page's `<title>`, which only changes when
-    the page is reloaded. A Chrome window that was already open when a rename
-    shipped keeps the old name until it is reopened -- which is exactly how
-    this broke. There is no other program on that machine called either.
+
+def test_the_obsidian_window_is_not_matched():
+    """**The false positive, as a fixture.**
+
+    The substring rule fixed a rename and opened a wider hole: this title
+    contains "Ranger", so surfacing would have restored and flashed Obsidian on
+    every wake firing, and `ranger doctor` reported it as ok. The vault keeps
+    the old name deliberately, so this string is permanent and so is this test.
+    """
+    from ranger.desktop import identify, matches
+
+    assert not matches(OBSIDIAN)
+    confidence, why = identify(OBSIDIAN, image=r"C:\Obsidian\Obsidian.exe")
+    assert confidence == ""
+    assert "title" in why
+
+
+def test_the_old_name_is_no_longer_a_candidate():
+    """Dropped on purpose, and this is the record of why.
+
+    It was kept so that a Chrome window open across the rename would still be
+    found. That was true, and it cost more than it was worth: every Obsidian
+    window on the machine carries the word. A window still showing the old name
+    is fixed by reloading the page, which is a smaller problem than surfacing
+    somebody else's application.
     """
     from ranger.desktop import matches
     from ranger.naming import PROJECT
 
-    assert matches(PROJECT)
+    assert not matches(PROJECT)
+    assert PROJECT not in " ".join(__import__("ranger.desktop", fromlist=["x"]).window_names())
 
 
-@pytest.mark.parametrize(
-    "title",
-    [
+def test_a_window_that_is_not_a_browser_is_refused_however_it_is_titled():
+    """The check that is not cosmetic. A title can say anything; Obsidian.exe
+    is not a browser and no title changes that."""
+    from ranger.desktop import identify
+
+    confidence, why = identify("Jarvis", image=r"C:\Obsidian\Obsidian.exe")
+    assert confidence == ""
+    assert "obsidian.exe" in why and "not a browser" in why
+
+
+def test_the_command_line_is_what_settles_it():
+    """The interface is a browser started with --app at our own port. Nothing
+    else on the machine has that string in it."""
+    from ranger.desktop import CONFIRMED, identify
+
+    confidence, why = identify(
         "Jarvis",
-        "Ranger",
+        image=r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+        command_line=(
+            '"C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe" '
+            "--app=http://localhost:8765/ --user-data-dir=C:\\Vault\\Ranger\\browser"
+        ),
+        url="http://localhost:8765/",
+    )
+    assert confidence == CONFIRMED
+    assert "--app=" in why
+
+
+def test_a_browser_window_that_is_not_the_app_window_is_only_probable():
+    """An ordinary tab showing a page called Jarvis is not the interface. It is
+    still worth surfacing if there is nothing better, and it is not reported as
+    a confident answer."""
+    from ranger.desktop import PROBABLE, identify
+
+    confidence, _ = identify(
         "Jarvis - Google Chrome",
-        "Jarvis — Mozilla Firefox",
-        "jarvis",
-        "Jarvis (2)",
-    ],
-)
-def test_titles_chrome_might_actually_produce_are_matched(title):
-    """Substring and case-insensitive, because Chrome may append to the title
-    and an exact or `startswith` match is a rename away from breaking."""
-    from ranger.desktop import matches
-
-    assert matches(title)
+        image=r"C:\chrome.exe",
+        command_line='"C:\\chrome.exe" --profile-directory=Default',
+    )
+    assert confidence == PROBABLE
 
 
-@pytest.mark.parametrize(
-    "title",
-    ["Microsoft Teams", "Outlook", "Untitled - Notepad", "localhost:8765/", ""],
-)
-def test_other_windows_are_not_matched(title):
-    from ranger.desktop import matches
+def test_the_app_window_is_confirmed_without_a_readable_command_line():
+    """Reading another process's command line is best effort. When it fails,
+    the exact title plus a browser process is still two signals, and the
+    report says which two rather than claiming more."""
+    from ranger.desktop import CONFIRMED, identify
 
-    assert not matches(title)
+    confidence, why = identify("Jarvis", image=r"C:\chrome.exe")
+    assert confidence == CONFIRMED
+    assert "exactly 'Jarvis'" in why and "chrome.exe" in why
+
+
+def test_with_no_process_evidence_at_all_it_is_only_probable():
+    from ranger.desktop import PROBABLE, identify
+
+    confidence, why = identify("Jarvis")
+    assert confidence == PROBABLE
+    assert "could not be identified" in why
 
 
 def test_no_entry_point_hardcodes_a_title():
@@ -525,7 +581,8 @@ def test_the_report_says_what_it_is_looking_for():
 
     report = find_report()
 
-    assert report["looking_for"] == [ASSISTANT, PROJECT]
+    assert report["looking_for"] == [ASSISTANT]
+    assert PROJECT not in report["looking_for"], "the vault directory carries that name"
     assert report["detail"]
 
 
@@ -560,9 +617,10 @@ def test_doctor_reports_the_window(config, capsys, monkeypatch):
     monkeypatch.setattr("ranger.desktop.on_windows", lambda: True)
     monkeypatch.setattr(
         "ranger.desktop.find_report",
-        lambda title=None: {
+        lambda title=None, url="": {
             "windows": True, "found": False, "title": "", "titles": ["Microsoft Teams"],
-            "looking_for": ["Jarvis", "Ranger"], "detail": "",
+            "looking_for": ["Jarvis"], "detail": "", "confidence": "", "why": "",
+            "image": "", "rejected": [],
         },
     )
 
@@ -570,6 +628,59 @@ def test_doctor_reports_the_window(config, capsys, monkeypatch):
     out = capsys.readouterr().out
 
     assert "the interface window cannot be found" in out
-    assert "looking for: Jarvis, Ranger" in out
+    assert "titled exactly 'Jarvis'" in out
     assert "Microsoft Teams" in out
+
+
+def doctor_output(config, capsys, monkeypatch, report):
+    from ranger.cli import cmd_doctor
+
+    base = {
+        "windows": True, "found": False, "title": "", "titles": [],
+        "looking_for": ["Jarvis"], "detail": "", "confidence": "", "why": "",
+        "image": "", "rejected": [],
+    }
+    base.update(report)
+    monkeypatch.setattr("ranger.desktop.on_windows", lambda: True)
+    monkeypatch.setattr("ranger.desktop.find_report", lambda title=None, url="": base)
+    cmd_doctor(config)
+    return capsys.readouterr().out
+
+
+def test_doctor_does_not_say_ok_for_a_window_it_is_not_sure_about(
+    config, capsys, monkeypatch
+):
+    """**A green check on the wrong window is worse than no check.**
+
+    The Obsidian match was reported as ok, and the only reason the operator
+    caught it is that the title was printed beside it. Anything short of a
+    confident identification now says so.
+    """
+    out = doctor_output(config, capsys, monkeypatch, {
+        "found": True, "title": "Jarvis - Google Chrome", "confidence": "probable",
+        "why": "the title is a browser window rather than the app window",
+    })
+
+    assert "check    a window matched" in out
+    assert "not confidently the interface" in out
+    assert "Jarvis - Google Chrome" in out
+    assert "  ok       the interface window" not in out
+
+
+def test_doctor_shows_what_it_refused_and_why(config, capsys, monkeypatch):
+    """Where the Obsidian window belongs: named, with the reason, whether or
+    not something better was found."""
+    out = doctor_output(config, capsys, monkeypatch, {
+        "found": True, "title": "Jarvis", "confidence": "confirmed",
+        "why": "started with --app=, and the title is 'Jarvis'",
+        "rejected": [{
+            "title": OBSIDIAN, "image": "obsidian.exe",
+            "why": "it belongs to obsidian.exe, which is not a browser",
+        }],
+    })
+
+    assert "ok       the interface window: 'Jarvis'" in out
+    assert "started with --app=" in out
+    assert f"not it:  {OBSIDIAN!r}" in out
+    assert "not a browser" in out
 
