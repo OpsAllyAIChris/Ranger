@@ -49,6 +49,12 @@ class Listener:
     on_state: Callable[[State], None] | None = None
     on_level: Callable[[float], None] | None = None
     check_seconds: float = 5.0
+    #: Watches for the operator talking over a reply. Fed the same frames as
+    #: the hotword, because it is the same microphone and there is only one.
+    bargein: Any = None
+    #: Called when the operator interrupts. The caller stops the speech; this
+    #: module does not know what a speaker is.
+    on_bargein: Callable[[], None] | None = None
 
     _thread: threading.Thread | None = None
     _stop: threading.Event | None = None
@@ -118,6 +124,14 @@ class Listener:
                     next_check = now + self.check_seconds
                     if not self._still_allowed():
                         break
+
+                # **Before the hotword, and independent of it.** Barge-in is
+                # not a wake word: talking over a machine that is already
+                # talking to you should not require its name. The hotword is
+                # armed but idle during playback, so nothing here competes.
+                if self.bargein is not None and self.bargein.feed(frame):
+                    if self.on_bargein is not None:
+                        self.on_bargein()
 
                 utterance, fire = self.hotword.feed(frame)
 

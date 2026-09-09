@@ -1497,6 +1497,92 @@ def cmd_mic(config: Config, args: Any) -> int:
     return 0
 
 
+def cmd_mic_bargein(config: Config, args: Any) -> int:
+    """Measure the two levels barge-in depends on, on this machine.
+
+    There is no echo canceller in this path, so the separation between the
+    operator and Jarvis's own voice is a margin over a measured level. A margin
+    over a *guessed* level is how a laptop ends up either stopping on its own
+    second syllable or ignoring the operator entirely, so this measures both
+    and prints them.
+
+    Two passes. The first records the room with nothing playing: that is the
+    floor. Then Jarvis speaks and it records again, with the operator asked to
+    stay quiet: that is the echo. Then it speaks once more and the operator is
+    asked to talk over it: that is what has to beat the margin.
+    """
+    import asyncio
+    import time
+
+    from .audio import AudioError
+    from .bargein import Detector
+    from .wake import FRAME_SAMPLES, SAMPLE_RATE, rms
+
+    paint = _colour(sys.stdout.isatty())
+    seconds = float(getattr(args, "seconds", 0) or 4.0)
+    line = getattr(args, "text", "") or (
+        "This is the sentence Jarvis will say while you decide whether to talk "
+        "over it. Keep going until it stops."
+    )
+
+    def measure(label: str) -> tuple[float, float]:
+        from .handsfree import microphone_frames
+
+        print(paint(f"  {label} ({seconds:.0f}s)...", DIM), flush=True)
+        levels: list[float] = []
+        until = time.monotonic() + seconds
+        try:
+            for frame in microphone_frames():
+                levels.append(rms(frame))
+                if time.monotonic() >= until:
+                    break
+        except AudioError as exc:
+            print(paint(f"  {exc}", RED), file=sys.stderr)
+            raise SystemExit(1)
+        heard = levels or [0.0]
+        return sum(heard) / len(heard), max(heard)
+
+    print(paint("  Measuring what this microphone hears. Nothing is written.", BOLD))
+    print()
+    print(paint("  1. The room, with nothing playing. Stay quiet.", BOLD))
+    quiet_mean, quiet_peak = measure("listening")
+    print(f"     room: mean {quiet_mean:.0f}, peak {quiet_peak:.0f}")
+
+    print()
+    print(paint("  2. Jarvis speaking, with you quiet. This is the echo.", BOLD))
+    print(paint("     Start the speech in another terminal:", DIM))
+    print(paint(f'       ranger say "{line[:60]}..."', DIM))
+    input("     press enter when it starts speaking... ")
+    echo_mean, echo_peak = measure("listening")
+    print(f"     echo: mean {echo_mean:.0f}, peak {echo_peak:.0f}")
+
+    print()
+    print(paint("  3. Jarvis speaking, and you talking over it.", BOLD))
+    input("     press enter when it starts speaking, then talk... ")
+    both_mean, both_peak = measure("listening")
+    print(f"     you over it: mean {both_mean:.0f}, peak {both_peak:.0f}")
+
+    margin = config.wake.bargein_margin
+    threshold = max(echo_peak * margin, 380.0)
+    print()
+    print(paint("  what that means", BOLD))
+    print(f"     the threshold at margin {margin} would be {threshold:.0f}")
+    if both_peak > threshold:
+        headroom = both_peak / threshold if threshold else 0
+        print(paint(f"     your voice reached {both_peak:.0f}, which clears it "
+                    f"{headroom:.1f}x over", TEAL))
+        print(paint("     barge-in should work at this volume and this seating", DIM))
+    else:
+        suggested = max(1.1, (both_peak * 0.6) / max(echo_peak, 1.0))
+        print(paint(f"     your voice reached {both_peak:.0f}, which does NOT clear it",
+                    YELLOW))
+        print(paint(f"     try wake.bargein_margin = {suggested:.1f}, or turn the "
+                    "speaker down,", YELLOW))
+        print(paint("     or use a headset, which removes the problem rather than "
+                    "tuning it", YELLOW))
+    return 0
+
+
 def cmd_dormant(config: Config, args: Any) -> int:
     """Answer the morning brief's one decision, and see the answers so far."""
     from .brief import BriefStore
@@ -2648,6 +2734,14 @@ def main(argv: list[str] | None = None) -> int:
         "--model", help="which published hotword. Defaults to wake.model in config"
     )
 
+    mic_bargein = sub.add_parser(
+        "mic-bargein",
+        help="measure what the microphone hears with Jarvis speaking, so the "
+             "barge-in margin comes from data rather than a guess",
+    )
+    mic_bargein.add_argument("--seconds", type=float, default=4.0)
+    mic_bargein.add_argument("--text", default="", help="the sentence to compare against")
+
     sub.add_parser(
         "mic", help="what the microphone check sees, and whether hands free could arm"
     )
@@ -2813,6 +2907,8 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_alias(config, args)
     if args.command == "wake":
         return cmd_wake(config, args)
+    if args.command == "mic-bargein":
+        return cmd_mic_bargein(config, args)
     if args.command == "mic":
         return cmd_mic(config, args)
     if args.command == "dormant":

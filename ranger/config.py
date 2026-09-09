@@ -219,6 +219,22 @@ class WakeConfig:
     #: microphone. The closest thing to "am I in a call" that exists without
     #: asking Teams, and what makes surface_topmost safe enough to trial.
     surface_topmost_never_in_call: bool = True
+    #: Talking over a reply stops the speech. Not the wake phrase: nobody says
+    #: a machine's name to interrupt it mid-sentence.
+    bargein: bool = True
+    #: How much louder than Jarvis's own voice, measured at the microphone
+    #: during the first moments of each reply, the operator has to be. On a
+    #: laptop speaker this is the whole separation, so it is not subtle.
+    #: `ranger mic bargein` measures both levels rather than guessing.
+    bargein_margin: float = 2.2
+    #: How long that has to hold, so a consonant burst in Jarvis's own speech
+    #: cannot do it. About three frames.
+    bargein_sustain_seconds: float = 0.22
+    #: How long a drained speaker queue can stay drained and still be the same
+    #: reply carrying on. Too short and every sentence re-learns the echo, so
+    #: the first 0.6s of each is un-interruptible; too long and a loud reply is
+    #: still setting the bar for the next one.
+    bargein_tail_seconds: float = 0.35
 
     @property
     def idle_disarm_seconds(self) -> float:
@@ -663,6 +679,8 @@ KNOWN_KEYS: dict[str, frozenset[str]] = {
         "max_seconds", "preroll_seconds", "idle_disarm_minutes", "mic_check_seconds",
         "conversation_seconds", "conversation_reopens", "conversation_requires_visible",
         "surface_on_wake", "surface_topmost", "surface_topmost_never_in_call",
+        "bargein", "bargein_margin", "bargein_sustain_seconds",
+        "bargein_tail_seconds",
     }),
     "brief": frozenset({
         "lines", "slipping_max", "deals_max", "cold_after_days", "decision_prompt",
@@ -995,6 +1013,10 @@ def load_config(path: str | Path | None = None, *, load_env: bool = True) -> Con
         surface_topmost_never_in_call=bool(
             wake_section.get("surface_topmost_never_in_call", True)
         ),
+        bargein=bool(wake_section.get("bargein", True)),
+        bargein_margin=float(wake_section.get("bargein_margin", 2.2)),
+        bargein_sustain_seconds=float(wake_section.get("bargein_sustain_seconds", 0.22)),
+        bargein_tail_seconds=float(wake_section.get("bargein_tail_seconds", 0.35)),
     )
     if len(wake.phrase.split()) < 2:
         raise ConfigError(
@@ -1010,6 +1032,13 @@ def load_config(path: str | Path | None = None, *, load_env: bool = True) -> Con
         )
     if wake.conversation_reopens < 0:
         raise ConfigError("wake.conversation_reopens cannot be negative. 0 turns it off.")
+    if wake.bargein_margin < 1.0:
+        raise ConfigError(
+            "wake.bargein_margin must be at least 1.0. Below that the operator "
+            "would have to be quieter than Jarvis's own echo to interrupt him."
+        )
+    if wake.bargein_tail_seconds < 0:
+        raise ConfigError("wake.bargein_tail_seconds cannot be negative")
     if wake.idle_disarm_minutes <= 0:
         raise ConfigError(
             "wake.idle_disarm_minutes must be positive. Hands free that never disarms "

@@ -1235,6 +1235,14 @@ export function createShell(orb) {
           });
         }
         break;
+      case 'stop_speaking':
+        // The operator talked over the reply. Everything queued goes now --
+        // the queue is drained rather than allowed to finish the sentence it
+        // is on, because a trailing sentence after an interruption is the
+        // thing that makes interrupting feel like it did not work.
+        if (speaker) speaker.stop();
+        toast(event.reason || 'stopped talking');
+        break;
       case 'stopped':
         if (speaker) speaker.stop();
         reply = null;

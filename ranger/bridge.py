@@ -83,6 +83,13 @@ class Session:
     send: Callable[[dict[str, Any]], None]
     busy: bool = False
     tools: list[dict[str, Any]] = field(default_factory=list)
+    #: The sentences sent to the browser this turn, by index. Kept so an
+    #: interruption can say what nobody heard rather than only that it happened.
+    speech: list[str] = field(default_factory=list)
+    #: The highest index the browser has reported playing.
+    spoken_to: int = -1
+    #: Watches for the operator talking over a reply.
+    bargein: Any = None
     #: Set when the connection has ears and a mouth. None means the browser can
     #: still type: voice is an addition to this socket, never a replacement.
     transcriber: Any = None
@@ -485,6 +492,17 @@ class Session:
             check_microphone=lambda: may_arm(ignore=("chrome.exe",)).allowed,
         )
 
+        from .bargein import Detector
+
+        self.bargein = Detector(
+            margin=wake.bargein_margin,
+            sustain_seconds=wake.bargein_sustain_seconds,
+            tail_seconds=wake.bargein_tail_seconds,
+        ) if wake.bargein else None
+
+        def interrupted() -> None:
+            loop.call_soon_threadsafe(self._interrupted)
+
         self.listener = Listener(
             hotword=hotword,
             frames=microphone_frames,
@@ -493,6 +511,8 @@ class Session:
             on_state=state,
             on_level=level,
             check_seconds=wake.mic_check_seconds,
+            bargein=self.bargein,
+            on_bargein=interrupted,
         )
         self.listener.start()
         self.emit("hands_free", **self._hands_free_state())
@@ -597,7 +617,51 @@ class Session:
         except (TypeError, ValueError):
             return
         self.window.played(index)
+        self.spoken_to = max(self.spoken_to, index)
+        if self.bargein is not None:
+            # Drained, and it is the browser saying so rather than this end
+            # guessing at how long the audio was. Between sentences this
+            # happens constantly; the detector's tail is what tells that from
+            # the end of the reply.
+            self.bargein.speaking(False)
         self._maybe_open()
+
+    def _interrupted(self) -> None:
+        """The operator talked over the reply. **Stop the speech, not the turn.**
+
+        The turn is left running deliberately. By the time a sentence is being
+        spoken the tools for that turn have already run or are running, and
+        cancelling half way could leave a note filed with no reply to say so --
+        a half-spoken answer that still changed something is harder to recover
+        from than one that finishes into a room where nobody is listening. What
+        is dropped is the audio, which is the thing actually in the way.
+
+        Conversation mode's rule holds: barge-in does not close the window. The
+        operator interrupting is the most engaged they get.
+        """
+        from .bargein import Interruption
+
+        if self.bargein is None:
+            return
+        # Drain the browser's queue now, so nothing trailing is played.
+        self.emit("stop_speaking", reason="you started talking")
+        self.bargein.speaking(False)
+
+        sent = len(self.speech)
+        unspoken = [text for text in self.speech[self.spoken_to + 1:] if text]
+        record = Interruption(
+            spoken=self.spoken_to,
+            sent=sent,
+            unspoken_sentences=len(unspoken),
+            unspoken_chars=sum(len(text) for text in unspoken),
+        )
+        self.emit("notice", level="info", message="stopped talking; go ahead")
+        audit = getattr(self.agent, "audit", None)
+        if audit is not None:
+            try:
+                audit.write("speech interrupted", record.describe(), origin="voice")
+            except Exception:
+                pass
 
     def _visibility(self, message: dict[str, Any]) -> None:
         if self.window is None:
@@ -1178,6 +1242,8 @@ class Session:
 
         speaking = SentenceStream() if self.speaker is not None else None
         spoken = 0
+        self.speech = []
+        self.spoken_to = -1
         # What the tools returned this turn, and what Jarvis said about it. The
         # two are compared at the end: a figure in the reply that no tool
         # computed is reported rather than left to look like the rest.
@@ -1266,6 +1332,14 @@ class Session:
         if audio:
             if self.window is not None:
                 self.window.sent(index)
+            # The detector is told what is playing rather than working it out
+            # from the microphone, which is the only way it can tell Jarvis's
+            # own voice from anybody else's.
+            while len(self.speech) <= index:
+                self.speech.append("")
+            self.speech[index] = sentence
+            if self.bargein is not None:
+                self.bargein.speaking(True)
             self.emit(
                 "speech",
                 index=index,

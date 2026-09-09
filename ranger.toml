@@ -247,6 +247,33 @@ surface_topmost = false
 # forces the window at your desk and falls back to the flash on a call.
 surface_topmost_never_in_call = true
 
+# Talking over a reply stops the speech. NOT the wake phrase: nobody says a
+# machine's name to interrupt it mid-sentence. The turn itself is not
+# cancelled, only the speaking -- by the time a sentence is being spoken the
+# tools have already run, and a half-spoken answer that still changed something
+# is harder to recover from than one that finishes into an empty room.
+bargein = true
+# The whole separation between the operator and Jarvis's own voice coming back
+# through the microphone. There is no echo canceller in this path, so: while a
+# reply is playing and nobody has interrupted, whatever the microphone hears IS
+# the echo, and it is measured per reply. The operator has to beat it by this
+# much. Run 'ranger mic bargein' to see both levels on this machine rather than
+# guessing at the number.
+bargein_margin = 2.2
+# How long the operator has to stay above it, so a consonant burst in Jarvis's
+# own speech cannot do it. About three frames.
+bargein_sustain_seconds = 0.22
+# How long a drained speaker queue can stay drained and still be the same reply
+# carrying on, rather than the end of one. The browser drains between sentences
+# whenever the model is slower than the voice, which is most of them, and this
+# is what stops each sentence re-learning an echo already measured -- which
+# would leave the first 0.6s of every sentence un-interruptible. Covers the
+# round trip, one 80ms frame already in hand, and PortAudio's input latency.
+# Too long and a loud reply is still setting the bar for the next one. Every
+# interruption is logged with how much was left unspoken, and one with nothing
+# left unspoken is Jarvis interrupting himself: lower nothing, raise the margin.
+bargein_tail_seconds = 0.35
+
 [brief]
 # Tier 5. A morning brief has a size, not a threshold.
 #
