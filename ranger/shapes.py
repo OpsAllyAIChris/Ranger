@@ -41,8 +41,20 @@ FILE = "import-shapes.md"
 
 #: Header text that suggests a column. **Header text only.** These never see a
 #: cell, and they only ever produce a proposal for a person to confirm.
-PERIOD_HINTS = re.compile(r"\b(period|month|posting date|date|fiscal|accounting period)\b", re.I)
-AMOUNT_HINTS = re.compile(r"\b(gross profit|gross margin|\bgp\b|profit|margin|amount)\b", re.I)
+#: Header text that suggests a column, strongest first. **Header text only.**
+#: These never see a cell, and they only ever produce a proposal for a person
+#: to confirm.
+#:
+#: Two tiers, because "one match wins, two matches ask" is too blunt on its
+#: own: a gross profit export routinely carries both `Gross Profit` and
+#: `Margin %`, and a person would not call that ambiguous. A strong hint names
+#: the figure; a weak one is a word that could be any column of money.
+PERIOD_STRONG = re.compile(r"\b(period|month|accounting period|fiscal period)\b", re.I)
+PERIOD_WEAK = re.compile(r"\b(posting date|date|posted|when)\b", re.I)
+AMOUNT_STRONG = re.compile(
+    r"\b(gross profit|gross margin|gp|commission|commission amount)\b", re.I
+)
+AMOUNT_WEAK = re.compile(r"\b(profit|margin|amount|total|value|earnings|payout)\b", re.I)
 
 #: A header row rather than a title row: several cells with something in them.
 MIN_HEADER_CELLS = 2
@@ -103,24 +115,76 @@ def header_row(rows: list[list[str]]) -> int:
     return best
 
 
-def propose(headers: list[str]) -> tuple[str, str]:
-    """(period column, amount column), from the header text alone.
+@dataclass(frozen=True)
+class Proposal:
+    """What Jarvis thinks the columns are, and where it will not guess.
 
-    A proposal. It is shown to the operator and confirmed at a keyboard before
-    a single figure is written, because the cost of being subtly wrong here is
-    a gross profit number that is believed.
+    An empty `amount` with `amount_options` filled in is the important state:
+    two columns could plausibly be the figure and picking one would be a number
+    the operator never chose. **It asks instead.** That instinct was right when
+    the model had it in prose and it belongs in the code.
     """
-    period = amount = ""
-    for cell in headers:
-        text = " ".join(str(cell or "").split())
-        if not text:
-            continue
-        if not amount and AMOUNT_HINTS.search(text):
-            amount = text
-            continue
-        if not period and PERIOD_HINTS.search(text):
-            period = text
-    return period, amount
+
+    period: str = ""
+    amount: str = ""
+    period_options: tuple[str, ...] = ()
+    amount_options: tuple[str, ...] = ()
+
+    @property
+    def ambiguous(self) -> bool:
+        return not (self.period and self.amount)
+
+    def why(self) -> str:
+        if not self.ambiguous:
+            return ""
+        parts: list[str] = []
+        for label, chosen, options in (
+            ("period", self.period, self.period_options),
+            ("figure", self.amount, self.amount_options),
+        ):
+            if chosen:
+                continue
+            if len(options) > 1:
+                parts.append(
+                    f"more than one column could be the {label}: "
+                    + ", ".join(repr(name) for name in options)
+                )
+            else:
+                parts.append(f"no column looks like the {label}")
+        return "; ".join(parts) + ". Choose them and Jarvis will remember the shape."
+
+
+def _pick(headers: list[str], strong: re.Pattern[str], weak: re.Pattern[str]):
+    """(the one it is sure about, everything that could be it).
+
+    One strong match wins. Two strong matches is a question, not a coin toss.
+    Weak hints only get a say when nothing strong matched at all.
+    """
+    cleaned = [" ".join(str(cell or "").split()) for cell in headers]
+    strongly = [text for text in cleaned if text and strong.search(text)]
+    if len(strongly) == 1:
+        return strongly[0], tuple(strongly)
+    if strongly:
+        return "", tuple(strongly)
+    weakly = [text for text in cleaned if text and weak.search(text)]
+    if len(weakly) == 1:
+        return weakly[0], tuple(weakly)
+    return "", tuple(weakly)
+
+
+def propose(headers: list[str]) -> Proposal:
+    """What the columns look like, from the header text alone.
+
+    A proposal, shown to the operator and confirmed at a keyboard before a
+    single figure is written, because the cost of being subtly wrong here is a
+    gross profit number that gets believed.
+    """
+    period, period_options = _pick(headers, PERIOD_STRONG, PERIOD_WEAK)
+    amount, amount_options = _pick(headers, AMOUNT_STRONG, AMOUNT_WEAK)
+    return Proposal(
+        period=period, amount=amount,
+        period_options=period_options, amount_options=amount_options,
+    )
 
 
 def path_for(config: Any) -> Path:

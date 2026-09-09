@@ -1371,6 +1371,22 @@ extraction. `tests/test_planted_instructions.py` covers an instruction in a
 spreadsheet cell, a PDF body and a Word paragraph, and covers the one that only
 exists here: a cell cannot influence a column mapping.
 
+**An extension is a claim.** Every drop is sniffed and the contents decide the
+reader: a zip, an OLE2 container, an HTML table, an XML spreadsheet, delimited
+text. A web export named `.xls` is usually HTML, which is what made the first
+real drop read as nothing at all. A file that cannot be read is refused at the
+drop with the fix in the sentence, because landing it and being vague later is
+worse.
+
+**The rule about numbers is "Python computes; the model does not", and it is
+not a rule against spreadsheets.** Asked for GP out of a dropped file, Jarvis
+once said it was not allowed to and that figures had to be typed in by hand.
+That is a dead end: a confirmed column mapping plus Python summing the column
+is exactly as trustworthy as hand entry and makes fewer mistakes. The prompt
+now names the real path -- propose the columns, the operator confirms, Python
+reads them -- and keeps the instinct that was right: if two columns could both
+be the figure, ask rather than pick.
+
 Full write-up, including what happens when the same file is dropped twice:
 `docs/imports.md`.
 

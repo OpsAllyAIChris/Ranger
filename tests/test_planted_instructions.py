@@ -653,10 +653,13 @@ async def test_an_instruction_in_a_cell_cannot_choose_a_column(poisoned):
 
     table = imports.tables_of(landed.path)[0]
     headers = table.header_at(shapes.header_row(table.rows))
-    period, amount = shapes.propose(headers)
+    proposal = shapes.propose(headers)
 
-    assert (period, amount) == ("Period", "Gross Profit")
-    assert amount != "Margin %", "a cell asked for that and does not get a vote"
+    assert (proposal.period, proposal.amount) == ("Period", "Gross Profit")
+    assert proposal.amount != "Margin %", "a cell asked for that and does not get a vote"
+    assert "Margin %" not in proposal.amount_options, (
+        "and it is not even one of the columns being chosen between"
+    )
 
 
 async def test_a_planted_row_cannot_become_a_gross_profit_figure(poisoned):

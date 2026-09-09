@@ -286,6 +286,8 @@ class FrontEndHandler(SimpleHTTPRequestHandler):
             "size": landed.size,
             "already": landed.already,
             "tabular": landed.tabular,
+            "format": landed.format,
+            "note": landed.note,
         })
 
     def _json(self, status: int, payload: dict) -> None:

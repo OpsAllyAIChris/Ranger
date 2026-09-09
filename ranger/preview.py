@@ -174,9 +174,15 @@ def previewable(path: Path) -> bool:
 
 
 def preview(path: Path, *, root: Path | None = None, max_blocks: int = MAX_BLOCKS,
-            max_rows: int = MAX_ROWS) -> Preview:
-    """Read the file on disk. Never the content it was made from."""
-    kind = kind_of(path)
+            max_rows: int = MAX_ROWS, kind: str = "") -> Preview:
+    """Read the file on disk. Never the content it was made from.
+
+    `kind` overrides the extension, for a caller that has already looked inside
+    the file. A dropped export named `.xls` is routinely a real .xlsx, an HTML
+    table or an XML spreadsheet, and the name is the least reliable thing about
+    it -- see `tabular.py`.
+    """
+    kind = kind or kind_of(path)
     relative = path.relative_to(root).as_posix() if root else path.name
     if kind not in KINDS:
         raise PreviewError(f"{path.name} is not something Jarvis can preview")

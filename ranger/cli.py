@@ -311,6 +311,18 @@ def cmd_doctor(config: Config) -> int:
         print("           Everything else works without them; write_document refuses "
               "that format and says so.")
 
+    from .tabular import have as _have
+
+    readers = {"old-format .xls": "xlrd", "PDF text": "pypdf"}
+    missing_readers = [what for what, module in readers.items() if not _have(module)]
+    if not missing_readers:
+        print("  ok       dropped files: every format Jarvis takes can be read")
+    else:
+        print(f"  todo     no reader for {', '.join(missing_readers)}. "
+              f"Install: pip install {' '.join(readers[w] for w in missing_readers)}")
+        print("           A file it cannot read is refused at the drop with the same")
+        print("           line, rather than landing and being described unread.")
+
     from .aliases import AliasFile as _AliasFile
 
     try:
@@ -1636,12 +1648,17 @@ def cmd_imports(config: Config, args: Any) -> int:
         known = shapes.find(vault, config, headers)
         period_name = getattr(args, "period_column", "") or (known.period_column if known else "")
         amount_name = getattr(args, "amount_column", "") or (known.amount_column if known else "")
+        proposal = None
         if not (period_name and amount_name):
-            period_name, amount_name = shapes.propose(headers)
+            proposal = shapes.propose(headers)
+            period_name = period_name or proposal.period
+            amount_name = amount_name or proposal.amount
 
         lowered = [h.casefold() for h in headers]
         if (period_name.casefold() not in lowered or amount_name.casefold() not in lowered):
             print(paint("  Jarvis has not been shown this export's shape.", YELLOW))
+            if proposal is not None and proposal.why():
+                print(paint(f"  {proposal.why()}", DIM))
             print(paint("  That is not an error: an export format that changed is a", DIM))
             print(paint("  mapping to confirm again, not a failure.", DIM))
             print(paint(f"  headers: {' | '.join(headers)}", DIM))

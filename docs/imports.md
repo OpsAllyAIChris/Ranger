@@ -27,6 +27,36 @@ without being asked about (§4).
 pricing and margin; they stay local, and they are exactly the kind of thing
 that is gone for good when the export leaves someone's downloads folder.
 
+## What a dropped file actually is
+
+**An extension is a claim, and the claim is often wrong.** The export that
+prompted this was `APIMyCommissionStatementDetailRes....xls` from a web system,
+which is an HTML table with an Excel name — because Excel opens those. openpyxl
+reads none of them, so the extract came back empty and Jarvis described a file
+it had never read.
+
+Every drop is sniffed before it lands, and what it turns out to be decides the
+reader:
+
+| Inside | Read with |
+| ------ | --------- |
+| a zip with `xl/workbook.xml` | the stdlib OOXML reader |
+| an OLE2 container | xlrd, for real old-format `.xls` |
+| `<html>` / `<table>` | the stdlib HTML parser |
+| `<?xml>` + `<Workbook>` | XML Spreadsheet 2003 |
+| delimited text | `csv` |
+
+**A file that cannot be read does not land.** It is refused at the drop, with
+what would fix it: install `xlrd`, or save it as `.xlsx`, or open the `.doc` in
+Word and save it as `.docx`. Landing it and being vague about it later is worse
+— everything said about it afterwards is invention, and the panel would list an
+import that can never be imported.
+
+The acknowledgement says which of these happened at the moment the file lands:
+*"APIMyCommission.xls, 264 bytes. A web export: an HTML table saved with an
+.xls name. Jarvis can read it."* `ranger doctor` says whether any reader is
+missing.
+
 ## 2. The sidecar
 
 The first time anything is asked about a dropped file, Python writes
@@ -71,6 +101,12 @@ gains a title row is the same shape.
 When NetSuite changes its export format the fingerprint stops matching and the
 operator is asked to map it again. **That is correct, and the message says so**
 rather than reading like an error.
+
+**Where two columns could both be the figure, it asks.** One strong hint wins
+(`Gross Profit`, `Commission`); two strong hints is a question, not a coin
+toss, and the card says which columns it is choosing between rather than
+preselecting one. A weak hint (`Amount`, `Total`, `Value`) only gets a say when
+nothing strong matched.
 
 Nothing in a spreadsheet cell can influence a mapping. The proposal is a
 regular expression over the header row; the decision is a person. A cell

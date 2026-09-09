@@ -223,7 +223,7 @@ def test_every_sheet_of_a_wide_workbook_is_named_even_when_it_is_not_quoted(
     landed = drop(vault, config, workbook(sheets=sheets))
     built = imports.build_extract(landed.path, max_sheets=3)
 
-    assert "## 14 sheets" in built.text
+    assert "## 14 sheet(s)" in built.text
     for n in range(13):
         assert f"### Sheet {n} " in built.text, "every sheet is named"
     assert any("contents of" in item for item in built.cut)
@@ -285,7 +285,27 @@ def test_the_fingerprint_is_the_headers_and_not_the_file_name(vault, config):
 
 
 def test_the_proposal_reads_the_headers(vault, config):
-    assert shapes.propose(HEADERS) == ("Period", "Gross Profit")
+    proposal = shapes.propose(HEADERS)
+    assert (proposal.period, proposal.amount) == ("Period", "Gross Profit")
+    assert not proposal.ambiguous, "Margin % is a weaker hint than Gross Profit"
+
+
+def test_two_columns_that_could_both_be_the_figure_are_a_question(vault, config):
+    """**The instinct kept.** Picking one would be a number the operator never
+    chose, so it asks, and it says which columns it is choosing between."""
+    proposal = shapes.propose(["Month", "Amount", "Total", "Value"])
+
+    assert proposal.period == "Month"
+    assert proposal.amount == ""
+    assert proposal.ambiguous
+    assert set(proposal.amount_options) == {"Amount", "Total", "Value"}
+    assert "more than one column could be the figure" in proposal.why()
+
+
+def test_a_commission_column_is_recognised(vault, config):
+    """The real dropped file was a commission statement, not a GP export."""
+    proposal = shapes.propose(["Account", "Period", "Commission"])
+    assert (proposal.period, proposal.amount) == ("Period", "Commission")
 
 
 def test_a_shape_that_has_not_been_confirmed_is_not_remembered(vault, config):
@@ -817,3 +837,175 @@ def test_a_drop_from_another_page_is_refused_readably_with_a_body(served, config
     assert result["ok"] is False
     root = config.vault.ranger / "imports"
     assert not root.exists() or not any(root.rglob("*"))
+
+
+# -- what the file actually is ---------------------------------------------
+#
+# The export that started this was `APIMyCommissionStatementDetailRes....xls`,
+# which is an HTML table with an Excel name, because that is what web systems
+# serve. openpyxl reads none of those, so the extract came back empty and
+# Jarvis described a file it had never read. An extension is a claim.
+
+
+HTML_XLS = b"""<html><head><meta charset="utf-8"></head><body>
+<table>
+<tr><th>Account</th><th>Period</th><th>Commission</th></tr>
+<tr><td>Illes Foods</td><td>Aug 2026</td><td>1,240.50</td></tr>
+<tr><td>Rusty Supply</td><td>Aug 2026</td><td>980.00</td></tr>
+</table></body></html>"""
+
+XML_XLS = b"""<?xml version="1.0"?>
+<Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet"
+          xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet">
+<Worksheet ss:Name="Commission">
+<Table>
+<Row><Cell><Data ss:Type="String">Account</Data></Cell>
+     <Cell><Data ss:Type="String">Commission</Data></Cell></Row>
+<Row><Cell><Data ss:Type="String">Illes Foods</Data></Cell>
+     <Cell><Data ss:Type="Number">1240.5</Data></Cell></Row>
+</Table></Worksheet></Workbook>"""
+
+
+def legacy_xls() -> bytes:
+    """A real old-format Excel file, written by something that is not xlrd."""
+    xlwt = pytest.importorskip("xlwt", reason="writing a real .xls needs xlwt")
+    import io
+
+    book = xlwt.Workbook()
+    sheet = book.add_sheet("Commission")
+    for row_index, row in enumerate(
+        [["Account", "Period", "Commission"],
+         ["Illes Foods", "Aug 2026", 1240.5],
+         ["Rusty Supply", "Aug 2026", 980]]
+    ):
+        for column_index, value in enumerate(row):
+            sheet.write(row_index, column_index, value)
+    buffer = io.BytesIO()
+    book.save(buffer)
+    return buffer.getvalue()
+
+
+def test_a_web_export_named_xls_is_recognised_as_what_it_is(vault, config):
+    """**The file that started this.** It is an HTML table."""
+    from ranger import tabular
+
+    assert tabular.sniff(HTML_XLS, "APIMyCommissionStatementDetailRes.xls") == "html-table"
+    can = tabular.readability(HTML_XLS, "APIMyCommissionStatementDetailRes.xls")
+    assert can.readable and can.tabular
+    assert "HTML table" in can.why and ".xls" in can.why
+
+
+def test_a_web_export_named_xls_can_actually_be_read(vault, config):
+    landed = imports.land(
+        vault, config, "APIMyCommission.xls", HTML_XLS, today=TODAY
+    )
+
+    assert landed.format == "html-table"
+    assert landed.tabular is True
+    table = imports.tables_of(landed.path)[0]
+    assert table.rows[0] == ["Account", "Period", "Commission"]
+    assert table.rows[1] == ["Illes Foods", "Aug 2026", "1,240.50"]
+
+
+def test_the_drop_says_at_drop_time_what_it_can_read(vault, config):
+    """Not later, and not vaguely. The acknowledgement carries it."""
+    landed = imports.land(vault, config, "APIMyCommission.xls", HTML_XLS, today=TODAY)
+
+    assert "HTML table" in landed.describe()
+    assert "can read it" in landed.describe()
+
+
+def test_a_real_old_format_excel_file_is_read(vault, config):
+    pytest.importorskip("xlrd", reason="reading a real .xls needs xlrd")
+    landed = imports.land(vault, config, "legacy.xls", legacy_xls(), today=TODAY)
+
+    assert landed.format == "xls"
+    table = imports.tables_of(landed.path)[0]
+    assert table.rows[0] == ["Account", "Period", "Commission"]
+    assert table.rows[1][2] == "1240.5", "a number, not a float with a tail"
+
+
+def test_an_xml_spreadsheet_named_xls_is_read(vault, config):
+    landed = imports.land(vault, config, "statement.xls", XML_XLS, today=TODAY)
+
+    assert landed.format == "xml-spreadsheet"
+    table = imports.tables_of(landed.path)[0]
+    assert table.name == "Commission"
+    assert table.rows[1] == ["Illes Foods", "1240.5"]
+
+
+def test_an_xlsx_with_the_wrong_extension_is_still_read(vault, config):
+    landed = imports.land(vault, config, "actually a workbook.xls", workbook(), today=TODAY)
+
+    assert landed.format == "xlsx"
+    table = imports.tables_of(landed.path)[0]
+    assert table.header_at(shapes.header_row(table.rows)) == HEADERS
+
+
+def test_an_old_word_document_is_refused_with_what_to_do(vault, config):
+    """It cannot be read, so it does not land. Refusing with a next step beats
+    accepting it and being vague about it later."""
+    ole2 = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1" + b"\x00" * 512
+    with pytest.raises(imports.Refused) as caught:
+        imports.land(vault, config, "notes.doc", ole2, today=TODAY)
+
+    assert "save it as .docx" in str(caught.value).lower()
+    assert not list((config.vault.ranger / "imports").rglob("*.doc"))
+
+
+def test_a_file_nothing_can_read_does_not_land(vault, config):
+    """**A file that lands and cannot be read is worse than a refused one**:
+    everything said about it afterwards is invention, and the panel would list
+    an import that can never be imported."""
+    with pytest.raises(imports.Refused) as caught:
+        imports.land(vault, config, "mystery.xls", b"\x01\x02\x03 not anything", today=TODAY)
+
+    assert "could not tell what" in str(caught.value)
+    assert imports.listing(vault, config) == []
+
+
+def test_a_real_xls_without_a_reader_is_refused_and_says_how_to_fix_it(
+    vault, config, monkeypatch
+):
+    """The machine with no xlrd. Refused, with the install line, rather than
+    landed and unreadable."""
+    from ranger import tabular
+
+    monkeypatch.setattr(tabular, "have", lambda module: False)
+    ole2 = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1" + b"\x00" * 512
+
+    with pytest.raises(imports.Refused) as caught:
+        imports.land(vault, config, "legacy.xls", ole2, today=TODAY)
+
+    assert "pip install xlrd" in str(caught.value)
+    assert "save it as .xlsx" in str(caught.value)
+
+
+def test_the_panel_offers_an_import_on_a_web_export(vault, config):
+    """The row has to know it is tabular, and that is a question about the
+    contents. Under the old rule this file listed as an import and had no
+    import button, because `.xls` was not in the tabular list."""
+    from ranger.panel import snapshot
+
+    imports.land(vault, config, "APIMyCommission.xls", HTML_XLS, today=TODAY)
+    row = snapshot(config, vault)["imports"][0]
+
+    assert row["kind"] == "import:table"
+
+
+def test_a_web_export_imports_gross_profit_like_any_other_table(vault, config):
+    """The path that never fired: mapped, planned, written, all in Python."""
+    landed = imports.land(vault, config, "commission.xls", HTML_XLS, today=TODAY)
+    table = imports.tables_of(landed.path)[0]
+    index = shapes.header_row(table.rows)
+
+    proposal = shapes.propose(table.header_at(index))
+    assert (proposal.period, proposal.amount) == ("Period", "Commission")
+
+    lowered = [h.casefold() for h in table.header_at(index)]
+    plan = gp.plan_import(
+        gp.ledger_for(config, vault), table.rows, header_index=index,
+        period_column=lowered.index("period"), amount_column=lowered.index("commission"),
+        formulas=table.formulas,
+    )
+    assert [(c.period, str(c.amount)) for c in plan.changes] == [("2026-08", "1240.50")]

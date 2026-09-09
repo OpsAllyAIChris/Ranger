@@ -1007,8 +1007,14 @@ class Session:
         known = shapes.find(self.agent.vault, self.agent.config, headers)
         period_name = known.period_column if known else ""
         amount_name = known.amount_column if known else ""
+        ambiguity = ""
         if not (period_name and amount_name):
-            period_name, amount_name = shapes.propose(headers)
+            proposal = shapes.propose(headers)
+            period_name, amount_name = proposal.period, proposal.amount
+            # Where it will not guess, said out loud. Two columns that could
+            # both be the figure is a question; picking one would be a number
+            # the operator never chose.
+            ambiguity = proposal.why()
 
         preview_plan = None
         if period_name and amount_name:
@@ -1033,6 +1039,7 @@ class Session:
             period=period_name,
             amount=amount_name,
             fingerprint=shapes.fingerprint(headers),
+            ambiguity=ambiguity,
             changes=[
                 {"period": c.period, "amount": str(c.amount),
                  "was": None if c.was is None else str(c.was), "verdict": c.verdict}

@@ -25,6 +25,14 @@ documents = [
     "python-docx>=1.1",
     "openpyxl>=3.1",
     "reportlab>=4.0",
+    # Reading, not writing. An export named .xls from a web system is usually
+    # an HTML table and is read with the standard library; this is for the ones
+    # that really are old-format Excel. xlrd 2.x reads .xls and nothing else,
+    # which is exactly the gap.
+    "xlrd>=2.0",
+    # Text out of a dropped PDF. Without it a PDF lands with its page count and
+    # says so, rather than being described unread.
+    "pypdf>=4.0",
 ]
 # Hands free. An extra rather than a dependency: onnxruntime wheels for new
 # Python versions arrive late, and nothing else in Ranger may stop working

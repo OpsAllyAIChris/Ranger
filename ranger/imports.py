@@ -67,17 +67,24 @@ PARTIAL = ".part"
 #: and the vault is backed up: a dropped installer is not context and has no
 #: business being committed to the operator's local history.
 ALLOWED = (
-    ".xlsx", ".xls", ".csv", ".tsv", ".pdf", ".docx", ".md", ".txt", ".json", ".xml",
+    ".xlsx", ".xls", ".csv", ".tsv", ".pdf", ".docx", ".doc", ".md", ".txt",
+    ".json", ".xml", ".htm", ".html",
 )
 
-#: What can be read as a table, and therefore what can carry gross profit.
-TABULAR = (".xlsx", ".csv", ".tsv")
-
-#: Names for the acknowledgement. What it got, in the operator's words.
+#: Names for the acknowledgement. Keyed on what the file **is**, which is not
+#: reliably what it is called: an export named `.xls` from a web system is
+#: usually an HTML table, and openpyxl reads none of those.
 KINDS = {
-    ".xlsx": "Excel workbook", ".xls": "Excel workbook (old format)",
-    ".csv": "CSV", ".tsv": "TSV", ".pdf": "PDF", ".docx": "Word document",
-    ".md": "Markdown", ".txt": "text", ".json": "JSON", ".xml": "XML",
+    "xlsx": "Excel workbook",
+    "xls": "Excel workbook, old format",
+    "html-table": "web export (an HTML table)",
+    "xml-spreadsheet": "XML spreadsheet",
+    "delimited": "delimited text",
+    "pdf": "PDF",
+    "docx": "Word document",
+    "doc": "Word document, old format",
+    "text": "text",
+    "unknown": "unrecognised",
 }
 
 #: Anything Windows refuses in a name, plus the separators. The name is
@@ -114,16 +121,21 @@ class Landed:
     already: bool = False
     #: Set when a name collided with a different file and this landed beside it.
     renamed: bool = False
-
-    @property
-    def tabular(self) -> bool:
-        return self.path.suffix.lower() in TABULAR
+    #: What the file turned out to be, and whether it can be read. Decided from
+    #: the contents before the file lands, so the drop can say so.
+    format: str = ""
+    tabular: bool = False
+    #: What the operator is told at drop time about whether this can be read.
+    note: str = ""
 
     def describe(self) -> str:
         size = f"{self.size / 1024:.0f} KB" if self.size >= 1024 else f"{self.size} bytes"
         if self.already:
             return f"{self.name} was already imported today, byte for byte. Nothing written."
-        return f"{self.name}, {size}, {self.kind}"
+        # The readability sentence is part of the acknowledgement, not a
+        # footnote: what Jarvis will and will not be able to read is the thing
+        # worth knowing at the moment a file lands.
+        return f"{self.name}, {size}. {self.note or self.kind}"
 
 
 def folder_for(config: Any, today: date | None = None) -> Path:
@@ -182,6 +194,8 @@ def land(
     `name (2).xlsx`, because it is a different file and losing either would be
     a delete.
     """
+    from .tabular import readability
+
     clean = safe_name(name)
     suffix = Path(clean).suffix.lower()
     if suffix not in ALLOWED:
@@ -197,6 +211,14 @@ def land(
     if not payload:
         raise Refused(f"{clean} is empty")
 
+    # **Decided before it lands, from the contents.** An extension is a claim
+    # and this is the check. A file that lands and cannot be read is worse than
+    # one that was refused: everything said about it afterwards is invention,
+    # and the panel would list it as an import that can never be imported.
+    can = readability(payload, clean)
+    if not can.readable:
+        raise Refused(f"{clean}: {can.why}")
+
     folder = folder_for(config, today)
     target = folder / clean
     incoming = digest(payload)
@@ -205,7 +227,8 @@ def land(
         if target.read_bytes() == payload:
             return Landed(
                 path=target, relative=_relative(vault, target), name=clean,
-                size=len(payload), kind=KINDS.get(suffix, suffix), already=True,
+                size=len(payload), kind=KINDS.get(can.format, can.format), already=True,
+                format=can.format, tabular=can.tabular, note=can.why,
             )
         stem, counter = Path(clean).stem, 2
         while target.exists():
@@ -213,7 +236,8 @@ def land(
             if target.exists() and target.read_bytes() == payload:
                 return Landed(
                     path=target, relative=_relative(vault, target), name=target.name,
-                    size=len(payload), kind=KINDS.get(suffix, suffix), already=True,
+                    size=len(payload), kind=KINDS.get(can.format, can.format),
+                    already=True, format=can.format, tabular=can.tabular, note=can.why,
                 )
             counter += 1
 
@@ -228,8 +252,9 @@ def land(
     scratch.replace(target)
     return Landed(
         path=target, relative=_relative(vault, target), name=target.name,
-        size=len(payload), kind=KINDS.get(suffix, suffix),
-        renamed=target.name != clean,
+        size=len(payload), kind=KINDS.get(can.format, can.format),
+        renamed=target.name != clean, format=can.format, tabular=can.tabular,
+        note=can.why,
     )
 
 
@@ -251,10 +276,9 @@ class Import:
     size: int
     kind: str
     extracted: bool
-
-    @property
-    def tabular(self) -> bool:
-        return self.path.suffix.lower() in TABULAR
+    #: What it turned out to be when looked at, not what it is called.
+    format: str = ""
+    tabular: bool = False
 
     def line(self) -> str:
         return f"{self.day}  {self.name}  ({self.kind}, {max(1, self.size // 1024)} KB)"
@@ -276,6 +300,13 @@ def listing(vault: Any, config: Any) -> list[Import]:
                 continue
             if path.suffix.lower() not in ALLOWED:
                 continue
+            # The first bytes, not the name. Cheap, and it is the difference
+            # between a panel row that offers an import and one that cannot.
+            from .tabular import TABLE_FORMATS, sniff
+
+            with path.open("rb") as handle:
+                head = handle.read(16384)
+            shape = sniff(head, path.name)
             found.append(
                 Import(
                     path=path,
@@ -283,8 +314,10 @@ def listing(vault: Any, config: Any) -> list[Import]:
                     name=path.name,
                     day=day.name,
                     size=path.stat().st_size,
-                    kind=KINDS.get(path.suffix.lower(), path.suffix.lower()),
+                    kind=KINDS.get(shape, shape),
                     extracted=bool(list(day.glob(f"{path.name}*{EXTRACT}"))),
+                    format=shape,
+                    tabular=shape in TABLE_FORMATS,
                 )
             )
     return found
@@ -371,17 +404,14 @@ def build_extract(
         "",
     ]
 
-    if suffix in (".csv", ".tsv"):
-        rows = read_delimited(source)
-        lines.append(f"## {len(rows)} rows")
+    from .tabular import PDF, TABLE_FORMATS, sniff, tables as read_tables
+
+    shape = sniff(source.read_bytes()[:16384], source.name)
+    if shape in TABLE_FORMATS:
+        sheets = read_tables(source)
+        lines.append(f"- read as: {shape}")
         lines.append("")
-        for row in rows[:max_rows]:
-            lines.append("| " + " | ".join(row) + " |")
-        if len(rows) > max_rows:
-            cut.append(f"{len(rows) - max_rows} of {len(rows)} rows")
-    elif suffix == ".xlsx":
-        sheets = read_workbook(source)
-        lines.append(f"## {len(sheets)} sheets")
+        lines.append(f"## {len(sheets)} sheet(s)")
         lines.append("")
         for index, sheet in enumerate(sheets):
             lines.append(f"### {sheet.name} ({len(sheet.rows)} rows)")
@@ -396,19 +426,20 @@ def build_extract(
             lines.append("")
         if len(sheets) > max_sheets:
             cut.append(f"the contents of {len(sheets) - max_sheets} sheets")
-    elif suffix in (".docx", ".pdf"):
+    elif shape == PDF or suffix == ".pdf":
+        lines.append("## Text")
+        lines.append("")
+        body, pages, whole = _pdf_text(source, max_lines)
+        lines.insert(len(lines) - 2, f"- pages: {pages}")
+        lines.extend(body)
+        if not whole:
+            cut.append("the rest of the pages")
+    elif suffix == ".docx":
         from .preview import preview as render
 
         rendered = render(source)
         if rendered.error:
             lines.append(f"Could not be read: {rendered.error}")
-        elif suffix == ".pdf":
-            lines.append(f"## {rendered.pages or 'an unknown number of'} pages")
-            lines.append("")
-            lines.append(
-                "A PDF's text is not extracted here. Ask for it by name and "
-                "Jarvis will read it, or open the file."
-            )
         else:
             lines.append("## Text")
             lines.append("")
@@ -434,6 +465,38 @@ def build_extract(
     return Extract(path=source, relative=source.name, text=text + "\n", cut=cut)
 
 
+def _pdf_text(source: Path, max_lines: int) -> tuple[list[str], Any, bool]:
+    """A PDF's text, when there is a reader for it, and how many pages.
+
+    Without pypdf this says how many pages there are and that it cannot read
+    them, rather than describing a file it has not read. That distinction is
+    the whole of this change: a landed file that nobody can read is worse than
+    a refused one, and a vague answer about it is worse still.
+    """
+    from .preview import preview as render
+
+    rendered = render(source)
+    pages = rendered.pages or "an unknown number of"
+    try:
+        import pypdf
+    except Exception:
+        return (
+            ["Jarvis has no PDF text reader installed, so this is the page count "
+             "and nothing more. Install one with: pip install pypdf"],
+            pages, True,
+        )
+    try:
+        reader = pypdf.PdfReader(str(source))
+        pages = len(reader.pages)
+        body: list[str] = []
+        for number, page in enumerate(reader.pages, start=1):
+            body.append(f"[page {number}]")
+            body.extend((page.extract_text() or "").splitlines())
+        return body[:max_lines], pages, len(body) <= max_lines
+    except Exception as exc:
+        return ([f"Could not be read: {type(exc).__name__}: {exc}"], pages, True)
+
+
 def extract(vault: Any, source: Path, *, when: datetime | None = None) -> Path:
     """Write the sidecar. Create-only, beside the original."""
     built = build_extract(source)
@@ -457,59 +520,35 @@ def sidecar_text(vault: Any, source: Path) -> tuple[str, bool]:
 # -- reading tables, in Python, for numbers the model never sees ------------
 
 
-@dataclass
-class Table:
-    """A sheet, as rows of strings. Formula cells are marked, never guessed."""
-
-    name: str
-    rows: list[list[str]] = field(default_factory=list)
-    formulas: set[tuple[int, int]] = field(default_factory=set)
-
-    def header_at(self, index: int) -> list[str]:
-        return self.rows[index] if 0 <= index < len(self.rows) else []
+#: One definition, in tabular.py, because the reader that produces these is
+#: the thing that knows what a sheet is.
+from .tabular import Table  # noqa: E402  (re-exported for callers)
 
 
 def read_delimited(source: Path) -> list[list[str]]:
-    import csv
+    from .tabular import tables
 
-    delimiter = "\t" if source.suffix.lower() == ".tsv" else ","
-    with source.open("r", encoding="utf-8-sig", errors="replace", newline="") as handle:
-        return [[cell.strip() for cell in row] for row in csv.reader(handle, delimiter=delimiter)]
+    found = tables(source)
+    return found[0].rows if found else []
 
 
 def read_workbook(source: Path) -> list[Table]:
-    """Every sheet, values only, with formula cells marked.
+    """Every sheet, whatever the file turns out to be. See `tabular.py`."""
+    from .tabular import tables
 
-    Uses the same stdlib OOXML reader the document preview uses, for the same
-    reason: it is not the library that wrote the file, and a workbook from
-    NetSuite was written by neither.
-
-    **A formula's cached value is not read.** It is whatever was true when the
-    file was last opened by something that calculates, and importing a stale
-    number as gross profit is precisely the failure this whole path exists to
-    prevent. The cell is marked instead, and the import refuses a column that
-    contains one, out loud.
-    """
-    from .preview import preview as render
-
-    rendered = render(source, max_rows=100_000)
-    tables: list[Table] = []
-    for sheet in rendered.sheets:
-        table = Table(name=sheet.name)
-        for row in sheet.rows:
-            table.rows.append(list(row.cells))
-        table.formulas = set(getattr(sheet, "formula_cells", set()))
-        tables.append(table)
-    return tables
+    return tables(source)
 
 
 def tables_of(source: Path) -> list[Table]:
-    suffix = source.suffix.lower()
-    if suffix == ".xlsx":
-        return read_workbook(source)
-    if suffix in (".csv", ".tsv"):
-        return [Table(name=source.stem, rows=read_delimited(source))]
-    return []
+    """The one way to get rows out of a dropped file.
+
+    Keyed on what the file is rather than what it is called, because the export
+    that started all of this was an HTML table with an `.xls` name and openpyxl
+    reads none of those.
+    """
+    from .tabular import tables
+
+    return tables(source)
 
 
 #: Month names, both lengths, for a period column that says "Aug 2026".

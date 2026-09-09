@@ -641,7 +641,9 @@ export function createShell(orb) {
 
     const caveat = document.createElement('div');
     caveat.className = 'preview-caveat';
-    caveat.textContent = event.known
+    // Where Jarvis will not guess, first: two columns that could both be the
+    // figure is a question, and the card says so rather than preselecting one.
+    caveat.textContent = event.ambiguity ? event.ambiguity : event.known
       ? 'Jarvis has seen this shape before. Confirm to import it again.'
       : 'Jarvis has not seen this shape before. It has proposed a mapping from the '
         + 'column headings; nothing is written until you confirm it.';

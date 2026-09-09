@@ -283,3 +283,77 @@ async def test_draft_cannot_escape_the_drafts_folder(registry, seeded):
 async def test_draft_needs_a_title_and_a_body(registry):
     assert not (await run(registry, "draft_and_hold", title="", body="x")).ok
     assert not (await run(registry, "draft_and_hold", title="x", body="")).ok
+
+
+# -- the rule about numbers, as it reaches the model ------------------------
+
+
+def test_the_prompt_says_python_computes_rather_than_no_spreadsheets(config, vault):
+    """The rule is **Python computes, the model does not**.
+
+    Asked to get gross profit out of a spreadsheet, Jarvis said it was "not
+    allowed to compute GP from a spreadsheet" and that the figures "have to
+    come from figures you enter by hand". That is a dead end and it is not the
+    rule: a confirmed column mapping plus Python summing the column is as
+    trustworthy as hand entry and makes fewer mistakes. Hand entry was the
+    stopgap before importing existed.
+    """
+    from ranger.core import Ranger
+    from ranger.testing import ScriptedProvider
+    from ranger.toolset import build_registry
+
+    prompt = Ranger(
+        config=config, provider=ScriptedProvider([]),
+        registry=build_registry(config, vault), vault=vault,
+    ).system_prompt()
+    flat = " ".join(prompt.split())
+
+    assert "Python computes; you do not" in flat
+    assert "not a rule against spreadsheets" in flat
+    # The real path, offered rather than refused.
+    assert "let them confirm at the keyboard" in flat
+    assert "Python reads the column" in flat
+    # And the dead end named, so it is not reinvented.
+    assert 'not allowed to use a spreadsheet' in flat
+    assert "Hand entry was what existed before importing did" in flat
+
+
+def test_the_prompt_keeps_the_instinct_about_ambiguity(config, vault):
+    """Asking rather than picking when two columns could be the figure was
+    right. That stays; only the blanket refusal goes."""
+    from ranger.core import Ranger
+    from ranger.testing import ScriptedProvider
+    from ranger.toolset import build_registry
+
+    prompt = Ranger(
+        config=config, provider=ScriptedProvider([]),
+        registry=build_registry(config, vault), vault=vault,
+    ).system_prompt()
+    flat = " ".join(prompt.split())
+
+    assert "If two columns could plausibly be the figure, ask" in flat
+    assert "Do not pick" in flat
+
+
+def test_the_prompt_still_forbids_the_model_doing_the_arithmetic(config, vault):
+    from ranger.core import Ranger
+    from ranger.testing import ScriptedProvider
+    from ranger.toolset import build_registry
+
+    prompt = Ranger(
+        config=config, provider=ScriptedProvider([]),
+        registry=build_registry(config, vault), vault=vault,
+    ).system_prompt()
+    flat = " ".join(prompt.split())
+
+    assert "you never total a column" in flat
+    assert "never repeat a figure as fact that did not come back from a tool" in flat
+
+
+def test_no_tool_description_tells_the_model_to_refuse_spreadsheets(registry):
+    """A tool description is in the prompt on every turn, so a dead end in one
+    is a dead end the model will repeat."""
+    for tool in registry:
+        text = tool.description.casefold()
+        assert "cannot read" not in text
+        assert "by hand" not in text, f"{tool.name} still says figures come from hand entry"
